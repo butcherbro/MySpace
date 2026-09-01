@@ -10,6 +10,10 @@
 
 ## Точка отсчёта: что уже реализовано
 
+> Актуализация (после ревью): закрыты пункты №1 (documentJson + UUIDv7) и №3
+> (viewport durable). Оставшиеся — №2 store, №2b controlled adapter, №5
+> transactional move_cards, e2e smoke. См. `tasks/current-state.md`.
+
 Стек зафиксирован: Tauri 2 + React 19 + TypeScript + Vite 8, React Flow 12 (`@xyflow/react`)
 за адаптером, SQLite (`rusqlite` bundled), тесты Vitest + Playwright + `cargo test`.
 Точные версии — в `package.json` / `src-tauri/Cargo.toml` (совпадают с «Ecosystem
