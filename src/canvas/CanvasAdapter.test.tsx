@@ -15,6 +15,7 @@ describe("CanvasAdapter", () => {
         cards={cards}
         viewport={{ x: 0, y: 0, zoom: 1 }}
         events={{}}
+        dependencyKey="v1"
         renderCard={(card) => (
           <span data-testid={`card-${card.id}`}>{card.id}</span>
         )}
@@ -32,6 +33,7 @@ describe("CanvasAdapter", () => {
         cards={cards}
         viewport={{ x: 0, y: 0, zoom: 1 }}
         events={{}}
+        dependencyKey="v1"
         renderCard={(card) => <span data-testid={`card-${card.id}`} />}
       />,
     );
@@ -46,9 +48,28 @@ describe("CanvasAdapter", () => {
         cards={more}
         viewport={{ x: 0, y: 0, zoom: 1 }}
         events={{}}
+        dependencyKey="v2"
         renderCard={(card) => <span data-testid={`card-${card.id}`} />}
       />,
     );
     expect(screen.getByTestId("card-c")).toBeInTheDocument();
+  });
+
+  it("re-renders content when dependencyKey changes (text edit)", () => {
+    const renderContent = (text: string) =>
+      render(
+        <CanvasAdapter
+          cards={cards}
+          viewport={{ x: 0, y: 0, zoom: 1 }}
+          events={{}}
+          dependencyKey={text}
+          renderCard={(card) => (
+            <span data-testid={`card-${card.id}`}>{text}</span>
+          )}
+        />,
+      );
+
+    renderContent("hello");
+    expect(screen.getByTestId("card-a")).toHaveTextContent("hello");
   });
 });

@@ -97,6 +97,12 @@ function App() {
     zIndex: n.zIndex,
   }));
 
+  // Changing this value (e.g. after a text edit) forces the canvas to rebuild
+  // its nodes so the updated content is rendered immediately.
+  const dependencyKey = notes
+    .map((n) => `${n.id}:${n.plainText}:${n.revision}`)
+    .join("|");
+
   // A drag gesture finished: persist the new frames to SQLite, then reflect
   // the bumped revision locally.
   const handleCardsMoved = useCallback(
@@ -150,6 +156,7 @@ function App() {
           <CanvasAdapter
             cards={canvasCards}
             viewport={viewport}
+            dependencyKey={dependencyKey}
             events={{
               onCardsMoved: handleCardsMoved,
               onViewportChanged: (e) => setViewport(e.viewport),
