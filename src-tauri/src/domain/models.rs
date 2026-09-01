@@ -1,0 +1,114 @@
+//! Domain DTOs exchanged across the IPC boundary.
+//!
+//! These mirror the `BoardSnapshot` contract from the V1 plan. All fields are
+//! serialized as camelCase so the TypeScript frontend can consume them
+//! directly.
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// A card's placement rectangle on a board canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Frame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Board identity within a snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardSummary {
+    pub id: String,
+    pub title: String,
+    pub parent_board_id: Option<String>,
+    pub revision: i64,
+}
+
+/// A breadcrumb ancestor entry (Home ... current board).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Breadcrumb {
+    pub id: String,
+    pub title: String,
+}
+
+/// The persisted viewport for a board.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Viewport {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+    pub revision: i64,
+}
+
+/// Metadata for a child board referenced by a portal card.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortalTarget {
+    pub id: String,
+    pub title: String,
+    pub color_token: String,
+    pub symbol: Option<String>,
+    pub child_board_count: i64,
+    pub child_card_count: i64,
+}
+
+/// A note card.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteCardDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    pub document_json: Value,
+    pub plain_text: String,
+}
+
+/// A board portal card.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardPortalDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    pub target: PortalTarget,
+}
+
+/// The two card kinds, tagged for the frontend.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CardDto {
+    Note(NoteCardDto),
+    #[serde(rename = "board_portal")]
+    BoardPortal(BoardPortalDto),
+}
+
+/// A complete, self-contained projection of one board.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardSnapshot {
+    pub board: BoardSummary,
+    pub breadcrumbs: Vec<Breadcrumb>,
+    pub viewport: Viewport,
+    pub cards: Vec<CardDto>,
+}
+
+/// Input for creating a note card.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateNoteInput {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub document_json: Value,
+    pub plain_text: String,
+}
