@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
@@ -6,19 +6,21 @@ import { NoteCard } from "./cards/note/NoteCard";
 import { plainTextToDocument } from "./editor/document-codec";
 import { createGateway } from "./services/create-gateway";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
-import type { BoardSummary, NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
+import type { NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
+import {
+  initialState,
+  reducer,
+} from "./state/current-board-store";
 
 function App() {
   const gateway: WorkspaceGateway = useMemo(() => createGateway(), []);
   const idGenerator: IdGenerator = useMemo(() => new UuidV7Generator(), []);
 
-  const [board, setBoard] = useState<BoardSummary | null>(null);
-  const [notes, setNotes] = useState<NoteCardDto[]>([]);
-  const [viewport, setViewport] = useState<CanvasViewport>({ x: 0, y: 0, zoom: 1 });
-  const [viewportRevision, setViewportRevision] = useState(1);
-  const [error, setError] = useState<string | null>(null);
-  const viewportRevisionRef = useRef(viewportRevision);
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const { board, viewport, viewportRevision, error } = state;
+  const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
+  const viewportRevisionRef = useRef(viewportRevision);
   useEffect(() => {
     viewportRevisionRef.current = viewportRevision;
   }, [viewportRevision]);
@@ -26,20 +28,22 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      dispatch({ type: "loading" });
       try {
         const home = await gateway.getHomeBoard();
         const snapshot = await gateway.loadBoardSnapshot(home.id);
         if (cancelled) return;
-        setBoard(snapshot.board);
-        setNotes(snapshot.cards.filter((c): c is NoteCardDto => c.kind === "note"));
-        setViewport({
-          x: snapshot.viewport.x,
-          y: snapshot.viewport.y,
-          zoom: snapshot.viewport.zoom,
+        dispatch({
+          type: "snapshotLoaded",
+          board: snapshot.board,
+          viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
+          viewportRevision: snapshot.viewport.revision,
+          cards: snapshot.cards,
         });
-        setViewportRevision(snapshot.viewport.revision);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        }
       }
     }
     void load();
@@ -51,31 +55,28 @@ function App() {
   const handleCreateNote = useCallback(async () => {
     if (!board) return;
     const id = idGenerator.nextId();
-    const input = {
+    const card: NoteCardDto = {
+      kind: "note",
       id,
       boardId: board.id,
       frame: { x: 40, y: 40 + notes.length * 24, width: 240, height: 120 },
       zIndex: notes.length,
+      revision: 1,
       documentJson: plainTextToDocument(""),
       plainText: "",
     };
     try {
-      await gateway.createNote(input);
-      setNotes((prev) => [
-        ...prev,
-        {
-          kind: "note",
-          id,
-          boardId: board.id,
-          frame: input.frame,
-          zIndex: input.zIndex,
-          revision: 1,
-          documentJson: input.documentJson,
-          plainText: "",
-        },
-      ]);
+      await gateway.createNote({
+        id,
+        boardId: board.id,
+        frame: card.frame,
+        zIndex: card.zIndex,
+        documentJson: card.documentJson,
+        plainText: "",
+      });
+      dispatch({ type: "cardAdded", card });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
     }
   }, [board, gateway, idGenerator, notes.length]);
 
@@ -83,24 +84,23 @@ function App() {
     async (id: string, plainText: string) => {
       const note = notes.find((n) => n.id === id);
       if (!note) return;
-      await gateway.updateNote({
-        id,
-        expectedRevision: note.revision,
-        documentJson: plainTextToDocument(plainText),
-        plainText,
-      });
-      setNotes((prev) =>
-        prev.map((n) =>
-          n.id === id
-            ? {
-                ...n,
-                plainText,
-                documentJson: plainTextToDocument(plainText),
-                revision: n.revision + 1,
-              }
-            : n,
-        ),
-      );
+      try {
+        await gateway.updateNote({
+          id,
+          expectedRevision: note.revision,
+          documentJson: plainTextToDocument(plainText),
+          plainText,
+        });
+        dispatch({
+          type: "cardContentUpdated",
+          id,
+          revision: note.revision + 1,
+          documentJson: plainTextToDocument(plainText),
+          plainText,
+        });
+      } catch (e) {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+      }
     },
     [gateway, notes],
   );
@@ -115,13 +115,10 @@ function App() {
   }));
 
   // Changing this value (e.g. after a text edit) forces the canvas to rebuild
-  // its nodes so the updated content is rendered immediately.
-  const dependencyKey = notes
-    .map((n) => `${n.id}:${n.plainText}:${n.revision}`)
-    .join("|");
+  // its nodes so the updated content is rendered immediately. (To be removed in
+  // the controlled-adapter step.)
+  const dependencyKey = notes.map((n) => `${n.id}:${n.plainText}:${n.revision}`).join("|");
 
-  // A drag gesture finished: persist the new frames to SQLite, then reflect
-  // the bumped revision locally.
   const handleCardsMoved = useCallback(
     (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
       for (const moved of e.cards) {
@@ -134,28 +131,20 @@ function App() {
             frame: moved.frame,
           })
           .then(() => {
-            setNotes((prev) =>
-              prev.map((n) =>
-                n.id === moved.id
-                  ? { ...n, frame: moved.frame, revision: n.revision + 1 }
-                  : n,
-              ),
-            );
+            dispatch({ type: "cardMoved", id: moved.id, revision: note.revision + 1, frame: moved.frame });
           })
           .catch((err) => {
-            setError(err instanceof Error ? err.message : String(err));
+            dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
           });
       }
     },
     [gateway, notes],
   );
 
-  // Debounce viewport persistence (400 ms trailing, per the plan's runtime
-  // ownership table). The latest viewport is written once the user pauses.
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleViewportChanged = useCallback(
     (e: { viewport: CanvasViewport }) => {
-      setViewport(e.viewport);
+      dispatch({ type: "viewportChanged", viewport: e.viewport });
       if (viewportTimer.current) clearTimeout(viewportTimer.current);
       viewportTimer.current = setTimeout(() => {
         if (!board) return;
@@ -168,15 +157,19 @@ function App() {
             zoom: e.viewport.zoom,
           })
           .then(() => {
-            setViewportRevision((r) => r + 1);
+            dispatch({ type: "viewportSaved", revision: viewportRevisionRef.current + 1 });
           })
           .catch((err) => {
-            setError(err instanceof Error ? err.message : String(err));
+            dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
           });
       }, 400);
     },
     [board, gateway],
   );
+
+  const handleCardsSelected = useCallback((e: { ids: string[] }) => {
+    dispatch({ type: "selectionChanged", ids: e.ids });
+  }, []);
 
   return (
     <AppShell>
@@ -205,6 +198,7 @@ function App() {
             events={{
               onCardsMoved: handleCardsMoved,
               onViewportChanged: handleViewportChanged,
+              onSelectionChanged: handleCardsSelected,
             }}
             renderCard={(card) => {
               const note = notes.find((n) => n.id === card.id);
