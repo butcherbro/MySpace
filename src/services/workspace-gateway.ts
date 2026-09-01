@@ -105,6 +105,14 @@ export interface MoveCardsInput {
   cards: MoveCardItemInput[];
 }
 
+export interface CreateChildBoardInput {
+  parentBoardId: string;
+  boardId: string;
+  portalCardId: string;
+  frame: Frame;
+  title: string;
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -117,4 +125,6 @@ export interface WorkspaceGateway {
   moveCard(input: MoveCardInput): Promise<void>;
   moveCards(input: MoveCardsInput): Promise<void>;
   saveViewport(input: SaveViewportInput): Promise<void>;
+  createChildBoard(input: CreateChildBoardInput): Promise<void>;
+  renameBoard(boardId: string, title: string): Promise<void>;
 }

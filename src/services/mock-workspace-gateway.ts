@@ -1,6 +1,7 @@
 import type {
   BoardSnapshot,
   BoardSummary,
+  CreateChildBoardInput,
   CreateNoteInput,
   MoveCardInput,
   MoveCardsInput,
@@ -111,6 +112,37 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zoom: input.zoom,
       revision: this.snapshot.viewport.revision + 1,
     };
+    return Promise.resolve();
+  }
+
+  createChildBoard(input: CreateChildBoardInput): Promise<void> {
+    const portal = {
+      kind: "board_portal" as const,
+      id: input.portalCardId,
+      boardId: input.parentBoardId,
+      frame: { ...input.frame },
+      zIndex: 0,
+      revision: 1,
+      target: {
+        id: input.boardId,
+        title: input.title,
+        colorToken: "terracotta",
+        symbol: null,
+        childBoardCount: 0,
+        childCardCount: 0,
+      },
+    };
+    this.snapshot.cards.push(portal);
+    return Promise.resolve();
+  }
+
+  renameBoard(boardId: string, title: string): Promise<void> {
+    const portal = this.snapshot.cards.find(
+      (c) => c.kind === "board_portal" && c.target.id === boardId,
+    );
+    if (portal && portal.kind === "board_portal") {
+      portal.target.title = title;
+    }
     return Promise.resolve();
   }
 }

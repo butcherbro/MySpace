@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
-import { NoteCard } from "./cards/note/NoteCard";
+import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { plainTextToDocument } from "./editor/document-codec";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
-import type { NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
+import type { BoardPortalDto, NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
 import {
   initialState,
   reducer,
@@ -23,11 +23,12 @@ function App() {
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
-  // Always reflects the latest notes so queued tasks read the current revision.
-  const notesRef = useRef(notes);
+  // Always reflects the latest cards (notes AND portals) so queued tasks read
+  // the current revision.
+  const cardsRef = useRef(state.cards);
   useEffect(() => {
-    notesRef.current = notes;
-  }, [notes]);
+    cardsRef.current = state.cards;
+  }, [state.cards]);
 
   const viewportRevisionRef = useRef(viewportRevision);
   useEffect(() => {
@@ -89,11 +90,47 @@ function App() {
     }
   }, [board, gateway, idGenerator, notes.length]);
 
+  const handleCreateChildBoard = useCallback(async () => {
+    if (!board) return;
+    const boardId = idGenerator.nextId();
+    const portalCardId = idGenerator.nextId();
+    const portal: BoardPortalDto = {
+      kind: "board_portal",
+      id: portalCardId,
+      boardId: board.id,
+      frame: { x: 100, y: 100 + state.cards.length * 24, width: 120, height: 112 },
+      zIndex: 0,
+      revision: 1,
+      target: {
+        id: boardId,
+        title: "New Board",
+        colorToken: "terracotta",
+        symbol: null,
+        childBoardCount: 0,
+        childCardCount: 0,
+      },
+    };
+    try {
+      await gateway.createChildBoard({
+        parentBoardId: board.id,
+        boardId,
+        portalCardId,
+        frame: portal.frame,
+        title: "New Board",
+      });
+      dispatch({ type: "cardAdded", card: portal });
+    } catch (e) {
+      dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+    }
+  }, [board, gateway, idGenerator, state.cards.length]);
+
   const handleUpdateNote = useCallback(
     (id: string, plainText: string): Promise<void> => {
       const task = queueRef.current
         .run(async () => {
-          const note = notesRef.current.find((n) => n.id === id);
+          const note = cardsRef.current.find(
+            (n): n is NoteCardDto => n.kind === "note" && n.id === id,
+          );
           if (!note) return;
           await gateway.updateNote({
             id,
@@ -117,14 +154,14 @@ function App() {
     [gateway],
   );
 
-  // Build the canvas projection from notes. (Board portals join in Slice 4.)
-  const canvasCards: CanvasCard[] = notes.map((n) => ({
-    id: n.id,
-    boardId: n.boardId,
-    kind: "note",
-    frame: n.frame,
-    zIndex: n.zIndex,
-    revision: n.revision,
+  // Build the canvas projection from all cards (notes + portals).
+  const canvasCards: CanvasCard[] = state.cards.map((c) => ({
+    id: c.id,
+    boardId: c.boardId,
+    kind: c.kind,
+    frame: c.frame,
+    zIndex: c.zIndex,
+    revision: c.revision,
   }));
 
   const handleCardsMoved = useCallback(
@@ -133,9 +170,9 @@ function App() {
         .run(async () => {
           const batch = e.cards
             .map((moved) => {
-              const note = notesRef.current.find((n) => n.id === moved.id);
-              return note
-                ? { id: moved.id, expectedRevision: note.revision, frame: moved.frame }
+              const card = cardsRef.current.find((c) => c.id === moved.id);
+              return card
+                ? { id: moved.id, expectedRevision: card.revision, frame: moved.frame }
                 : null;
             })
             .filter(
@@ -147,12 +184,12 @@ function App() {
 
           await gateway.moveCards({ cards: batch });
           for (const item of batch) {
-            const note = notesRef.current.find((n) => n.id === item.id);
-            if (!note) continue;
+            const card = cardsRef.current.find((c) => c.id === item.id);
+            if (!card) continue;
             dispatch({
               type: "cardMoved",
               id: item.id,
-              revision: note.revision + 1,
+              revision: card.revision + 1,
               frame: item.frame,
             });
           }
@@ -201,6 +238,21 @@ function App() {
     }
   }, [state.cards]);
 
+  // Open a child board (full navigation history arrives in Task 4.3).
+  const handleOpenBoard = useCallback(
+    async (boardId: string) => {
+      const snapshot = await gateway.loadBoardSnapshot(boardId);
+      dispatch({
+        type: "snapshotLoaded",
+        board: snapshot.board,
+        viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
+        viewportRevision: snapshot.viewport.revision,
+        cards: snapshot.cards,
+      });
+    },
+    [gateway],
+  );
+
   const canvasRef = useRef<HTMLDivElement>(null);
 
   const handleEditDeactivate = useCallback(() => {
@@ -223,6 +275,9 @@ function App() {
           <button type="button" onClick={() => void handleCreateNote()}>
             New note
           </button>
+          <button type="button" onClick={() => void handleCreateChildBoard()}>
+            New board
+          </button>
         </div>
         {error && (
           <div className="workspace__error" data-testid="workspace-error">
@@ -241,16 +296,14 @@ function App() {
               onCardActivated: handleCardActivated,
             }}
             renderCard={(card) => {
-              const note = notes.find((n) => n.id === card.id);
-              if (!note) return null;
-              return (
-                <NoteCard
-                  note={note}
-                  editing={state.editingCardId === note.id}
-                  onDeactivate={handleEditDeactivate}
-                  onUpdate={handleUpdateNote}
-                />
-              );
+              const full = state.cards.find((c) => c.id === card.id);
+              if (!full) return null;
+              return renderCardFromRegistry(full, {
+                editing: state.editingCardId === full.id,
+                onDeactivate: handleEditDeactivate,
+                onUpdateNote: handleUpdateNote,
+                onOpenBoard: handleOpenBoard,
+              });
             }}
           />
           {notes.length === 0 && !error && (

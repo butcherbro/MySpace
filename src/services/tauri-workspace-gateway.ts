@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   BoardSnapshot,
   BoardSummary,
+  CreateChildBoardInput,
   CreateNoteInput,
   MoveCardInput,
   MoveCardsInput,
@@ -42,5 +43,13 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   saveViewport(input: SaveViewportInput): Promise<void> {
     return invoke<void>("save_viewport", { input });
+  }
+
+  createChildBoard(input: CreateChildBoardInput): Promise<void> {
+    return invoke<void>("create_child_board", { input });
+  }
+
+  renameBoard(boardId: string, title: string): Promise<void> {
+    return invoke<void>("rename_board", { boardId, title });
   }
 }
