@@ -3,6 +3,7 @@ import {
   Background,
   BackgroundVariant,
   ReactFlow,
+  SelectionMode,
   applyNodeChanges,
   type Node,
   type NodeChange,
@@ -124,9 +125,16 @@ export function CanvasAdapter({
     }
   };
 
-  const handleNodeClick = (_: unknown, node: Node<CardNodeData>) => {
+  const handleNodeClick = (
+    event: React.MouseEvent,
+    node: Node<CardNodeData>,
+  ) => {
     // A pure click (no drag) on a note activates editing; on a portal it will
-    // open the child board (Slice 4).
+    // open the child board (Slice 4). Modifier-clicks are selection gestures,
+    // not activation.
+    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+      return;
+    }
     if (!selectedIdsRef.current.has(node.id) || selectedIdsRef.current.size <= 1) {
       events.onCardActivated?.(node.id);
     }
@@ -136,33 +144,57 @@ export function CanvasAdapter({
     events.onViewportChanged?.({ viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } });
   };
 
+  const handleCanvasKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Canvas-only Cmd/Ctrl+A: select all cards. Inside an editor the textarea
+    // handles its own select-all natively and never bubbles a plain A here.
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+      const target = e.target as HTMLElement;
+      const isEditing = target.tagName === "TEXTAREA" || target.isContentEditable;
+      if (!isEditing) {
+        e.preventDefault();
+        const allIds = cards.map((c) => c.id);
+        selectedIdsRef.current = new Set(allIds);
+        setNodes((prev) => prev.map((n) => ({ ...n, selected: true })));
+        events.onSelectionChanged?.({ ids: allIds });
+      }
+    }
+  };
+
   return (
-    <ReactFlow
-      nodes={nodes}
-      nodeTypes={nodeTypes}
-      onNodesChange={handleNodesChange}
-      defaultViewport={viewport}
-      panOnScroll
-      selectionOnDrag
-      panOnDrag={false}
-      zoomOnScroll
-      zoomOnPinch
-      zoomOnDoubleClick={false}
-      nodesDraggable
-      nodesConnectable={false}
-      edgesFocusable={false}
-      nodesFocusable
-      elementsSelectable
-      selectNodesOnDrag={false}
-      onSelectionChange={handleSelectionChange}
-      onNodeClick={handleNodeClick}
-      onNodeDragStop={handleNodeDragStop}
-      onMoveEnd={handleMoveEnd}
-      minZoom={0.1}
-      maxZoom={4}
-      proOptions={{ hideAttribution: true }}
+    <div
+      className="canvas-focusable"
+      tabIndex={0}
+      onKeyDown={handleCanvasKeyDown}
+      style={{ width: "100%", height: "100%" }}
     >
-      <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-    </ReactFlow>
+      <ReactFlow
+        nodes={nodes}
+        nodeTypes={nodeTypes}
+        onNodesChange={handleNodesChange}
+        defaultViewport={viewport}
+        panOnScroll
+        selectionOnDrag
+        panOnDrag={false}
+        zoomOnScroll
+        zoomOnPinch
+        zoomOnDoubleClick={false}
+        nodesDraggable
+        nodesConnectable={false}
+        edgesFocusable={false}
+        nodesFocusable
+        elementsSelectable
+        selectionMode={SelectionMode.Partial}
+        selectNodesOnDrag={false}
+        onSelectionChange={handleSelectionChange}
+        onNodeClick={handleNodeClick}
+        onNodeDragStop={handleNodeDragStop}
+        onMoveEnd={handleMoveEnd}
+        minZoom={0.1}
+        maxZoom={4}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+      </ReactFlow>
+    </div>
   );
 }

@@ -186,8 +186,13 @@ function App() {
     }
   }, [state.cards]);
 
+  const canvasRef = useRef<HTMLDivElement>(null);
+
   const handleEditDeactivate = useCallback(() => {
     dispatch({ type: "editingStopped" });
+    // Return focus to the canvas so keyboard shortcuts (e.g. Cmd+A) and the
+    // next interaction land back on the board, not a stale editor.
+    canvasRef.current?.focus();
   }, []);
 
   return (
@@ -209,7 +214,7 @@ function App() {
             {error}
           </div>
         )}
-        <div className="workspace__canvas" data-testid="canvas">
+        <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
           <CanvasAdapter
             cards={canvasCards}
             viewport={viewport}
