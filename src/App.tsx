@@ -218,6 +218,7 @@ function App() {
           <CanvasAdapter
             cards={canvasCards}
             viewport={viewport}
+            editingCardId={state.editingCardId}
             events={{
               onCardsMoved: handleCardsMoved,
               onViewportChanged: handleViewportChanged,

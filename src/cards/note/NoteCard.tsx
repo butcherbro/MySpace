@@ -34,7 +34,6 @@ export function NoteCard({ note, editing, onDeactivate, onUpdate }: NoteCardProp
   useEffect(() => {
     if (editing) {
       textareaRef.current?.focus();
-      textareaRef.current?.select();
     }
   }, [editing]);
 
@@ -71,7 +70,7 @@ export function NoteCard({ note, editing, onDeactivate, onUpdate }: NoteCardProp
       {editing ? (
         <textarea
           ref={textareaRef}
-          className="note-card__textarea"
+          className="note-card__textarea nodrag nopan nowheel"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onBlur={() => void commit()}

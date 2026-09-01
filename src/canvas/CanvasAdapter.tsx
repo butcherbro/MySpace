@@ -25,6 +25,8 @@ interface CanvasAdapterProps {
   events: CanvasEvents;
   /** Renders the interior of a card given its domain card. */
   renderCard: (card: CanvasCard) => ReactNode;
+  /** The id of the card currently being edited, if any (forces node rebuild). */
+  editingCardId?: string | null;
 }
 
 type CardNodeData = { content: ReactNode };
@@ -56,6 +58,7 @@ export function CanvasAdapter({
   viewport,
   events,
   renderCard,
+  editingCardId = null,
 }: CanvasAdapterProps) {
   const [nodes, setNodes] = useState<Node<CardNodeData>[]>(() =>
     cards.map((c) => cardToNode(c, renderCard)),
@@ -65,9 +68,10 @@ export function CanvasAdapter({
   // changes on content edits and moves) and rebuild nodes as part of render
   // (React's recommended "adjusting state during render" pattern). Rebuilding
   // on revision change refreshes node content without a separate content key.
-  const cardsKey = cards
-    .map((c) => `${c.id}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}`)
-    .join("|");
+  const cardsKey =
+    cards
+      .map((c) => `${c.id}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}`)
+      .join("|") + `#edit:${editingCardId ?? ""}`;
   const [lastKey, setLastKey] = useState(cardsKey);
 
   if (cardsKey !== lastKey) {
@@ -83,7 +87,9 @@ export function CanvasAdapter({
   }, [nodes]);
 
   const nodeTypes: NodeTypes = {
-    card: ({ data }) => <>{data.content}</>,
+    card: ({ data }) => (
+      <div style={{ width: "100%", height: "100%" }}>{data.content}</div>
+    ),
   };
 
   const handleNodesChange = (changes: NodeChange<Node<CardNodeData>>[]) => {
