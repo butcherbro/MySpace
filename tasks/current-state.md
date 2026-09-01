@@ -14,15 +14,25 @@
 
 - [x] №1 — documentJson + IdGenerator (UUIDv7)
 - [x] №3 — viewport durable (`board_view_states` + `save_viewport` + debounce 400мс)
-- [ ] №2 — вынести store текущей доски из `App.tsx` (snapshot/selection/revisions/rollback)
-- [ ] №2b — сделать `CanvasAdapter` controlled, убрать `dependencyKey`
-- [ ] №5 — transactional `move_cards` (multi-card drag = одна транзакция) + selection-контракт
-- [ ] e2e — smoke-тест против MockWorkspaceGateway (Вариант A)
+- [x] №2 — вынести store текущей доски из `App.tsx` (snapshot/selection/revisions/rollback)
+- [x] №2b — сделать `CanvasAdapter` controlled, убрать `dependencyKey`
+- [x] №5 — transactional `move_cards` (multi-card drag = одна транзакция) + selection-контракт
+- [x] write queue — сериализация мутаций (`MutationQueue`) против revision-гонок
+- [x] e2e — smoke-тест против MockWorkspaceGateway (click-versus-drag)
 
 ## Следующий шаг
 
-№2: store. Подход — `useReducer` + Context (план допускает Zustand только если reducer
-окажется неадекватным; пока принято reducer ради отсутствия новых зависимостей).
+Инженерный долг закрыт. Следующий крупный шаг — **Slice 4: доски-в-досках (порталы)**.
+Перед ним — ручной focus gate в `npm run tauri dev` + повторное ревью среза.
+
+## Ручной focus gate (до порталов)
+
+1. Одинарный клик по Note — сразу ввод текста.
+2. Набрать длинный текст без потери фокуса.
+3. Выделить часть текста мышью.
+4. Cmd+A внутри textarea выделяет текст, не карточки.
+5. Click-hold + движение перетаскивает Note без случайного редактирования.
+6. После drag следующий обычный клик снова включает редактор.
 
 ## Крупные открытые фичи (после закрытия долга)
 
