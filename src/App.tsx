@@ -3,11 +3,14 @@ import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { NoteCard } from "./cards/note/NoteCard";
+import { plainTextToDocument } from "./editor/document-codec";
 import { createGateway } from "./services/create-gateway";
+import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import type { BoardSummary, NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
 
 function App() {
   const gateway: WorkspaceGateway = useMemo(() => createGateway(), []);
+  const idGenerator: IdGenerator = useMemo(() => new UuidV7Generator(), []);
 
   const [board, setBoard] = useState<BoardSummary | null>(null);
   const [notes, setNotes] = useState<NoteCardDto[]>([]);
@@ -40,13 +43,13 @@ function App() {
 
   const handleCreateNote = useCallback(async () => {
     if (!board) return;
-    const id = crypto.randomUUID();
+    const id = idGenerator.nextId();
     const input = {
       id,
       boardId: board.id,
       frame: { x: 40, y: 40 + notes.length * 24, width: 240, height: 120 },
       zIndex: notes.length,
-      documentJson: { type: "doc" },
+      documentJson: plainTextToDocument(""),
       plainText: "",
     };
     try {
@@ -67,7 +70,7 @@ function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [board, gateway, notes.length]);
+  }, [board, gateway, idGenerator, notes.length]);
 
   const handleUpdateNote = useCallback(
     async (id: string, plainText: string) => {
@@ -76,12 +79,19 @@ function App() {
       await gateway.updateNote({
         id,
         expectedRevision: note.revision,
-        documentJson: note.documentJson,
+        documentJson: plainTextToDocument(plainText),
         plainText,
       });
       setNotes((prev) =>
         prev.map((n) =>
-          n.id === id ? { ...n, plainText, revision: n.revision + 1 } : n,
+          n.id === id
+            ? {
+                ...n,
+                plainText,
+                documentJson: plainTextToDocument(plainText),
+                revision: n.revision + 1,
+              }
+            : n,
         ),
       );
     },
