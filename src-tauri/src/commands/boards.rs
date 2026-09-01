@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::{BoardSnapshot, BoardSummary};
+use crate::domain::models::{BoardSnapshot, BoardSummary, UpdateViewportInput};
 use crate::repositories::workspace_repository;
 
 /// The application-wide SQLite connection, guarded so commands can share it.
@@ -48,4 +48,13 @@ pub fn get_home_board(db: DbState<'_>) -> Result<BoardSummary, WorkspaceError> {
         },
     )
     .map_err(WorkspaceError::from)
+}
+
+/// Persists a board's viewport.
+#[tauri::command]
+pub fn save_viewport(db: DbState<'_>, input: UpdateViewportInput) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::update_viewport(&mut conn, &input)
 }

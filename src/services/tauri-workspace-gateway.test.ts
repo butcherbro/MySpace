@@ -67,4 +67,18 @@ describe("TauriWorkspaceGateway", () => {
     await gw.moveCard(input);
     expect(invokeMock).toHaveBeenCalledWith("move_card", { input });
   });
+
+  it("calls save_viewport with a wrapped input payload", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      boardId: "home",
+      expectedRevision: 1,
+      x: 0,
+      y: 0,
+      zoom: 1.5,
+    };
+    await gw.saveViewport(input);
+    expect(invokeMock).toHaveBeenCalledWith("save_viewport", { input });
+  });
 });

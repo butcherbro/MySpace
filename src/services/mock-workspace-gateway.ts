@@ -3,6 +3,7 @@ import type {
   BoardSummary,
   CreateNoteInput,
   MoveCardInput,
+  SaveViewportInput,
   UpdateNoteInput,
   WorkspaceGateway,
 } from "./workspace-gateway";
@@ -78,6 +79,19 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     card.frame = { ...input.frame };
+    return Promise.resolve();
+  }
+
+  saveViewport(input: SaveViewportInput): Promise<void> {
+    if (this.snapshot.viewport.revision !== input.expectedRevision) {
+      return Promise.reject(new Error(`stale revision for viewport`));
+    }
+    this.snapshot.viewport = {
+      x: input.x,
+      y: input.y,
+      zoom: input.zoom,
+      revision: this.snapshot.viewport.revision + 1,
+    };
     return Promise.resolve();
   }
 }

@@ -131,3 +131,14 @@ pub struct UpdateCardFrameInput {
     pub expected_revision: i64,
     pub frame: Frame,
 }
+
+/// Input for persisting a board's viewport.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateViewportInput {
+    pub board_id: String,
+    pub expected_revision: i64,
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}

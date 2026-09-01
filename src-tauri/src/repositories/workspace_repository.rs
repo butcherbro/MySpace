@@ -8,7 +8,8 @@ use rusqlite::{params, Connection};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto, CreateNoteInput, Frame,
-    NoteCardDto, PortalTarget, UpdateCardFrameInput, UpdateNoteInput, Viewport,
+    NoteCardDto, PortalTarget, UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput,
+    Viewport,
 };
 
 use super::super::db;
@@ -75,9 +76,7 @@ fn load_breadcrumbs(conn: &Connection, board_id: &str) -> Result<Vec<Breadcrumb>
 }
 
 fn load_viewport(conn: &Connection, board_id: &str) -> Result<Viewport, WorkspaceError> {
-    // A view state row is expected to exist for every board. Fall back to
-    // origin defaults defensively if it does not.
-    let result = conn.query_row(
+    conn.query_row(
         "SELECT viewport_x, viewport_y, zoom, revision FROM board_view_states WHERE board_id = ?1",
         [board_id],
         |row| {
@@ -88,18 +87,8 @@ fn load_viewport(conn: &Connection, board_id: &str) -> Result<Viewport, Workspac
                 revision: row.get(3)?,
             })
         },
-    );
-
-    match result {
-        Ok(v) => Ok(v),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Viewport {
-            x: 0.0,
-            y: 0.0,
-            zoom: 1.0,
-            revision: 1,
-        }),
-        Err(e) => Err(WorkspaceError::from(e)),
-    }
+    )
+    .map_err(WorkspaceError::from)
 }
 
 /// Loads active cards of a board. When `include_subtree_counts` is true, portal
@@ -328,6 +317,50 @@ pub fn update_card_frame(
         let actual: i64 = conn.query_row(
             "SELECT revision FROM cards WHERE id = ?1",
             [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_revision,
+            actual,
+        });
+    }
+
+    Ok(())
+}
+
+/// Persists a board's viewport, bumping its revision with an optimistic guard.
+pub fn update_viewport(
+    conn: &mut Connection,
+    input: &UpdateViewportInput,
+) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+
+    let changed = conn.execute(
+        "UPDATE board_view_states
+         SET viewport_x = ?1, viewport_y = ?2, zoom = ?3, revision = revision + 1, updated_at = ?4
+         WHERE board_id = ?5 AND revision = ?6",
+        params![
+            input.x,
+            input.y,
+            input.zoom,
+            now,
+            input.board_id,
+            input.expected_revision,
+        ],
+    )?;
+
+    if changed == 0 {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM board_view_states WHERE board_id = ?1",
+            [input.board_id.clone()],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(WorkspaceError::NotFound(input.board_id.clone()));
+        }
+        let actual: i64 = conn.query_row(
+            "SELECT revision FROM board_view_states WHERE board_id = ?1",
+            [input.board_id.clone()],
             |r| r.get(0),
         )?;
         return Err(WorkspaceError::StaleRevision {

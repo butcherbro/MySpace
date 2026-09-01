@@ -1,7 +1,9 @@
 //! Repository tests: load a board snapshot and create notes transactionally.
 
 use myspace_lib::db::{bootstrap, open_in_memory};
-use myspace_lib::domain::models::{CreateNoteInput, Frame, UpdateCardFrameInput, UpdateNoteInput};
+use myspace_lib::domain::models::{
+    CreateNoteInput, Frame, UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput,
+};
 use myspace_lib::repositories::workspace_repository;
 
 fn root_board_id(conn: &rusqlite::Connection) -> String {
@@ -352,6 +354,65 @@ fn move_card_with_stale_revision_is_rejected() {
                 width: 200.0,
                 height: 80.0,
             },
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::StaleRevision { .. })
+    ));
+}
+
+#[test]
+fn update_viewport_persists_and_bumps_revision() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    workspace_repository::update_viewport(
+        &mut conn,
+        &UpdateViewportInput {
+            board_id: board_id.clone(),
+            expected_revision: 1,
+            x: 100.0,
+            y: -50.0,
+            zoom: 1.5,
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    assert_eq!(snapshot.viewport.x, 100.0);
+    assert_eq!(snapshot.viewport.y, -50.0);
+    assert_eq!(snapshot.viewport.zoom, 1.5);
+    assert_eq!(snapshot.viewport.revision, 2);
+}
+
+#[test]
+fn update_viewport_with_stale_revision_is_rejected() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    workspace_repository::update_viewport(
+        &mut conn,
+        &UpdateViewportInput {
+            board_id: board_id.clone(),
+            expected_revision: 1,
+            x: 1.0,
+            y: 1.0,
+            zoom: 1.0,
+        },
+    )
+    .unwrap();
+
+    let result = workspace_repository::update_viewport(
+        &mut conn,
+        &UpdateViewportInput {
+            board_id: board_id.clone(),
+            expected_revision: 1,
+            x: 2.0,
+            y: 2.0,
+            zoom: 1.0,
         },
     );
     assert!(matches!(

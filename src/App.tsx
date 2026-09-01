@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
@@ -15,7 +15,13 @@ function App() {
   const [board, setBoard] = useState<BoardSummary | null>(null);
   const [notes, setNotes] = useState<NoteCardDto[]>([]);
   const [viewport, setViewport] = useState<CanvasViewport>({ x: 0, y: 0, zoom: 1 });
+  const [viewportRevision, setViewportRevision] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const viewportRevisionRef = useRef(viewportRevision);
+
+  useEffect(() => {
+    viewportRevisionRef.current = viewportRevision;
+  }, [viewportRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,6 +37,7 @@ function App() {
           y: snapshot.viewport.y,
           zoom: snapshot.viewport.zoom,
         });
+        setViewportRevision(snapshot.viewport.revision);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -143,6 +150,34 @@ function App() {
     [gateway, notes],
   );
 
+  // Debounce viewport persistence (400 ms trailing, per the plan's runtime
+  // ownership table). The latest viewport is written once the user pauses.
+  const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleViewportChanged = useCallback(
+    (e: { viewport: CanvasViewport }) => {
+      setViewport(e.viewport);
+      if (viewportTimer.current) clearTimeout(viewportTimer.current);
+      viewportTimer.current = setTimeout(() => {
+        if (!board) return;
+        void gateway
+          .saveViewport({
+            boardId: board.id,
+            expectedRevision: viewportRevisionRef.current,
+            x: e.viewport.x,
+            y: e.viewport.y,
+            zoom: e.viewport.zoom,
+          })
+          .then(() => {
+            setViewportRevision((r) => r + 1);
+          })
+          .catch((err) => {
+            setError(err instanceof Error ? err.message : String(err));
+          });
+      }, 400);
+    },
+    [board, gateway],
+  );
+
   return (
     <AppShell>
       <div className="workspace">
@@ -169,7 +204,7 @@ function App() {
             dependencyKey={dependencyKey}
             events={{
               onCardsMoved: handleCardsMoved,
-              onViewportChanged: (e) => setViewport(e.viewport),
+              onViewportChanged: handleViewportChanged,
             }}
             renderCard={(card) => {
               const note = notes.find((n) => n.id === card.id);

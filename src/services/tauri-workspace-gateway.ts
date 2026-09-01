@@ -4,6 +4,7 @@ import type {
   BoardSummary,
   CreateNoteInput,
   MoveCardInput,
+  SaveViewportInput,
   UpdateNoteInput,
   WorkspaceGateway,
 } from "./workspace-gateway";
@@ -32,5 +33,9 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   moveCard(input: MoveCardInput): Promise<void> {
     return invoke<void>("move_card", { input });
+  }
+
+  saveViewport(input: SaveViewportInput): Promise<void> {
+    return invoke<void>("save_viewport", { input });
   }
 }

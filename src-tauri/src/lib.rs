@@ -32,6 +32,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::boards::load_board_snapshot,
             commands::boards::get_home_board,
+            commands::boards::save_viewport,
             commands::cards::create_note,
             commands::cards::update_note,
             commands::cards::move_card,
