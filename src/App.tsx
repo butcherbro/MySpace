@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "./app/AppShell";
+import { CanvasAdapter } from "./canvas/CanvasAdapter";
+import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { NoteCard } from "./cards/note/NoteCard";
 import { createGateway } from "./services/create-gateway";
 import type { BoardSummary, NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
@@ -9,6 +11,7 @@ function App() {
 
   const [board, setBoard] = useState<BoardSummary | null>(null);
   const [notes, setNotes] = useState<NoteCardDto[]>([]);
+  const [viewport, setViewport] = useState<CanvasViewport>({ x: 0, y: 0, zoom: 1 });
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -20,6 +23,11 @@ function App() {
         if (cancelled) return;
         setBoard(snapshot.board);
         setNotes(snapshot.cards.filter((c): c is NoteCardDto => c.kind === "note"));
+        setViewport({
+          x: snapshot.viewport.x,
+          y: snapshot.viewport.y,
+          zoom: snapshot.viewport.zoom,
+        });
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -80,6 +88,29 @@ function App() {
     [gateway, notes],
   );
 
+  // Build the canvas projection from notes. (Board portals join in Slice 4.)
+  const canvasCards: CanvasCard[] = notes.map((n) => ({
+    id: n.id,
+    boardId: n.boardId,
+    kind: "note",
+    frame: n.frame,
+    zIndex: n.zIndex,
+  }));
+
+  // A drag gesture finished: update the local projection. Persisting this
+  // geometry to SQLite arrives in Task 2.3.
+  const handleCardsMoved = useCallback(
+    (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
+      setNotes((prev) =>
+        prev.map((n) => {
+          const moved = e.cards.find((m) => m.id === n.id);
+          return moved ? { ...n, frame: moved.frame } : n;
+        }),
+      );
+    },
+    [],
+  );
+
   return (
     <AppShell>
       <div className="workspace">
@@ -97,13 +128,19 @@ function App() {
           </div>
         )}
         <div className="workspace__canvas" data-testid="canvas">
-          {notes.map((note) => (
-            <NoteCard
-              key={note.id}
-              note={note}
-              onUpdate={handleUpdateNote}
-            />
-          ))}
+          <CanvasAdapter
+            cards={canvasCards}
+            viewport={viewport}
+            events={{
+              onCardsMoved: handleCardsMoved,
+              onViewportChanged: (e) => setViewport(e.viewport),
+            }}
+            renderCard={(card) => {
+              const note = notes.find((n) => n.id === card.id);
+              if (!note) return null;
+              return <NoteCard note={note} onUpdate={handleUpdateNote} />;
+            }}
+          />
           {notes.length === 0 && !error && (
             <div className="workspace__empty">
               Click “New note” to create your first note.
