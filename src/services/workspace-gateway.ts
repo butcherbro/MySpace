@@ -81,6 +81,12 @@ export interface UpdateNoteInput {
   plainText: string;
 }
 
+export interface MoveCardInput {
+  id: string;
+  expectedRevision: number;
+  frame: Frame;
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -90,4 +96,5 @@ export interface WorkspaceGateway {
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot>;
   createNote(input: CreateNoteInput): Promise<void>;
   updateNote(input: UpdateNoteInput): Promise<void>;
+  moveCard(input: MoveCardInput): Promise<void>;
 }

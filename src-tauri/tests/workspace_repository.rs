@@ -1,7 +1,7 @@
 //! Repository tests: load a board snapshot and create notes transactionally.
 
 use myspace_lib::db::{bootstrap, open_in_memory};
-use myspace_lib::domain::models::{CreateNoteInput, Frame, UpdateNoteInput};
+use myspace_lib::domain::models::{CreateNoteInput, Frame, UpdateCardFrameInput, UpdateNoteInput};
 use myspace_lib::repositories::workspace_repository;
 
 fn root_board_id(conn: &rusqlite::Connection) -> String {
@@ -242,6 +242,116 @@ fn update_note_with_stale_revision_is_rejected() {
             expected_revision: 1,
             document_json: serde_json::json!({ "type": "doc" }),
             plain_text: "should not apply".to_string(),
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::StaleRevision { .. })
+    ));
+}
+
+#[test]
+fn move_card_updates_frame_and_bumps_revision() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-m".to_string(),
+            board_id: board_id.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    workspace_repository::update_card_frame(
+        &mut conn,
+        &UpdateCardFrameInput {
+            id: "note-m".to_string(),
+            expected_revision: 1,
+            frame: Frame {
+                x: 321.0,
+                y: 123.0,
+                width: 240.0,
+                height: 120.0,
+            },
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    match &snapshot.cards[0] {
+        myspace_lib::domain::models::CardDto::Note(n) => {
+            assert_eq!(n.frame.x, 321.0);
+            assert_eq!(n.frame.y, 123.0);
+            assert_eq!(n.frame.width, 240.0);
+            assert_eq!(n.frame.height, 120.0);
+            assert_eq!(n.revision, 2);
+        }
+        other => panic!("expected note, got {other:?}"),
+    }
+}
+
+#[test]
+fn move_card_with_stale_revision_is_rejected() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-ms".to_string(),
+            board_id,
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    workspace_repository::update_card_frame(
+        &mut conn,
+        &UpdateCardFrameInput {
+            id: "note-ms".to_string(),
+            expected_revision: 1,
+            frame: Frame {
+                x: 5.0,
+                y: 5.0,
+                width: 200.0,
+                height: 80.0,
+            },
+        },
+    )
+    .unwrap();
+
+    let result = workspace_repository::update_card_frame(
+        &mut conn,
+        &UpdateCardFrameInput {
+            id: "note-ms".to_string(),
+            expected_revision: 1,
+            frame: Frame {
+                x: 9.0,
+                y: 9.0,
+                width: 200.0,
+                height: 80.0,
+            },
         },
     );
     assert!(matches!(

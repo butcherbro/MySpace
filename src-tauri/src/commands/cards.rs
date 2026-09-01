@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::{CreateNoteInput, UpdateNoteInput};
+use crate::domain::models::{CreateNoteInput, UpdateCardFrameInput, UpdateNoteInput};
 use crate::repositories::workspace_repository;
 
 /// The application-wide SQLite connection, guarded so commands can share it.
@@ -28,4 +28,13 @@ pub fn update_note(db: DbState<'_>, input: UpdateNoteInput) -> Result<(), Worksp
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::update_note(&mut conn, &input)
+}
+
+/// Moves/resizes a card (note or portal) with an optimistic revision guard.
+#[tauri::command]
+pub fn move_card(db: DbState<'_>, input: UpdateCardFrameInput) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::update_card_frame(&mut conn, &input)
 }

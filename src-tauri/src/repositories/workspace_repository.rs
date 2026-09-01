@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto, CreateNoteInput, Frame,
-    NoteCardDto, PortalTarget, UpdateNoteInput, Viewport,
+    NoteCardDto, PortalTarget, UpdateCardFrameInput, UpdateNoteInput, Viewport,
 };
 
 use super::super::db;
@@ -290,5 +290,51 @@ pub fn update_note(conn: &mut Connection, input: &UpdateNoteInput) -> Result<(),
     )?;
 
     tx.commit()?;
+    Ok(())
+}
+
+/// Updates a card's frame (position and size), bumping its revision with an
+/// optimistic `expected_revision` guard. Works for both notes and portals.
+pub fn update_card_frame(
+    conn: &mut Connection,
+    input: &UpdateCardFrameInput,
+) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+
+    let changed = conn.execute(
+        "UPDATE cards
+         SET x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
+         WHERE id = ?6 AND revision = ?7",
+        params![
+            input.frame.x,
+            input.frame.y,
+            input.frame.width,
+            input.frame.height,
+            now,
+            input.id,
+            input.expected_revision,
+        ],
+    )?;
+
+    if changed == 0 {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(WorkspaceError::NotFound(input.id.clone()));
+        }
+        let actual: i64 = conn.query_row(
+            "SELECT revision FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_revision,
+            actual,
+        });
+    }
+
     Ok(())
 }

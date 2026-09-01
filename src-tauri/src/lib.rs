@@ -33,6 +33,7 @@ pub fn run() {
             commands::boards::get_home_board,
             commands::cards::create_note,
             commands::cards::update_note,
+            commands::cards::move_card,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

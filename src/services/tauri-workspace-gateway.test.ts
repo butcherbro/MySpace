@@ -55,4 +55,16 @@ describe("TauriWorkspaceGateway", () => {
     await gw.updateNote(input);
     expect(invokeMock).toHaveBeenCalledWith("update_note", { input });
   });
+
+  it("calls move_card with a wrapped input payload", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      id: "note-1",
+      expectedRevision: 2,
+      frame: { x: 100, y: 200, width: 240, height: 120 },
+    };
+    await gw.moveCard(input);
+    expect(invokeMock).toHaveBeenCalledWith("move_card", { input });
+  });
 });

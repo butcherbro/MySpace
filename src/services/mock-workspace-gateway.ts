@@ -2,6 +2,7 @@ import type {
   BoardSnapshot,
   BoardSummary,
   CreateNoteInput,
+  MoveCardInput,
   UpdateNoteInput,
   WorkspaceGateway,
 } from "./workspace-gateway";
@@ -64,6 +65,19 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     card.revision += 1;
     card.documentJson = input.documentJson;
     card.plainText = input.plainText;
+    return Promise.resolve();
+  }
+
+  moveCard(input: MoveCardInput): Promise<void> {
+    const card = this.snapshot.cards.find((c) => c.id === input.id);
+    if (!card) {
+      return Promise.reject(new Error(`card not found: ${input.id}`));
+    }
+    if (card.revision !== input.expectedRevision) {
+      return Promise.reject(new Error(`stale revision for ${input.id}`));
+    }
+    card.revision += 1;
+    card.frame = { ...input.frame };
     return Promise.resolve();
   }
 }

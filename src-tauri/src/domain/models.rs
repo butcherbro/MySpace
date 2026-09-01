@@ -122,3 +122,12 @@ pub struct UpdateNoteInput {
     pub document_json: Value,
     pub plain_text: String,
 }
+
+/// Input for moving/resizing a card (note or portal) and bumping its revision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCardFrameInput {
+    pub id: String,
+    pub expected_revision: i64,
+    pub frame: Frame,
+}

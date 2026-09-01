@@ -97,18 +97,34 @@ function App() {
     zIndex: n.zIndex,
   }));
 
-  // A drag gesture finished: update the local projection. Persisting this
-  // geometry to SQLite arrives in Task 2.3.
+  // A drag gesture finished: persist the new frames to SQLite, then reflect
+  // the bumped revision locally.
   const handleCardsMoved = useCallback(
     (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
-      setNotes((prev) =>
-        prev.map((n) => {
-          const moved = e.cards.find((m) => m.id === n.id);
-          return moved ? { ...n, frame: moved.frame } : n;
-        }),
-      );
+      for (const moved of e.cards) {
+        const note = notes.find((n) => n.id === moved.id);
+        if (!note) continue;
+        void gateway
+          .moveCard({
+            id: moved.id,
+            expectedRevision: note.revision,
+            frame: moved.frame,
+          })
+          .then(() => {
+            setNotes((prev) =>
+              prev.map((n) =>
+                n.id === moved.id
+                  ? { ...n, frame: moved.frame, revision: n.revision + 1 }
+                  : n,
+              ),
+            );
+          })
+          .catch((err) => {
+            setError(err instanceof Error ? err.message : String(err));
+          });
+      }
     },
-    [],
+    [gateway, notes],
   );
 
   return (
