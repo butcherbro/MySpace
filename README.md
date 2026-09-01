@@ -35,9 +35,21 @@ npm install
 npm run tauri dev
 ```
 
-Quality gates:
+## Quality gates
 
 ```bash
-npm run check
+npm run check            # typecheck + lint + unit tests (vitest)
+npm run test:e2e         # browser-mode flows (playwright)
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+Individual scripts:
+
+| Script | Purpose |
+|---|---|
+| `npm run typecheck` | TypeScript --noEmit |
+| `npm run lint` | ESLint |
+| `npm test` | Vitest (headless unit/component tests) |
+| `npm run test:ui` | Vitest watch mode |
+| `npm run test:e2e` | Playwright browser flows |
+| `npm run check` | typecheck + lint + test |
