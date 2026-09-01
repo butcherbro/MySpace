@@ -4,6 +4,7 @@ import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { NoteCard } from "./cards/note/NoteCard";
 import { plainTextToDocument } from "./editor/document-codec";
+import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import type { NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
@@ -19,6 +20,14 @@ function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const { board, viewport, viewportRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
+
+  // Serializes mutations (save/drag) so they never race on a card's revision.
+  const queueRef = useRef(new MutationQueue());
+  // Always reflects the latest notes so queued tasks read the current revision.
+  const notesRef = useRef(notes);
+  useEffect(() => {
+    notesRef.current = notes;
+  }, [notes]);
 
   const viewportRevisionRef = useRef(viewportRevision);
   useEffect(() => {
@@ -81,28 +90,31 @@ function App() {
   }, [board, gateway, idGenerator, notes.length]);
 
   const handleUpdateNote = useCallback(
-    async (id: string, plainText: string) => {
-      const note = notes.find((n) => n.id === id);
-      if (!note) return;
-      try {
-        await gateway.updateNote({
-          id,
-          expectedRevision: note.revision,
-          documentJson: plainTextToDocument(plainText),
-          plainText,
+    (id: string, plainText: string): Promise<void> => {
+      const task = queueRef.current
+        .run(async () => {
+          const note = notesRef.current.find((n) => n.id === id);
+          if (!note) return;
+          await gateway.updateNote({
+            id,
+            expectedRevision: note.revision,
+            documentJson: plainTextToDocument(plainText),
+            plainText,
+          });
+          dispatch({
+            type: "cardContentUpdated",
+            id,
+            revision: note.revision + 1,
+            documentJson: plainTextToDocument(plainText),
+            plainText,
+          });
+        })
+        .catch((e) => {
+          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
         });
-        dispatch({
-          type: "cardContentUpdated",
-          id,
-          revision: note.revision + 1,
-          documentJson: plainTextToDocument(plainText),
-          plainText,
-        });
-      } catch (e) {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
-      }
+      return task;
     },
-    [gateway, notes],
+    [gateway],
   );
 
   // Build the canvas projection from notes. (Board portals join in Slice 4.)
@@ -117,22 +129,25 @@ function App() {
 
   const handleCardsMoved = useCallback(
     (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
-      const batch = e.cards
-        .map((moved) => {
-          const note = notes.find((n) => n.id === moved.id);
-          return note
-            ? { id: moved.id, expectedRevision: note.revision, frame: moved.frame }
-            : null;
-        })
-        .filter((x): x is { id: string; expectedRevision: number; frame: CanvasCard["frame"] } => x !== null);
+      void queueRef.current
+        .run(async () => {
+          const batch = e.cards
+            .map((moved) => {
+              const note = notesRef.current.find((n) => n.id === moved.id);
+              return note
+                ? { id: moved.id, expectedRevision: note.revision, frame: moved.frame }
+                : null;
+            })
+            .filter(
+              (x): x is { id: string; expectedRevision: number; frame: CanvasCard["frame"] } =>
+                x !== null,
+            );
 
-      if (batch.length === 0) return;
+          if (batch.length === 0) return;
 
-      void gateway
-        .moveCards({ cards: batch })
-        .then(() => {
+          await gateway.moveCards({ cards: batch });
           for (const item of batch) {
-            const note = notes.find((n) => n.id === item.id);
+            const note = notesRef.current.find((n) => n.id === item.id);
             if (!note) continue;
             dispatch({
               type: "cardMoved",
@@ -146,7 +161,7 @@ function App() {
           dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
         });
     },
-    [gateway, notes],
+    [gateway],
   );
 
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
