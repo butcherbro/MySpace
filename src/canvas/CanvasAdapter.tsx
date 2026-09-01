@@ -24,11 +24,6 @@ interface CanvasAdapterProps {
   events: CanvasEvents;
   /** Renders the interior of a card given its domain card. */
   renderCard: (card: CanvasCard) => ReactNode;
-  /**
-   * A string that changes whenever any card's *content* (not just its frame)
-   * changes. Used to rebuild nodes so text edits are reflected immediately.
-   */
-  dependencyKey: string;
 }
 
 type CardNodeData = { content: ReactNode };
@@ -60,24 +55,22 @@ export function CanvasAdapter({
   viewport,
   events,
   renderCard,
-  dependencyKey,
 }: CanvasAdapterProps) {
   const [nodes, setNodes] = useState<Node<CardNodeData>[]>(() =>
     cards.map((c) => cardToNode(c, renderCard)),
   );
 
-  // Keep an immutable signature of the external projection (both frames and
-  // content) to detect when it changed. When it does, rebuild internal nodes as
-  // part of render (React's recommended "adjusting state during render"
-  // pattern) rather than in an effect, which avoids a cascading second render.
+  // Detect any change to the external projection (frame *or* revision, which
+  // changes on content edits and moves) and rebuild nodes as part of render
+  // (React's recommended "adjusting state during render" pattern). Rebuilding
+  // on revision change refreshes node content without a separate content key.
   const cardsKey = cards
-    .map((c) => `${c.id}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex}`)
+    .map((c) => `${c.id}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}`)
     .join("|");
-  const fullKey = cardsKey + "#" + dependencyKey;
-  const [lastKey, setLastKey] = useState(fullKey);
+  const [lastKey, setLastKey] = useState(cardsKey);
 
-  if (fullKey !== lastKey) {
-    setLastKey(fullKey);
+  if (cardsKey !== lastKey) {
+    setLastKey(cardsKey);
     setNodes(cards.map((c) => cardToNode(c, renderCard)));
   }
 

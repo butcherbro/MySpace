@@ -22,6 +22,11 @@ export interface CanvasCard {
   kind: CanvasCardKind;
   frame: CanvasFrame;
   zIndex: number;
+  /**
+   * The card's current revision. Included so the adapter can detect content
+   * changes (which bump revision) and rebuild its node contents accordingly.
+   */
+  revision: number;
 }
 
 /** A point in board-space coordinates. */

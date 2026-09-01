@@ -112,12 +112,8 @@ function App() {
     kind: "note",
     frame: n.frame,
     zIndex: n.zIndex,
+    revision: n.revision,
   }));
-
-  // Changing this value (e.g. after a text edit) forces the canvas to rebuild
-  // its nodes so the updated content is rendered immediately. (To be removed in
-  // the controlled-adapter step.)
-  const dependencyKey = notes.map((n) => `${n.id}:${n.plainText}:${n.revision}`).join("|");
 
   const handleCardsMoved = useCallback(
     (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
@@ -194,7 +190,6 @@ function App() {
           <CanvasAdapter
             cards={canvasCards}
             viewport={viewport}
-            dependencyKey={dependencyKey}
             events={{
               onCardsMoved: handleCardsMoved,
               onViewportChanged: handleViewportChanged,
