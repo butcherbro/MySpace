@@ -179,6 +179,17 @@ function App() {
     dispatch({ type: "selectionChanged", ids: e.ids });
   }, []);
 
+  const handleCardActivated = useCallback((id: string) => {
+    const card = state.cards.find((c) => c.id === id);
+    if (card?.kind === "note") {
+      dispatch({ type: "editingStarted", id });
+    }
+  }, [state.cards]);
+
+  const handleEditDeactivate = useCallback(() => {
+    dispatch({ type: "editingStopped" });
+  }, []);
+
   return (
     <AppShell>
       <div className="workspace">
@@ -206,11 +217,19 @@ function App() {
               onCardsMoved: handleCardsMoved,
               onViewportChanged: handleViewportChanged,
               onSelectionChanged: handleCardsSelected,
+              onCardActivated: handleCardActivated,
             }}
             renderCard={(card) => {
               const note = notes.find((n) => n.id === card.id);
               if (!note) return null;
-              return <NoteCard note={note} onUpdate={handleUpdateNote} />;
+              return (
+                <NoteCard
+                  note={note}
+                  editing={state.editingCardId === note.id}
+                  onDeactivate={handleEditDeactivate}
+                  onUpdate={handleUpdateNote}
+                />
+              );
             }}
           />
           {notes.length === 0 && !error && (

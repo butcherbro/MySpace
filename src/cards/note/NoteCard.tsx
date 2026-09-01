@@ -4,21 +4,32 @@ import "./note-card.css";
 
 interface NoteCardProps {
   note: NoteCardDto;
+  /** Whether this note is the one currently being edited. */
+  editing: boolean;
+  /** Exit edit mode. */
+  onDeactivate: () => void;
   onUpdate: (id: string, plainText: string) => Promise<void>;
 }
 
 /**
- * A minimal editable note. For Slice 1 the surface is a plain-text textarea
- * backed by the durable note document; rich-text (Tiptap) arrives in Slice 3.
- * Editing is local state; persistence is triggered on blur (and Enter without
- * Shift) via the parent-provided `onUpdate` callback.
+ * An editable note. Editing is *controlled* by the parent (the current-board
+ * store): the canvas decides click-versus-drag, then flips `editing` on only
+ * for a pure click. The note itself only manages the in-editor text buffer.
  */
-export function NoteCard({ note, onUpdate }: NoteCardProps) {
+export function NoteCard({ note, editing, onDeactivate, onUpdate }: NoteCardProps) {
   const [text, setText] = useState(note.plainText);
-  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Keep the local buffer in sync when the authoritative note changes (e.g. a
+  // snapshot reload or an external rollback replaces the note). React's
+  // recommended "adjusting state during render" pattern for derived state.
+  const [prevPlainText, setPrevPlainText] = useState(note.plainText);
+  if (prevPlainText !== note.plainText && !editing) {
+    setPrevPlainText(note.plainText);
+    setText(note.plainText);
+  }
 
   useEffect(() => {
     if (editing) {
@@ -32,7 +43,7 @@ export function NoteCard({ note, onUpdate }: NoteCardProps) {
     setError(null);
     try {
       await onUpdate(note.id, text);
-      setEditing(false);
+      onDeactivate();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -44,6 +55,10 @@ export function NoteCard({ note, onUpdate }: NoteCardProps) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setText(note.plainText);
+      onDeactivate();
     }
   }
 
@@ -51,6 +66,7 @@ export function NoteCard({ note, onUpdate }: NoteCardProps) {
     <div
       className={`note-card ${editing ? "note-card--editing" : ""}`}
       data-testid="note-card"
+      data-editing={editing ? "true" : "false"}
     >
       {editing ? (
         <textarea
@@ -63,12 +79,7 @@ export function NoteCard({ note, onUpdate }: NoteCardProps) {
           disabled={saving}
         />
       ) : (
-        <div
-          className="note-card__text"
-          onClick={() => setEditing(true)}
-          role="button"
-          tabIndex={0}
-        >
+        <div className="note-card__text" role="button" tabIndex={0}>
           {text || <span className="note-card__placeholder">Empty note</span>}
         </div>
       )}

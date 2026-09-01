@@ -16,6 +16,7 @@ export interface CurrentBoardState {
   viewportRevision: number;
   cards: CardDto[];
   selection: string[];
+  editingCardId: string | null;
   loading: boolean;
   error: string | null;
 }
@@ -33,6 +34,8 @@ export type CurrentBoardAction =
   | { type: "cardContentUpdated"; id: string; revision: number; documentJson: unknown; plainText: string }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "selectionChanged"; ids: string[] }
+  | { type: "editingStarted"; id: string }
+  | { type: "editingStopped" }
   | { type: "viewportChanged"; viewport: CanvasViewport }
   | { type: "viewportSaved"; revision: number }
   | { type: "failed"; message: string }
@@ -44,6 +47,7 @@ export const initialState: CurrentBoardState = {
   viewportRevision: 1,
   cards: [],
   selection: [],
+  editingCardId: null,
   loading: false,
   error: null,
 };
@@ -64,6 +68,7 @@ export function reducer(
         viewportRevision: action.viewportRevision,
         cards: action.cards,
         selection: [],
+        editingCardId: null,
         loading: false,
         error: null,
       };
@@ -98,6 +103,12 @@ export function reducer(
 
     case "selectionChanged":
       return { ...state, selection: action.ids };
+
+    case "editingStarted":
+      return { ...state, editingCardId: action.id, selection: [action.id] };
+
+    case "editingStopped":
+      return { ...state, editingCardId: null };
 
     case "viewportChanged":
       return { ...state, viewport: action.viewport };

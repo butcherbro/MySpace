@@ -124,6 +124,14 @@ export function CanvasAdapter({
     }
   };
 
+  const handleNodeClick = (_: unknown, node: Node<CardNodeData>) => {
+    // A pure click (no drag) on a note activates editing; on a portal it will
+    // open the child board (Slice 4).
+    if (!selectedIdsRef.current.has(node.id) || selectedIdsRef.current.size <= 1) {
+      events.onCardActivated?.(node.id);
+    }
+  };
+
   const handleMoveEnd = (_: unknown, vp: { x: number; y: number; zoom: number }) => {
     events.onViewportChanged?.({ viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } });
   };
@@ -147,6 +155,7 @@ export function CanvasAdapter({
       elementsSelectable
       selectNodesOnDrag={false}
       onSelectionChange={handleSelectionChange}
+      onNodeClick={handleNodeClick}
       onNodeDragStop={handleNodeDragStop}
       onMoveEnd={handleMoveEnd}
       minZoom={0.1}

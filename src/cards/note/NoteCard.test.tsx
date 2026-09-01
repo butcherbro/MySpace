@@ -20,29 +20,44 @@ function makeNote(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
 
 describe("NoteCard", () => {
   it("renders the note text in display mode", () => {
-    render(<NoteCard note={makeNote()} onUpdate={vi.fn()} />);
+    render(
+      <NoteCard note={makeNote()} editing={false} onDeactivate={vi.fn()} onUpdate={vi.fn()} />,
+    );
     expect(screen.getByText("hello")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
-  it("enters editing and commits on Enter", async () => {
+  it("shows an editor when editing is true", () => {
+    render(
+      <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn()} />,
+    );
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+  });
+
+  it("commits on Enter and calls onDeactivate", async () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn().mockResolvedValue(undefined);
-    render(<NoteCard note={makeNote()} onUpdate={onUpdate} />);
+    const onDeactivate = vi.fn();
+    render(
+      <NoteCard note={makeNote()} editing={true} onDeactivate={onDeactivate} onUpdate={onUpdate} />,
+    );
 
-    await user.click(screen.getByText("hello"));
     const textarea = screen.getByRole("textbox");
     await user.clear(textarea);
     await user.type(textarea, "updated{Enter}");
 
     expect(onUpdate).toHaveBeenCalledWith("note-1", "updated");
+    expect(onDeactivate).toHaveBeenCalled();
   });
 
   it("commits on blur", async () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn().mockResolvedValue(undefined);
-    render(<NoteCard note={makeNote()} onUpdate={onUpdate} />);
+    const onDeactivate = vi.fn();
+    render(
+      <NoteCard note={makeNote()} editing={true} onDeactivate={onDeactivate} onUpdate={onUpdate} />,
+    );
 
-    await user.click(screen.getByText("hello"));
     const textarea = screen.getByRole("textbox");
     await user.clear(textarea);
     await user.type(textarea, "blurred");

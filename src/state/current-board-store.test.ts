@@ -74,6 +74,28 @@ describe("current board reducer", () => {
     expect(state.viewport).toEqual({ x: 10, y: 20, zoom: 1.5 });
   });
 
+  it("starts and stops editing, clearing when a snapshot loads", () => {
+    let state = reducer(initialState, { type: "editingStarted", id: "a" });
+    expect(state.editingCardId).toBe("a");
+    expect(state.selection).toEqual(["a"]);
+
+    state = reducer(state, { type: "editingStopped" });
+    expect(state.editingCardId).toBeNull();
+
+    state = reducer(
+      { ...initialState, editingCardId: "a", selection: ["a"] },
+      {
+        type: "snapshotLoaded",
+        board: home,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        viewportRevision: 1,
+        cards: [note("a")],
+      },
+    );
+    expect(state.editingCardId).toBeNull();
+    expect(state.selection).toEqual([]);
+  });
+
   it("records errors and clears them", () => {
     let state: CurrentBoardState = reducer(initialState, { type: "failed", message: "boom" });
     expect(state.error).toBe("boom");
