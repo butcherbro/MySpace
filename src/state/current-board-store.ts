@@ -7,11 +7,12 @@
 // Mutations are optimistic: actions apply immediately and the caller is
 // responsible for reconciliation on failure (see `rollback`/`reconcile`).
 
-import type { BoardSummary, CardDto } from "../services/workspace-gateway";
+import type { BoardSummary, CardDto, Breadcrumb } from "../services/workspace-gateway";
 import type { CanvasViewport } from "../canvas/canvas-types";
 
 export interface CurrentBoardState {
   board: BoardSummary | null;
+  breadcrumbs: Breadcrumb[];
   viewport: CanvasViewport;
   viewportRevision: number;
   cards: CardDto[];
@@ -26,6 +27,7 @@ export type CurrentBoardAction =
   | {
       type: "snapshotLoaded";
       board: BoardSummary;
+      breadcrumbs: Breadcrumb[];
       viewport: CanvasViewport;
       viewportRevision: number;
       cards: CardDto[];
@@ -43,6 +45,7 @@ export type CurrentBoardAction =
 
 export const initialState: CurrentBoardState = {
   board: null,
+  breadcrumbs: [],
   viewport: { x: 0, y: 0, zoom: 1 },
   viewportRevision: 1,
   cards: [],
@@ -64,6 +67,7 @@ export function reducer(
       return {
         ...state,
         board: action.board,
+        breadcrumbs: action.breadcrumbs,
         viewport: action.viewport,
         viewportRevision: action.viewportRevision,
         cards: action.cards,

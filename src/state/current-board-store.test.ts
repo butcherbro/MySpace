@@ -24,6 +24,7 @@ describe("current board reducer", () => {
       {
         type: "snapshotLoaded",
         board: home,
+        breadcrumbs: [],
         viewport: { x: 0, y: 0, zoom: 1 },
         viewportRevision: 3,
         cards: [note("a")],
@@ -87,6 +88,7 @@ describe("current board reducer", () => {
       {
         type: "snapshotLoaded",
         board: home,
+        breadcrumbs: [],
         viewport: { x: 0, y: 0, zoom: 1 },
         viewportRevision: 1,
         cards: [note("a")],

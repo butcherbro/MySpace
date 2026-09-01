@@ -1,0 +1,40 @@
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  padding: 6px 16px;
+  overflow-x: auto;
+  white-space: nowrap;
+  border-bottom: 1px solid #e5e5e5;
+  background: #fff;
+}
+
+.breadcrumbs__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.breadcrumbs__sep {
+  color: #bdc2bf;
+}
+
+.breadcrumbs__link {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  font-size: 13px;
+  color: #5f6763;
+  cursor: pointer;
+}
+
+.breadcrumbs__link:disabled {
+  color: #252927;
+  font-weight: 600;
+  cursor: default;
+}
+
+.breadcrumbs__gap {
+  color: #929995;
+}

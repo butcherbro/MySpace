@@ -4,6 +4,8 @@ import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { plainTextToDocument } from "./editor/document-codec";
+import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
+import { BoardHistory } from "./navigation/board-history";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
@@ -18,8 +20,11 @@ function App() {
   const idGenerator: IdGenerator = useMemo(() => new UuidV7Generator(), []);
 
   const [state, dispatch] = useReducer(reducer, initialState);
-  const { board, viewport, viewportRevision, error } = state;
+  const { board, breadcrumbs, viewport, viewportRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
+
+  // Browser-style navigation history. Initialized lazily once Home is known.
+  const historyRef = useRef<BoardHistory | null>(null);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -43,9 +48,11 @@ function App() {
         const home = await gateway.getHomeBoard();
         const snapshot = await gateway.loadBoardSnapshot(home.id);
         if (cancelled) return;
+        historyRef.current = new BoardHistory(home.id);
         dispatch({
           type: "snapshotLoaded",
           board: snapshot.board,
+          breadcrumbs: snapshot.breadcrumbs,
           viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
           viewportRevision: snapshot.viewport.revision,
           cards: snapshot.cards,
@@ -238,13 +245,17 @@ function App() {
     }
   }, [state.cards]);
 
-  // Open a child board (full navigation history arrives in Task 4.3).
-  const handleOpenBoard = useCallback(
-    async (boardId: string) => {
+  // Load a board's snapshot into the store.
+  const navigateTo = useCallback(
+    async (boardId: string, opts?: { push?: boolean }) => {
       const snapshot = await gateway.loadBoardSnapshot(boardId);
+      if (opts?.push && historyRef.current) {
+        historyRef.current.push(boardId);
+      }
       dispatch({
         type: "snapshotLoaded",
         board: snapshot.board,
+        breadcrumbs: snapshot.breadcrumbs,
         viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
         viewportRevision: snapshot.viewport.revision,
         cards: snapshot.cards,
@@ -252,6 +263,24 @@ function App() {
     },
     [gateway],
   );
+
+  // Open a child board via a portal (double-click / Enter).
+  const handleOpenBoard = useCallback(
+    (boardId: string) => {
+      void navigateTo(boardId, { push: true });
+    },
+    [navigateTo],
+  );
+
+  const handleNavigateBack = useCallback(() => {
+    const prev = historyRef.current?.back();
+    if (prev) void navigateTo(prev);
+  }, [navigateTo]);
+
+  const handleNavigateForward = useCallback(() => {
+    const next = historyRef.current?.forward();
+    if (next) void navigateTo(next);
+  }, [navigateTo]);
 
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -261,6 +290,25 @@ function App() {
     // next interaction land back on the board, not a stale editor.
     canvasRef.current?.focus();
   }, []);
+
+  // Cmd+[ / Cmd+] navigate back/forward unless an editor owns focus.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const target = e.target as HTMLElement | null;
+      const inEditor = target && (target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (inEditor) return;
+      if (e.key === "[") {
+        e.preventDefault();
+        handleNavigateBack();
+      } else if (e.key === "]") {
+        e.preventDefault();
+        handleNavigateForward();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleNavigateBack, handleNavigateForward]);
 
   return (
     <AppShell>
@@ -279,6 +327,7 @@ function App() {
             New board
           </button>
         </div>
+        <BoardBreadcrumbs breadcrumbs={breadcrumbs} onNavigate={(id) => void navigateTo(id, { push: true })} />
         {error && (
           <div className="workspace__error" data-testid="workspace-error">
             {error}
