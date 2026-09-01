@@ -36,3 +36,12 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
     migrations::run_migrations(&mut conn)?;
     Ok(conn)
 }
+
+/// Opens (or creates) the database at `path`, applies pragmas and migrations,
+/// then runs first-run bootstrap so exactly one workspace and Home root board
+/// exist.
+pub fn open_and_bootstrap(path: &std::path::Path) -> Result<Connection> {
+    let mut conn = open(path)?;
+    bootstrap::bootstrap(&mut conn)?;
+    Ok(conn)
+}

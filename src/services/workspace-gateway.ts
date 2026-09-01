@@ -1,0 +1,93 @@
+// Type definitions for the workspace gateway. These mirror the Rust domain
+// DTOs (camelCase) so the frontend never deals with snake_case or Tauri
+// internals directly.
+
+export interface Frame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BoardSummary {
+  id: string;
+  title: string;
+  parentBoardId: string | null;
+  revision: number;
+}
+
+export interface Breadcrumb {
+  id: string;
+  title: string;
+}
+
+export interface Viewport {
+  x: number;
+  y: number;
+  zoom: number;
+  revision: number;
+}
+
+export interface NoteCardDto {
+  kind: "note";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  revision: number;
+  documentJson: unknown;
+  plainText: string;
+}
+
+export interface BoardPortalDto {
+  kind: "board_portal";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  revision: number;
+  target: {
+    id: string;
+    title: string;
+    colorToken: string;
+    symbol: string | null;
+    childBoardCount: number;
+    childCardCount: number;
+  };
+}
+
+export type CardDto = NoteCardDto | BoardPortalDto;
+
+export interface BoardSnapshot {
+  board: BoardSummary;
+  breadcrumbs: Breadcrumb[];
+  viewport: Viewport;
+  cards: CardDto[];
+}
+
+export interface CreateNoteInput {
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  documentJson: unknown;
+  plainText: string;
+}
+
+export interface UpdateNoteInput {
+  id: string;
+  expectedRevision: number;
+  documentJson: unknown;
+  plainText: string;
+}
+
+/**
+ * The gateway the UI talks to. Concrete implementations adapt Tauri commands
+ * or an in-memory mock (for browser-mode tests).
+ */
+export interface WorkspaceGateway {
+  getHomeBoard(): Promise<BoardSummary>;
+  loadBoardSnapshot(boardId: string): Promise<BoardSnapshot>;
+  createNote(input: CreateNoteInput): Promise<void>;
+  updateNote(input: UpdateNoteInput): Promise<void>;
+}

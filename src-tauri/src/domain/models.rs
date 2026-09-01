@@ -112,3 +112,13 @@ pub struct CreateNoteInput {
     pub document_json: Value,
     pub plain_text: String,
 }
+
+/// Input for updating a note's content and bumping its revision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateNoteInput {
+    pub id: String,
+    pub expected_revision: i64,
+    pub document_json: Value,
+    pub plain_text: String,
+}

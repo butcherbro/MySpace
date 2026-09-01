@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto, CreateNoteInput, Frame,
-    NoteCardDto, PortalTarget, Viewport,
+    NoteCardDto, PortalTarget, UpdateNoteInput, Viewport,
 };
 
 use super::super::db;
@@ -245,5 +245,50 @@ pub fn create_note(conn: &mut Connection, input: &CreateNoteInput) -> Result<(),
     )?;
     tx.commit()?;
 
+    Ok(())
+}
+
+/// Updates a note's content, bumping its revision, guarded by an optimistic
+/// `expected_revision`. A stale revision is rejected rather than silently
+/// overwriting newer state (Section C invariant 11).
+pub fn update_note(conn: &mut Connection, input: &UpdateNoteInput) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+    let document_json = serde_json::to_string(&input.document_json)
+        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+
+    let tx = conn.transaction()?;
+
+    let changed = tx.execute(
+        "UPDATE cards SET revision = revision + 1, updated_at = ?1
+         WHERE id = ?2 AND revision = ?3",
+        params![now, input.id, input.expected_revision],
+    )?;
+
+    if changed == 0 {
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(WorkspaceError::NotFound(input.id.clone()));
+        }
+        let actual: i64 = tx.query_row(
+            "SELECT revision FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_revision,
+            actual,
+        });
+    }
+
+    tx.execute(
+        "UPDATE note_cards SET document_json = ?1, plain_text = ?2 WHERE card_id = ?3",
+        params![document_json, input.plain_text, input.id],
+    )?;
+
+    tx.commit()?;
     Ok(())
 }

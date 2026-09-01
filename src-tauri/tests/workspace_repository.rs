@@ -1,7 +1,7 @@
 //! Repository tests: load a board snapshot and create notes transactionally.
 
 use myspace_lib::db::{bootstrap, open_in_memory};
-use myspace_lib::domain::models::{CreateNoteInput, Frame};
+use myspace_lib::domain::models::{CreateNoteInput, Frame, UpdateNoteInput};
 use myspace_lib::repositories::workspace_repository;
 
 fn root_board_id(conn: &rusqlite::Connection) -> String {
@@ -145,4 +145,101 @@ fn load_missing_board_returns_error() {
     let conn = open_in_memory().unwrap();
     let result = workspace_repository::load_board_snapshot(&conn, "does-not-exist");
     assert!(result.is_err());
+}
+
+#[test]
+fn update_note_changes_content_and_bumps_revision() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-x".to_string(),
+            board_id: board_id.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "first".to_string(),
+        },
+    )
+    .unwrap();
+
+    workspace_repository::update_note(
+        &mut conn,
+        &UpdateNoteInput {
+            id: "note-x".to_string(),
+            expected_revision: 1,
+            document_json: serde_json::json!({ "type": "doc", "content": [1] }),
+            plain_text: "second".to_string(),
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    match &snapshot.cards[0] {
+        myspace_lib::domain::models::CardDto::Note(n) => {
+            assert_eq!(n.plain_text, "second");
+            assert_eq!(n.revision, 2);
+        }
+        other => panic!("expected note, got {other:?}"),
+    }
+}
+
+#[test]
+fn update_note_with_stale_revision_is_rejected() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-s".to_string(),
+            board_id,
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "v1".to_string(),
+        },
+    )
+    .unwrap();
+
+    // First update from revision 1 -> 2 succeeds.
+    workspace_repository::update_note(
+        &mut conn,
+        &UpdateNoteInput {
+            id: "note-s".to_string(),
+            expected_revision: 1,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "v2".to_string(),
+        },
+    )
+    .unwrap();
+
+    // A second update that still assumes revision 1 must be rejected as stale.
+    let result = workspace_repository::update_note(
+        &mut conn,
+        &UpdateNoteInput {
+            id: "note-s".to_string(),
+            expected_revision: 1,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "should not apply".to_string(),
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::StaleRevision { .. })
+    ));
 }
