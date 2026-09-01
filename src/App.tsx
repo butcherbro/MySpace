@@ -118,6 +118,9 @@ function App() {
           <span className="workspace__board-title">
             {board ? board.title : "Loading…"}
           </span>
+          <span className="workspace__count" data-testid="note-count">
+            {notes.length} note{notes.length === 1 ? "" : "s"}
+          </span>
           <button type="button" onClick={() => void handleCreateNote()}>
             New note
           </button>

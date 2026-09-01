@@ -103,6 +103,12 @@ fn snapshot_serializes_as_camel_case() {
     assert!(!json.contains("document_json"));
     assert!(!json.contains("z_index"));
     assert!(!json.contains("plain_text"));
+
+    // Assert the card kind tag is exactly "note".
+    assert!(
+        json.contains("\"kind\":\"note\""),
+        "kind tag missing: {json}"
+    );
 }
 
 #[test]

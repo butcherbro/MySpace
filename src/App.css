@@ -26,7 +26,8 @@ body,
 .workspace {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .workspace__toolbar {
@@ -53,9 +54,18 @@ body,
   flex: 1;
   position: relative;
   overflow: hidden;
+  min-height: 0;
   /* dotted board background (React Flow also renders one; this is the fallback
      beneath the absolute-positioned canvas surface). */
   background-color: #f6f6f6;
+}
+
+/* React Flow needs an explicit sized box; make it fill the canvas region. */
+.workspace__canvas .react-flow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .workspace__empty {
