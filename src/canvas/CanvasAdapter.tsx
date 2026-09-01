@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -74,6 +74,13 @@ export function CanvasAdapter({
     setNodes(cards.map((c) => cardToNode(c, renderCard)));
   }
 
+  const nodesRef = useRef(nodes);
+  const selectedIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
   const nodeTypes: NodeTypes = {
     card: ({ data }) => <>{data.content}</>,
   };
@@ -83,20 +90,38 @@ export function CanvasAdapter({
   };
 
   const handleSelectionChange = (params: OnSelectionChangeParams) => {
-    events.onSelectionChanged?.({ ids: params.nodes.map((n) => n.id) });
+    const ids = params.nodes.map((n) => n.id);
+    selectedIdsRef.current = new Set(ids);
+    events.onSelectionChanged?.({ ids });
   };
 
   const handleNodeDragStop = (_: unknown, node: Node<CardNodeData>) => {
-    const source = cards.find((c) => c.id === node.id);
-    if (!source) return;
-    const moved = movedNodeToCard({
-      id: node.id,
-      position: node.position,
-      width: node.width ?? source.frame.width,
-      height: node.height ?? source.frame.height,
-      zIndex: source.zIndex,
-    }, source);
-    events.onCardsMoved?.({ cards: [{ id: moved.id, frame: moved.frame }] });
+    // Determine the set of cards that moved together. If this node was part of
+    // a multi-selection, move all selected cards; otherwise just this one.
+    const selected = selectedIdsRef.current;
+    const ids = selected.has(node.id) && selected.size > 1 ? [...selected] : [node.id];
+
+    const moved = ids.map((id) => {
+      const movedNode = nodesRef.current.find((n) => n.id === id);
+      const source = cards.find((c) => c.id === id);
+      if (!movedNode || !source) return null;
+      const card = movedNodeToCard(
+        {
+          id: movedNode.id,
+          position: movedNode.position,
+          width: movedNode.width ?? source.frame.width,
+          height: movedNode.height ?? source.frame.height,
+          zIndex: source.zIndex,
+        },
+        source,
+      );
+      return { id: card.id, frame: card.frame };
+    });
+
+    const valid = moved.filter((m): m is { id: string; frame: CanvasCard["frame"] } => m !== null);
+    if (valid.length > 0) {
+      events.onCardsMoved?.({ cards: valid });
+    }
   };
 
   const handleMoveEnd = (_: unknown, vp: { x: number; y: number; zoom: number }) => {

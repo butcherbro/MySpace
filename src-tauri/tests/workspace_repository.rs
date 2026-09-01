@@ -2,7 +2,8 @@
 
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::models::{
-    CreateNoteInput, Frame, UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput,
+    CreateNoteInput, Frame, MoveCardItem, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
+    UpdateViewportInput,
 };
 use myspace_lib::repositories::workspace_repository;
 
@@ -419,4 +420,157 @@ fn update_viewport_with_stale_revision_is_rejected() {
         result,
         Err(myspace_lib::domain::errors::WorkspaceError::StaleRevision { .. })
     ));
+}
+
+#[test]
+fn move_cards_moves_multiple_atomically() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    for (id, x) in [("n1", 0.0), ("n2", 100.0)] {
+        workspace_repository::create_note(
+            &mut conn,
+            &CreateNoteInput {
+                id: id.to_string(),
+                board_id: board_id.clone(),
+                frame: Frame {
+                    x,
+                    y: 0.0,
+                    width: 200.0,
+                    height: 80.0,
+                },
+                z_index: 0,
+                document_json: serde_json::json!({ "type": "doc" }),
+                plain_text: "".to_string(),
+            },
+        )
+        .unwrap();
+    }
+
+    workspace_repository::move_cards(
+        &mut conn,
+        &MoveCardsInput {
+            cards: vec![
+                MoveCardItem {
+                    id: "n1".to_string(),
+                    expected_revision: 1,
+                    frame: Frame {
+                        x: 10.0,
+                        y: 10.0,
+                        width: 200.0,
+                        height: 80.0,
+                    },
+                },
+                MoveCardItem {
+                    id: "n2".to_string(),
+                    expected_revision: 1,
+                    frame: Frame {
+                        x: 20.0,
+                        y: 20.0,
+                        width: 200.0,
+                        height: 80.0,
+                    },
+                },
+            ],
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    let mut xs: Vec<f64> = snapshot
+        .cards
+        .iter()
+        .filter_map(|c| match c {
+            myspace_lib::domain::models::CardDto::Note(n) => Some(n.frame.x),
+            _ => None,
+        })
+        .collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(xs, vec![10.0, 20.0]);
+}
+
+#[test]
+fn move_cards_rolls_back_whole_batch_on_stale_revision() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    for id in ["n1", "n2"] {
+        workspace_repository::create_note(
+            &mut conn,
+            &CreateNoteInput {
+                id: id.to_string(),
+                board_id: board_id.clone(),
+                frame: Frame {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 200.0,
+                    height: 80.0,
+                },
+                z_index: 0,
+                document_json: serde_json::json!({ "type": "doc" }),
+                plain_text: "".to_string(),
+            },
+        )
+        .unwrap();
+    }
+
+    workspace_repository::update_card_frame(
+        &mut conn,
+        &UpdateCardFrameInput {
+            id: "n1".to_string(),
+            expected_revision: 1,
+            frame: Frame {
+                x: 99.0,
+                y: 99.0,
+                width: 200.0,
+                height: 80.0,
+            },
+        },
+    )
+    .unwrap();
+
+    let result = workspace_repository::move_cards(
+        &mut conn,
+        &MoveCardsInput {
+            cards: vec![
+                MoveCardItem {
+                    id: "n1".to_string(),
+                    expected_revision: 1,
+                    frame: Frame {
+                        x: 500.0,
+                        y: 500.0,
+                        width: 200.0,
+                        height: 80.0,
+                    },
+                },
+                MoveCardItem {
+                    id: "n2".to_string(),
+                    expected_revision: 1,
+                    frame: Frame {
+                        x: 501.0,
+                        y: 501.0,
+                        width: 200.0,
+                        height: 80.0,
+                    },
+                },
+            ],
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::StaleRevision { .. })
+    ));
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    let n2 = snapshot
+        .cards
+        .iter()
+        .find_map(|c| match c {
+            myspace_lib::domain::models::CardDto::Note(n) if n.id == "n2" => Some(n.frame.x),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(n2, 0.0);
 }

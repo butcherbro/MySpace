@@ -8,8 +8,8 @@ use rusqlite::{params, Connection};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto, CreateNoteInput, Frame,
-    NoteCardDto, PortalTarget, UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput,
-    Viewport,
+    MoveCardsInput, NoteCardDto, PortalTarget, UpdateCardFrameInput, UpdateNoteInput,
+    UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -369,5 +369,52 @@ pub fn update_viewport(
         });
     }
 
+    Ok(())
+}
+
+/// Moves multiple cards atomically (one gesture = one transaction). Every card
+/// must match its expected revision, or the whole batch is rejected and rolled
+/// back.
+pub fn move_cards(conn: &mut Connection, input: &MoveCardsInput) -> Result<(), WorkspaceError> {
+    let tx = conn.transaction()?;
+
+    for item in &input.cards {
+        let changed = tx.execute(
+            "UPDATE cards
+             SET x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
+             WHERE id = ?6 AND revision = ?7",
+            params![
+                item.frame.x,
+                item.frame.y,
+                item.frame.width,
+                item.frame.height,
+                db::migrations::now_millis(),
+                item.id,
+                item.expected_revision,
+            ],
+        )?;
+
+        if changed == 0 {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM cards WHERE id = ?1",
+                [item.id.clone()],
+                |r| r.get(0),
+            )?;
+            if exists == 0 {
+                return Err(WorkspaceError::NotFound(item.id.clone()));
+            }
+            let actual: i64 = tx.query_row(
+                "SELECT revision FROM cards WHERE id = ?1",
+                [item.id.clone()],
+                |r| r.get(0),
+            )?;
+            return Err(WorkspaceError::StaleRevision {
+                expected: item.expected_revision,
+                actual,
+            });
+        }
+    }
+
+    tx.commit()?;
     Ok(())
 }

@@ -6,7 +6,9 @@ use rusqlite::Connection;
 use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::{CreateNoteInput, UpdateCardFrameInput, UpdateNoteInput};
+use crate::domain::models::{
+    CreateNoteInput, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
+};
 use crate::repositories::workspace_repository;
 
 /// The application-wide SQLite connection, guarded so commands can share it.
@@ -37,4 +39,13 @@ pub fn move_card(db: DbState<'_>, input: UpdateCardFrameInput) -> Result<(), Wor
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::update_card_frame(&mut conn, &input)
+}
+
+/// Moves multiple cards atomically in a single transaction.
+#[tauri::command]
+pub fn move_cards(db: DbState<'_>, input: MoveCardsInput) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::move_cards(&mut conn, &input)
 }

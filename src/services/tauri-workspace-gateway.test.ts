@@ -81,4 +81,17 @@ describe("TauriWorkspaceGateway", () => {
     await gw.saveViewport(input);
     expect(invokeMock).toHaveBeenCalledWith("save_viewport", { input });
   });
+
+  it("calls move_cards with a wrapped batch payload", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      cards: [
+        { id: "a", expectedRevision: 1, frame: { x: 0, y: 0, width: 200, height: 80 } },
+        { id: "b", expectedRevision: 1, frame: { x: 10, y: 10, width: 200, height: 80 } },
+      ],
+    };
+    await gw.moveCards(input);
+    expect(invokeMock).toHaveBeenCalledWith("move_cards", { input });
+  });
 });

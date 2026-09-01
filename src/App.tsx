@@ -117,22 +117,34 @@ function App() {
 
   const handleCardsMoved = useCallback(
     (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
-      for (const moved of e.cards) {
-        const note = notes.find((n) => n.id === moved.id);
-        if (!note) continue;
-        void gateway
-          .moveCard({
-            id: moved.id,
-            expectedRevision: note.revision,
-            frame: moved.frame,
-          })
-          .then(() => {
-            dispatch({ type: "cardMoved", id: moved.id, revision: note.revision + 1, frame: moved.frame });
-          })
-          .catch((err) => {
-            dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
-          });
-      }
+      const batch = e.cards
+        .map((moved) => {
+          const note = notes.find((n) => n.id === moved.id);
+          return note
+            ? { id: moved.id, expectedRevision: note.revision, frame: moved.frame }
+            : null;
+        })
+        .filter((x): x is { id: string; expectedRevision: number; frame: CanvasCard["frame"] } => x !== null);
+
+      if (batch.length === 0) return;
+
+      void gateway
+        .moveCards({ cards: batch })
+        .then(() => {
+          for (const item of batch) {
+            const note = notes.find((n) => n.id === item.id);
+            if (!note) continue;
+            dispatch({
+              type: "cardMoved",
+              id: item.id,
+              revision: note.revision + 1,
+              frame: item.frame,
+            });
+          }
+        })
+        .catch((err) => {
+          dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
+        });
     },
     [gateway, notes],
   );

@@ -142,3 +142,19 @@ pub struct UpdateViewportInput {
     pub y: f64,
     pub zoom: f64,
 }
+
+/// A single card move within a transactional batch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCardItem {
+    pub id: String,
+    pub expected_revision: i64,
+    pub frame: Frame,
+}
+
+/// A transactional multi-card move (one gesture = one transaction/undo entry).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCardsInput {
+    pub cards: Vec<MoveCardItem>,
+}

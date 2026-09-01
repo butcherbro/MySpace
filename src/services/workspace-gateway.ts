@@ -95,6 +95,16 @@ export interface SaveViewportInput {
   zoom: number;
 }
 
+export interface MoveCardItemInput {
+  id: string;
+  expectedRevision: number;
+  frame: Frame;
+}
+
+export interface MoveCardsInput {
+  cards: MoveCardItemInput[];
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -105,5 +115,6 @@ export interface WorkspaceGateway {
   createNote(input: CreateNoteInput): Promise<void>;
   updateNote(input: UpdateNoteInput): Promise<void>;
   moveCard(input: MoveCardInput): Promise<void>;
+  moveCards(input: MoveCardsInput): Promise<void>;
   saveViewport(input: SaveViewportInput): Promise<void>;
 }
