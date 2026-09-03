@@ -274,8 +274,13 @@ function App() {
   );
 
   const handleCardsSelected = useCallback((e: { ids: string[] }) => {
-    dispatch({ type: "selectionChanged", ids: e.ids });
-  }, []);
+    const prev = state.selection;
+    const next = e.ids;
+    if (prev.length === next.length && prev.every((id, i) => id === next[i])) {
+      return;
+    }
+    dispatch({ type: "selectionChanged", ids: next });
+  }, [state.selection]);
 
   const handleCardActivated = useCallback((id: string) => {
     const card = state.cards.find((c) => c.id === id);

@@ -31,6 +31,12 @@ interface CanvasAdapterProps {
 
 type CardNodeData = { content: ReactNode };
 
+const nodeTypes: NodeTypes = {
+  card: ({ data }: { data: CardNodeData }) => (
+    <div style={{ width: "100%", height: "100%" }}>{data.content}</div>
+  ),
+};
+
 function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode): Node<CardNodeData> {
   const like = cardToNodeLike(card);
   return {
@@ -48,10 +54,6 @@ function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode):
 /**
  * The single place React Flow is used (ADR-002). It maps domain cards to
  * renderer nodes and reports only application-owned events back out.
- *
- * Node state is kept internally and re-synced whenever `cards` change from
- * outside (e.g. a note is added or a snapshot reloads). Only domain types cross
- * this component's boundary.
  */
 export function CanvasAdapter({
   cards,
@@ -64,10 +66,8 @@ export function CanvasAdapter({
     cards.map((c) => cardToNode(c, renderCard)),
   );
 
-  // Detect any change to the external projection (frame *or* revision, which
-  // changes on content edits and moves) and rebuild nodes as part of render
-  // (React's recommended "adjusting state during render" pattern). Rebuilding
-  // on revision change refreshes node content without a separate content key.
+  // Rebuild nodes when the projection (frames OR revision OR editing focus)
+  // changes, using React's "adjust state during render" pattern.
   const cardsKey =
     cards
       .map((c) => `${c.id}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}`)
@@ -86,12 +86,6 @@ export function CanvasAdapter({
     nodesRef.current = nodes;
   }, [nodes]);
 
-  const nodeTypes: NodeTypes = {
-    card: ({ data }) => (
-      <div style={{ width: "100%", height: "100%" }}>{data.content}</div>
-    ),
-  };
-
   const handleNodesChange = (changes: NodeChange<Node<CardNodeData>>[]) => {
     setNodes((prev) => applyNodeChanges(changes, prev) as Node<CardNodeData>[]);
   };
@@ -103,8 +97,6 @@ export function CanvasAdapter({
   };
 
   const handleNodeDragStop = (_: unknown, node: Node<CardNodeData>) => {
-    // Determine the set of cards that moved together. If this node was part of
-    // a multi-selection, move all selected cards; otherwise just this one.
     const selected = selectedIdsRef.current;
     const ids = selected.has(node.id) && selected.size > 1 ? [...selected] : [node.id];
 
@@ -135,9 +127,6 @@ export function CanvasAdapter({
     event: React.MouseEvent,
     node: Node<CardNodeData>,
   ) => {
-    // A pure click (no drag) on a note activates editing; on a portal it opens
-    // via double-click in the card component. Modifier-clicks are selection
-    // gestures, not activation.
     if (event.shiftKey || event.metaKey || event.ctrlKey) {
       return;
     }
@@ -156,8 +145,6 @@ export function CanvasAdapter({
   };
 
   const handleCanvasKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    // Canvas-only Cmd/Ctrl+A: select all cards. Inside an editor the textarea
-    // handles its own select-all natively and never bubbles a plain A here.
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
       const target = e.target as HTMLElement;
       const isEditing = target.tagName === "TEXTAREA" || target.isContentEditable;
