@@ -5,6 +5,7 @@ import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { MoveCardsCommand } from "./commands/card-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
+import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { plainTextToDocument } from "./editor/document-codec";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardHistory } from "./navigation/board-history";
@@ -348,9 +349,10 @@ function App() {
         </div>
         <BoardBreadcrumbs breadcrumbs={breadcrumbs} onNavigate={(id) => void navigateTo(id, { push: true })} />
         {error && (
-          <div className="workspace__error" data-testid="workspace-error">
-            {error}
-          </div>
+          <CanvasErrorBanner
+            message={error}
+            onRetry={() => dispatch({ type: "clearError" })}
+          />
         )}
         <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
           <CanvasAdapter
