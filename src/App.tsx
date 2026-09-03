@@ -293,25 +293,6 @@ function App() {
     }
   }, [state.cards]);
 
-  const handleRenameBoard = useCallback(
-    (boardId: string, title: string) => {
-      const card = state.cards.find(
-        (c) => c.kind === "board_portal" && c.target.id === boardId,
-      );
-      const prevTitle = card?.kind === "board_portal" ? card.target.title : title;
-      void dispatcher
-        .execute(new RenameBoardCommand(idGenerator.nextId(), boardId, title, prevTitle))
-        .then(() => {
-          // Reflect the new title in the current board's portal card(s).
-          dispatch({ type: "boardRenamed", boardId, title });
-        })
-        .catch((e) => {
-          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
-        });
-    },
-    [state.cards, dispatcher, idGenerator],
-  );
-
   const handleRequestContextMenu = useCallback((cardId: string, x: number, y: number) => {
     setContextMenu({ cardId, x, y });
   }, []);
@@ -361,6 +342,25 @@ function App() {
   const reloadCurrentBoard = useCallback(() => {
     if (board) void navigateTo(board.id);
   }, [board, navigateTo]);
+
+  const handleRenameBoard = useCallback(
+    (boardId: string, title: string) => {
+      const card = state.cards.find(
+        (c) => c.kind === "board_portal" && c.target.id === boardId,
+      );
+      const prevTitle = card?.kind === "board_portal" ? card.target.title : title;
+      void dispatcher
+        .execute(new RenameBoardCommand(idGenerator.nextId(), boardId, title, prevTitle))
+        .then(() => {
+          // Reload the board so portal titles + breadcrumbs reflect the new name.
+          reloadCurrentBoard();
+        })
+        .catch((e) => {
+          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        });
+    },
+    [state.cards, dispatcher, idGenerator, reloadCurrentBoard],
+  );
 
   // Open a child board via a portal (double-click / Enter).
   const handleOpenBoard = useCallback(

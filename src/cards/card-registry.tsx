@@ -33,6 +33,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         editing={ctx.editing}
         onDeactivate={ctx.onDeactivate}
         onUpdate={ctx.onUpdateNote}
+        onContextMenu={ctx.onContextMenu}
       />
     );
   }

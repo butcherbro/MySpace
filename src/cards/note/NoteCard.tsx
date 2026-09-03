@@ -11,6 +11,8 @@ interface NoteCardProps {
   onDeactivate: () => void;
   /** Persist note content as an authoritative document. */
   onUpdate: (id: string, document: unknown) => Promise<void>;
+  /** Request a context menu (right-click) for this card. */
+  onContextMenu: (cardId: string, x: number, y: number) => void;
 }
 
 /**
@@ -18,7 +20,7 @@ interface NoteCardProps {
  * store): the canvas decides click-versus-drag, then flips `editing` on only
  * for a pure click. The note itself only manages the in-editor text buffer.
  */
-export function NoteCard({ note, editing, onDeactivate, onUpdate }: NoteCardProps) {
+export function NoteCard({ note, editing, onDeactivate, onUpdate, onContextMenu }: NoteCardProps) {
   const [text, setText] = useState(note.plainText);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +61,11 @@ export function NoteCard({ note, editing, onDeactivate, onUpdate }: NoteCardProp
       className={`note-card ${editing ? "note-card--editing" : ""}`}
       data-testid="note-card"
       data-editing={editing ? "true" : "false"}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu(note.id, e.clientX, e.clientY);
+      }}
     >
       {editing ? (
         <textarea
