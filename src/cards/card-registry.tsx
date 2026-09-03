@@ -18,6 +18,10 @@ export interface CardRenderContext {
   onUpdateNote: (id: string, plainText: string) => Promise<void>;
   /** Open a board portal. */
   onOpenBoard: (boardId: string) => void;
+  /** Rename a board. */
+  onRenameBoard: (boardId: string, title: string) => void;
+  /** Request a context menu (right-click) for a card. */
+  onContextMenu: (cardId: string, x: number, y: number) => void;
 }
 
 /** Renders a persisted card into the canvas. */
@@ -33,5 +37,12 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
     );
   }
 
-  return <BoardPortalCard portal={card} onOpen={ctx.onOpenBoard} />;
+  return (
+    <BoardPortalCard
+      portal={card}
+      onOpen={ctx.onOpenBoard}
+      onRename={ctx.onRenameBoard}
+      onContextMenu={ctx.onContextMenu}
+    />
+  );
 }

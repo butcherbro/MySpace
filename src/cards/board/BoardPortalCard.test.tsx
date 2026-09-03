@@ -24,41 +24,71 @@ function portal(overrides: Partial<BoardPortalDto["target"]> = {}): BoardPortalD
   };
 }
 
+function renderCard(
+  p: BoardPortalDto = portal(),
+  handlers: { onOpen?: (id: string) => void; onRename?: (id: string, t: string) => void; onContextMenu?: (id: string, x: number, y: number) => void } = {},
+) {
+  render(
+    <BoardPortalCard
+      portal={p}
+      onOpen={handlers.onOpen ?? vi.fn()}
+      onRename={handlers.onRename ?? vi.fn()}
+      onContextMenu={handlers.onContextMenu ?? vi.fn()}
+    />,
+  );
+}
+
 describe("BoardPortalCard", () => {
   it("renders title, derived symbol, and child counts", () => {
-    render(<BoardPortalCard portal={portal()} onOpen={vi.fn()} />);
+    renderCard();
     expect(screen.getByText("Books")).toBeInTheDocument();
-    expect(screen.getByText("B")).toBeInTheDocument(); // first grapheme of "Books"
+    expect(screen.getByText("B")).toBeInTheDocument(); // first grapheme
     expect(screen.getByTestId("portal-count")).toHaveTextContent("2 boards · 5 cards");
   });
 
   it("uses an explicit symbol when set", () => {
-    render(<BoardPortalCard portal={portal({ symbol: "🚀" })} onOpen={vi.fn()} />);
+    renderCard(portal({ symbol: "🚀" }));
     expect(screen.getByText("🚀")).toBeInTheDocument();
   });
 
   it("derives the first grapheme from a symbol-less title (incl. surrogate pairs)", () => {
-    render(<BoardPortalCard portal={portal({ title: "📚 Library" })} onOpen={vi.fn()} />);
+    renderCard(portal({ title: "📚 Library" }));
     expect(screen.getByText("📚")).toBeInTheDocument();
   });
 
   it("opens on Enter", async () => {
     const user = userEvent.setup();
     const onOpen = vi.fn();
-    render(<BoardPortalCard portal={portal()} onOpen={onOpen} />);
+    renderCard(portal(), { onOpen });
 
-    screen.getByRole("button").focus();
+    screen.getByTestId("board-portal-card").focus();
     await user.keyboard("{Enter}");
     expect(onOpen).toHaveBeenCalledWith("board-1");
   });
 
   it("shows Empty when there are no children", () => {
-    render(
-      <BoardPortalCard
-        portal={portal({ childBoardCount: 0, childCardCount: 0 })}
-        onOpen={vi.fn()}
-      />,
-    );
+    renderCard(portal({ childBoardCount: 0, childCardCount: 0 }));
     expect(screen.getByTestId("portal-count")).toHaveTextContent("Empty");
+  });
+
+  it("renames inline on double-click of the title", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn();
+    renderCard(portal(), { onRename });
+
+    await user.dblClick(screen.getByText("Books"));
+    const input = screen.getByRole("textbox");
+    await user.clear(input);
+    await user.type(input, "Novels{Enter}");
+    expect(onRename).toHaveBeenCalledWith("board-1", "Novels");
+  });
+
+  it("opens the context menu on right-click", async () => {
+    const user = userEvent.setup();
+    const onContextMenu = vi.fn();
+    renderCard(portal(), { onContextMenu });
+
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByTestId("board-portal-card") });
+    expect(onContextMenu).toHaveBeenCalled();
   });
 });

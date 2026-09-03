@@ -1,13 +1,15 @@
+import { useState } from "react";
 import type { BoardPortalDto } from "../../services/workspace-gateway";
 import "./board-portal-card.css";
 
 interface BoardPortalCardProps {
   portal: BoardPortalDto;
   onOpen: (boardId: string) => void;
+  onRename: (boardId: string, title: string) => void;
+  onContextMenu: (boardId: string, x: number, y: number) => void;
 }
 
-// Maps a color token to a CSS custom property name. The palette is the
-// board-identity set from the plan (Visual Interface Contract).
+// Maps a color token to its palette color (plan Visual Interface Contract).
 const COLOR_VARS: Record<string, string> = {
   terracotta: "#c77b55",
   moss: "#899b71",
@@ -24,34 +26,91 @@ function firstGrapheme(text: string): string {
 }
 
 /**
- * The signature "doorway" card: a compact colored tile that opens a child
- * board. Single click selects (canvas), double click/Enter opens.
+ * The signature "doorway" card. Double-click the tile opens the child board;
+ * double-click the title renames it inline; right-click opens a context menu.
  */
-export function BoardPortalCard({ portal, onOpen }: BoardPortalCardProps) {
+export function BoardPortalCard({
+  portal,
+  onOpen,
+  onRename,
+  onContextMenu,
+}: BoardPortalCardProps) {
+  const [renaming, setRenaming] = useState(false);
+  const [titleText, setTitleText] = useState(portal.target.title);
+
   const color = COLOR_VARS[portal.target.colorToken] ?? COLOR_VARS.ink;
   const symbol = portal.target.symbol ?? firstGrapheme(portal.target.title);
   const childCount = portal.target.childBoardCount;
   const cardCount = portal.target.childCardCount;
+
+  function commitRename() {
+    const next = titleText.trim();
+    setRenaming(false);
+    if (next && next !== portal.target.title) {
+      onRename(portal.target.id, next);
+    } else {
+      setTitleText(portal.target.title);
+    }
+  }
 
   return (
     <div
       className="board-portal-card"
       data-testid="board-portal-card"
       data-board-id={portal.target.id}
-      role="button"
       tabIndex={0}
       aria-label={`Open board ${portal.target.title}`}
       onKeyDown={(e) => {
+        if (renaming) return;
         if (e.key === "Enter") {
           e.preventDefault();
           onOpen(portal.target.id);
         }
       }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu(portal.id, e.clientX, e.clientY);
+      }}
     >
-      <div className="board-portal-card__tile" style={{ backgroundColor: color }}>
+      <div
+        className="board-portal-card__tile"
+        style={{ backgroundColor: color }}
+        onDoubleClick={() => onOpen(portal.target.id)}
+      >
         <span className="board-portal-card__symbol">{symbol}</span>
       </div>
-      <div className="board-portal-card__title">{portal.target.title}</div>
+
+      {renaming ? (
+        <input
+          className="board-portal-card__title-input"
+          value={titleText}
+          autoFocus
+          onChange={(e) => setTitleText(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitRename();
+            } else if (e.key === "Escape") {
+              setTitleText(portal.target.title);
+              setRenaming(false);
+            }
+            e.stopPropagation();
+          }}
+        />
+      ) : (
+        <div
+          className="board-portal-card__title"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setRenaming(true);
+          }}
+        >
+          {portal.target.title}
+        </div>
+      )}
+
       <div className="board-portal-card__count" data-testid="portal-count">
         {childCount > 0 || cardCount > 0
           ? `${childCount} board${childCount === 1 ? "" : "s"} · ${cardCount} card${cardCount === 1 ? "" : "s"}`

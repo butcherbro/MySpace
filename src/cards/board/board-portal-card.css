@@ -37,6 +37,16 @@
   color: #252927;
 }
 
+.board-portal-card__title-input {
+  width: 100%;
+  border: 1px solid rgba(60, 108, 91, 0.52);
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: center;
+  padding: 2px 4px;
+  outline: none;
+}
+
 .board-portal-card__count {
   font-size: 11px;
   color: #929995;

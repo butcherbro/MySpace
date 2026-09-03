@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
@@ -25,11 +25,13 @@ function App() {
   const idGenerator: IdGenerator = useMemo(() => new UuidV7Generator(), []);
 
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
   const { board, breadcrumbs, viewport, viewportRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
   // Browser-style navigation history. Initialized lazily once Home is known.
   const historyRef = useRef<BoardHistory | null>(null);
+  const homeIdRef = useRef<string | null>(null);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -56,6 +58,7 @@ function App() {
         const snapshot = await gateway.loadBoardSnapshot(home.id);
         if (cancelled) return;
         historyRef.current = new BoardHistory(home.id);
+        homeIdRef.current = home.id;
         dispatch({
           type: "snapshotLoaded",
           board: snapshot.board,
@@ -289,6 +292,37 @@ function App() {
     }
   }, [state.cards]);
 
+  const handleRenameBoard = useCallback(
+    (boardId: string, title: string) => {
+      void gateway.renameBoard(boardId, title).catch((e) => {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+      });
+    },
+    [gateway],
+  );
+
+  const handleRequestContextMenu = useCallback((cardId: string, x: number, y: number) => {
+    setContextMenu({ cardId, x, y });
+  }, []);
+
+  const handleContextDelete = useCallback(() => {
+    if (!contextMenu) return;
+    const id = contextMenu.cardId;
+    const card = state.cards.find((c) => c.id === id);
+    setContextMenu(null);
+    if (!card) return;
+    const items =
+      card.kind === "note"
+        ? [{ id: card.id, kind: "note" as const }]
+        : [{ id: card.target.id, kind: "board_portal" as const }];
+    void dispatcher
+      .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
+      .then(() => dispatch({ type: "cardsRemoved", ids: [id] }))
+      .catch((e) => {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+      });
+  }, [contextMenu, state.cards, dispatcher, idGenerator]);
+
   // Load a board's snapshot into the store.
   const navigateTo = useCallback(
     async (boardId: string, opts?: { push?: boolean }) => {
@@ -381,6 +415,9 @@ function App() {
     <AppShell>
       <div className="workspace">
         <div className="workspace__toolbar">
+          <button type="button" className="workspace__home" onClick={() => { if (homeIdRef.current) void navigateTo(homeIdRef.current, { push: true }); }}>
+            Home
+          </button>
           <span className="workspace__board-title">
             {board ? board.title : "Loading…"}
           </span>
@@ -395,6 +432,18 @@ function App() {
           </button>
         </div>
         <BoardBreadcrumbs breadcrumbs={breadcrumbs} onNavigate={(id) => void navigateTo(id, { push: true })} />
+        {contextMenu && (
+          <div
+            className="context-menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            data-testid="context-menu"
+          >
+            <button type="button" className="context-menu__item" onClick={handleContextDelete}>
+              Delete
+            </button>
+          </div>
+        )}
+        {contextMenu && <div className="context-menu__backdrop" onClick={() => setContextMenu(null)} />}
         {error && (
           <CanvasErrorBanner
             message={error}
@@ -421,6 +470,8 @@ function App() {
                 onDeactivate: handleEditDeactivate,
                 onUpdateNote: handleUpdateNote,
                 onOpenBoard: handleOpenBoard,
+                onRenameBoard: handleRenameBoard,
+                onContextMenu: handleRequestContextMenu,
               });
             }}
           />

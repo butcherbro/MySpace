@@ -99,6 +99,39 @@ button:active {
   background-color: #e8e8e8;
 }
 
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 140px;
+  background: #fff;
+  border: 1px solid #d4d4d4;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+}
+
+.context-menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #b91c1c;
+}
+
+.context-menu__item:hover {
+  background: #f3f4f6;
+}
+
+.context-menu__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;
