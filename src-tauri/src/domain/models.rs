@@ -91,6 +91,16 @@ pub enum CardDto {
     BoardPortal(BoardPortalDto),
 }
 
+impl CardDto {
+    /// The card's stable id.
+    pub fn id(&self) -> &str {
+        match self {
+            CardDto::Note(n) => &n.id,
+            CardDto::BoardPortal(p) => &p.id,
+        }
+    }
+}
+
 /// A complete, self-contained projection of one board.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

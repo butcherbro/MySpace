@@ -39,6 +39,9 @@ pub fn run() {
             commands::cards::update_note,
             commands::cards::move_card,
             commands::cards::move_cards,
+            commands::trash::trash_note,
+            commands::trash::trash_board,
+            commands::trash::restore_trash_batch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
