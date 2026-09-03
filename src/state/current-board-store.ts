@@ -35,6 +35,7 @@ export type CurrentBoardAction =
   | { type: "cardAdded"; card: CardDto }
   | { type: "cardContentUpdated"; id: string; revision: number; documentJson: unknown; plainText: string }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
+  | { type: "cardsRemoved"; ids: string[] }
   | { type: "selectionChanged"; ids: string[] }
   | { type: "editingStarted"; id: string }
   | { type: "editingStopped" }
@@ -103,6 +104,14 @@ export function reducer(
             ? { ...c, revision: action.revision, frame: action.frame }
             : c,
         ),
+      };
+
+    case "cardsRemoved":
+      return {
+        ...state,
+        cards: state.cards.filter((c) => !action.ids.includes(c.id)),
+        selection: [],
+        editingCardId: null,
       };
 
     case "selectionChanged":

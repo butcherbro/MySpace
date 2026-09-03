@@ -127,7 +127,7 @@ export interface WorkspaceGateway {
   saveViewport(input: SaveViewportInput): Promise<void>;
   createChildBoard(input: CreateChildBoardInput): Promise<void>;
   renameBoard(boardId: string, title: string): Promise<void>;
-  trashNote(cardId: string): Promise<void>;
+  trashNote(cardId: string): Promise<string>;
   trashBoard(boardId: string): Promise<string>;
   restoreTrashBatch(batchId: string): Promise<void>;
 }

@@ -146,10 +146,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve();
   }
 
-  trashNote(cardId: string): Promise<void> {
+  trashNote(cardId: string): Promise<string> {
     const i = this.snapshot.cards.findIndex((c) => c.id === cardId);
     if (i >= 0) this.snapshot.cards.splice(i, 1);
-    return Promise.resolve();
+    return Promise.resolve("batch-" + cardId);
   }
 
   trashBoard(boardId: string): Promise<string> {

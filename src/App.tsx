@@ -3,8 +3,10 @@ import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
-import { MoveCardsCommand } from "./commands/card-commands";
+import { MoveCardsCommand, CreateNoteCommand } from "./commands/card-commands";
+import { CreateChildBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
+import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { plainTextToDocument } from "./editor/document-codec";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -88,19 +90,21 @@ function App() {
       plainText: "",
     };
     try {
-      await gateway.createNote({
-        id,
-        boardId: board.id,
-        frame: card.frame,
-        zIndex: card.zIndex,
-        documentJson: card.documentJson,
-        plainText: "",
-      });
+      await dispatcher.execute(
+        new CreateNoteCommand(id, {
+          id,
+          boardId: board.id,
+          frame: card.frame,
+          zIndex: card.zIndex,
+          documentJson: card.documentJson,
+          plainText: "",
+        }),
+      );
       dispatch({ type: "cardAdded", card });
     } catch (e) {
       dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
     }
-  }, [board, gateway, idGenerator, notes.length]);
+  }, [board, dispatcher, idGenerator, notes.length]);
 
   const handleCreateChildBoard = useCallback(async () => {
     if (!board) return;
@@ -123,18 +127,20 @@ function App() {
       },
     };
     try {
-      await gateway.createChildBoard({
-        parentBoardId: board.id,
-        boardId,
-        portalCardId,
-        frame: portal.frame,
-        title: "New Board",
-      });
+      await dispatcher.execute(
+        new CreateChildBoardCommand(idGenerator.nextId(), {
+          parentBoardId: board.id,
+          boardId,
+          portalCardId,
+          frame: portal.frame,
+          title: "New Board",
+        }),
+      );
       dispatch({ type: "cardAdded", card: portal });
     } catch (e) {
       dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
     }
-  }, [board, gateway, idGenerator, state.cards.length]);
+  }, [board, dispatcher, idGenerator, state.cards.length]);
 
   const handleUpdateNote = useCallback(
     (id: string, plainText: string): Promise<void> => {
@@ -219,6 +225,27 @@ function App() {
     },
     [idGenerator, dispatcher],
   );
+
+  const handleDeleteSelection = useCallback(async () => {
+    if (state.selection.length === 0) return;
+    const items = state.selection
+      .map((id) => {
+        const card = state.cards.find((c) => c.id === id);
+        if (!card) return null;
+        if (card.kind === "note") return { id: card.id, kind: "note" as const };
+        return { id: card.target.id, kind: "board_portal" as const };
+      })
+      .filter((x): x is { id: string; kind: "note" | "board_portal" } => x !== null);
+
+    if (items.length === 0) return;
+
+    try {
+      await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
+      dispatch({ type: "cardsRemoved", ids: state.selection });
+    } catch (e) {
+      dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+    }
+  }, [state.selection, state.cards, dispatcher, idGenerator]);
 
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleViewportChanged = useCallback(
@@ -324,11 +351,14 @@ function App() {
         } else {
           void dispatcher.undo();
         }
+      } else if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        void handleDeleteSelection();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, dispatcher]);
+  }, [handleNavigateBack, handleNavigateForward, dispatcher, handleDeleteSelection]);
 
   return (
     <AppShell>

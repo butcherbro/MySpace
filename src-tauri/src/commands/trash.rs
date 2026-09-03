@@ -11,9 +11,9 @@ use crate::domain::trash_service;
 /// The application-wide SQLite connection, guarded so commands can share it.
 pub type DbState<'a> = State<'a, Mutex<Connection>>;
 
-/// Trashes a note card.
+/// Trashes a note card, returning its trash batch id.
 #[tauri::command]
-pub fn trash_note(db: DbState<'_>, card_id: String) -> Result<(), WorkspaceError> {
+pub fn trash_note(db: DbState<'_>, card_id: String) -> Result<String, WorkspaceError> {
     let mut conn = db
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
