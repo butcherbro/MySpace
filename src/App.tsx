@@ -3,6 +3,8 @@ import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
+import { MoveCardsCommand } from "./commands/card-commands";
+import { CommandDispatcher } from "./commands/command-dispatcher";
 import { plainTextToDocument } from "./editor/document-codec";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardHistory } from "./navigation/board-history";
@@ -28,6 +30,8 @@ function App() {
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
+  // Undo/redo over workspace commands (depends only on the stable gateway).
+  const dispatcher = useMemo(() => new CommandDispatcher(gateway), [gateway]);
   // Always reflects the latest cards (notes AND portals) so queued tasks read
   // the current revision.
   const cardsRef = useRef(state.cards);
@@ -175,29 +179,36 @@ function App() {
     (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
       void queueRef.current
         .run(async () => {
-          const batch = e.cards
+          const moves = e.cards
             .map((moved) => {
               const card = cardsRef.current.find((c) => c.id === moved.id);
               return card
-                ? { id: moved.id, expectedRevision: card.revision, frame: moved.frame }
+                ? {
+                    id: moved.id,
+                    revision: card.revision,
+                    before: card.frame,
+                    after: moved.frame,
+                  }
                 : null;
             })
             .filter(
-              (x): x is { id: string; expectedRevision: number; frame: CanvasCard["frame"] } =>
+              (x): x is { id: string; revision: number; before: CanvasCard["frame"]; after: CanvasCard["frame"] } =>
                 x !== null,
             );
 
-          if (batch.length === 0) return;
+          if (moves.length === 0) return;
 
-          await gateway.moveCards({ cards: batch });
-          for (const item of batch) {
-            const card = cardsRef.current.find((c) => c.id === item.id);
-            if (!card) continue;
+          // One gesture = one undo entry via the dispatcher.
+          await dispatcher.execute(
+            new MoveCardsCommand(idGenerator.nextId(), moves),
+          );
+
+          for (const item of moves) {
             dispatch({
               type: "cardMoved",
               id: item.id,
-              revision: card.revision + 1,
-              frame: item.frame,
+              revision: item.revision + 1,
+              frame: item.after,
             });
           }
         })
@@ -205,7 +216,7 @@ function App() {
           dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
         });
     },
-    [gateway],
+    [idGenerator, dispatcher],
   );
 
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -291,7 +302,8 @@ function App() {
     canvasRef.current?.focus();
   }, []);
 
-  // Cmd+[ / Cmd+] navigate back/forward unless an editor owns focus.
+  // Cmd+[ / Cmd+] navigate back/forward, Cmd+Z / Cmd+Shift+Z undo/redo,
+  // unless an editor owns focus.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey)) return;
@@ -304,11 +316,18 @@ function App() {
       } else if (e.key === "]") {
         e.preventDefault();
         handleNavigateForward();
+      } else if (e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          void dispatcher.redo();
+        } else {
+          void dispatcher.undo();
+        }
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward]);
+  }, [handleNavigateBack, handleNavigateForward, dispatcher]);
 
   return (
     <AppShell>

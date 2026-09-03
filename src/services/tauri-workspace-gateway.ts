@@ -52,4 +52,16 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
   renameBoard(boardId: string, title: string): Promise<void> {
     return invoke<void>("rename_board", { boardId, title });
   }
+
+  trashNote(cardId: string): Promise<void> {
+    return invoke<void>("trash_note", { cardId });
+  }
+
+  trashBoard(boardId: string): Promise<string> {
+    return invoke<string>("trash_board", { boardId });
+  }
+
+  restoreTrashBatch(batchId: string): Promise<void> {
+    return invoke<void>("restore_trash_batch", { batchId });
+  }
 }

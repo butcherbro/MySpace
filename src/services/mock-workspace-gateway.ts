@@ -145,4 +145,23 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     return Promise.resolve();
   }
+
+  trashNote(cardId: string): Promise<void> {
+    const i = this.snapshot.cards.findIndex((c) => c.id === cardId);
+    if (i >= 0) this.snapshot.cards.splice(i, 1);
+    return Promise.resolve();
+  }
+
+  trashBoard(boardId: string): Promise<string> {
+    const batchId = "batch-" + boardId;
+    this.snapshot.cards = this.snapshot.cards.filter(
+      (c) => !(c.kind === "board_portal" && c.target.id === boardId),
+    );
+    return Promise.resolve(batchId);
+  }
+
+  restoreTrashBatch(batchId: string): Promise<void> {
+    void batchId;
+    return Promise.resolve();
+  }
 }
