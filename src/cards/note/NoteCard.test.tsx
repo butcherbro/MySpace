@@ -46,7 +46,10 @@ describe("NoteCard", () => {
     await user.clear(textarea);
     await user.type(textarea, "updated{Enter}");
 
-    expect(onUpdate).toHaveBeenCalledWith("note-1", "updated");
+    expect(onUpdate).toHaveBeenCalledWith("note-1", {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "updated" }] }],
+    });
     expect(onDeactivate).toHaveBeenCalled();
   });
 
@@ -63,6 +66,9 @@ describe("NoteCard", () => {
     await user.type(textarea, "blurred");
     await user.tab();
 
-    expect(onUpdate).toHaveBeenCalledWith("note-1", "blurred");
+    expect(onUpdate).toHaveBeenCalledWith("note-1", {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "blurred" }] }],
+    });
   });
 });

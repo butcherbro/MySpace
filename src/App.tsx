@@ -8,7 +8,7 @@ import { CreateChildBoardCommand, RenameBoardCommand } from "./commands/board-co
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
-import { plainTextToDocument } from "./editor/document-codec";
+import { plainTextToDocument, documentToPlainText } from "./editor/document-codec";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardHistory } from "./navigation/board-history";
 import { MutationQueue } from "./persistence/entity-write-queue";
@@ -146,24 +146,25 @@ function App() {
   }, [board, dispatcher, idGenerator, state.cards.length]);
 
   const handleUpdateNote = useCallback(
-    (id: string, plainText: string): Promise<void> => {
+    (id: string, document: unknown): Promise<void> => {
       const task = queueRef.current
         .run(async () => {
           const note = cardsRef.current.find(
             (n): n is NoteCardDto => n.kind === "note" && n.id === id,
           );
           if (!note) return;
+          const plainText = documentToPlainText(document);
           await gateway.updateNote({
             id,
             expectedRevision: note.revision,
-            documentJson: plainTextToDocument(plainText),
+            documentJson: document,
             plainText,
           });
           dispatch({
             type: "cardContentUpdated",
             id,
             revision: note.revision + 1,
-            documentJson: plainTextToDocument(plainText),
+            documentJson: document,
             plainText,
           });
         })

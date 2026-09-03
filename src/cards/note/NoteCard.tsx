@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { plainTextToDocument } from "../../editor/document-codec";
 import type { NoteCardDto } from "../../services/workspace-gateway";
 import "./note-card.css";
 
@@ -8,7 +9,8 @@ interface NoteCardProps {
   editing: boolean;
   /** Exit edit mode. */
   onDeactivate: () => void;
-  onUpdate: (id: string, plainText: string) => Promise<void>;
+  /** Persist note content as an authoritative document. */
+  onUpdate: (id: string, document: unknown) => Promise<void>;
 }
 
 /**
@@ -22,15 +24,6 @@ export function NoteCard({ note, editing, onDeactivate, onUpdate }: NoteCardProp
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Keep the local buffer in sync when the authoritative note changes (e.g. a
-  // snapshot reload or an external rollback replaces the note). React's
-  // recommended "adjusting state during render" pattern for derived state.
-  const [prevPlainText, setPrevPlainText] = useState(note.plainText);
-  if (prevPlainText !== note.plainText && !editing) {
-    setPrevPlainText(note.plainText);
-    setText(note.plainText);
-  }
-
   useEffect(() => {
     if (editing) {
       textareaRef.current?.focus();
@@ -41,7 +34,7 @@ export function NoteCard({ note, editing, onDeactivate, onUpdate }: NoteCardProp
     setSaving(true);
     setError(null);
     try {
-      await onUpdate(note.id, text);
+      await onUpdate(note.id, plainTextToDocument(text));
       onDeactivate();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

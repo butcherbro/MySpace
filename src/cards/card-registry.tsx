@@ -14,8 +14,8 @@ export interface CardRenderContext {
   editing: boolean;
   /** Exit note editing. */
   onDeactivate: () => void;
-  /** Persist note content. */
-  onUpdateNote: (id: string, plainText: string) => Promise<void>;
+  /** Persist note content as an authoritative document. */
+  onUpdateNote: (id: string, document: unknown) => Promise<void>;
   /** Open a board portal. */
   onOpenBoard: (boardId: string) => void;
   /** Rename a board. */
