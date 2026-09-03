@@ -4,7 +4,7 @@ import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { MoveCardsCommand, CreateNoteCommand } from "./commands/card-commands";
-import { CreateChildBoardCommand } from "./commands/board-commands";
+import { CreateChildBoardCommand, RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
@@ -294,11 +294,21 @@ function App() {
 
   const handleRenameBoard = useCallback(
     (boardId: string, title: string) => {
-      void gateway.renameBoard(boardId, title).catch((e) => {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
-      });
+      const card = state.cards.find(
+        (c) => c.kind === "board_portal" && c.target.id === boardId,
+      );
+      const prevTitle = card?.kind === "board_portal" ? card.target.title : title;
+      void dispatcher
+        .execute(new RenameBoardCommand(idGenerator.nextId(), boardId, title, prevTitle))
+        .then(() => {
+          // Reflect the new title in the current board's portal card(s).
+          dispatch({ type: "boardRenamed", boardId, title });
+        })
+        .catch((e) => {
+          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        });
     },
-    [gateway],
+    [state.cards, dispatcher, idGenerator],
   );
 
   const handleRequestContextMenu = useCallback((cardId: string, x: number, y: number) => {

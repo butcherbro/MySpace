@@ -135,24 +135,32 @@ fn load_cards(
         }
     }
 
-    // Board portals
+    // Board portals. Child counts are aggregated in one query per portal via
+    // correlated subqueries, avoiding an N+1 pattern.
     {
         let mut stmt = conn.prepare(
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    p.target_board_id, b.title, b.color_token, b.symbol
+                    p.target_board_id, b.title, b.color_token, b.symbol,
+                    COALESCE(child.child_board_count, 0),
+                    COALESCE(cardchild.child_card_count, 0)
              FROM cards c
              JOIN board_portal_cards p ON p.card_id = c.id
              JOIN boards b ON b.id = p.target_board_id
+             LEFT JOIN (
+                 SELECT parent_board_id, COUNT(*) AS child_board_count
+                 FROM boards WHERE deleted_at IS NULL GROUP BY parent_board_id
+             ) child ON child.parent_board_id = p.target_board_id
+             LEFT JOIN (
+                 SELECT board_id, COUNT(*) AS child_card_count
+                 FROM cards WHERE deleted_at IS NULL GROUP BY board_id
+             ) cardchild ON cardchild.board_id = p.target_board_id
              WHERE c.board_id = ?1 AND c.deleted_at IS NULL
              ORDER BY c.z_index, c.id",
         )?;
         let rows = stmt.query_map([board_id], |row| {
             let target_id: String = row.get(8)?;
             let (child_board_count, child_card_count) = if include_subtree_counts {
-                (
-                    count_child_boards(conn, &target_id)?,
-                    count_child_cards(conn, &target_id)?,
-                )
+                (row.get::<_, i64>(12)?, row.get::<_, i64>(13)?)
             } else {
                 (0, 0)
             };
@@ -184,22 +192,6 @@ fn load_cards(
     }
 
     Ok(out)
-}
-
-fn count_child_boards(conn: &Connection, board_id: &str) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM boards WHERE parent_board_id = ?1 AND deleted_at IS NULL",
-        [board_id],
-        |r| r.get(0),
-    )
-}
-
-fn count_child_cards(conn: &Connection, board_id: &str) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM cards WHERE board_id = ?1 AND deleted_at IS NULL",
-        [board_id],
-        |r| r.get(0),
-    )
 }
 
 /// Creates a note card (and its `note_cards` row) in a single transaction.

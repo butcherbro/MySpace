@@ -36,6 +36,7 @@ export type CurrentBoardAction =
   | { type: "cardContentUpdated"; id: string; revision: number; documentJson: unknown; plainText: string }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardsRemoved"; ids: string[] }
+  | { type: "boardRenamed"; boardId: string; title: string }
   | { type: "selectionChanged"; ids: string[] }
   | { type: "editingStarted"; id: string }
   | { type: "editingStopped" }
@@ -112,6 +113,20 @@ export function reducer(
         cards: state.cards.filter((c) => !action.ids.includes(c.id)),
         selection: [],
         editingCardId: null,
+      };
+
+    case "boardRenamed":
+      return {
+        ...state,
+        cards: state.cards.map((c) =>
+          c.kind === "board_portal" && c.target.id === action.boardId
+            ? { ...c, target: { ...c.target, title: action.title } }
+            : c,
+        ),
+        board:
+          state.board?.id === action.boardId
+            ? { ...state.board, title: action.title }
+            : state.board,
       };
 
     case "selectionChanged":
