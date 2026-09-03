@@ -67,7 +67,9 @@ export function CanvasAdapter({
   );
 
   // Rebuild nodes when the projection (frames OR revision OR editing focus)
-  // changes, using React's "adjust state during render" pattern.
+  // changes, using React's "adjust state during render" pattern. Preserve each
+  // node's `selected` flag across the rebuild so entering/leaving edit mode (or
+  // a sibling save) does not silently drop the user's selection.
   const cardsKey =
     cards
       .map((c) => `${c.id}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}`)
@@ -76,7 +78,14 @@ export function CanvasAdapter({
 
   if (cardsKey !== lastKey) {
     setLastKey(cardsKey);
-    setNodes(cards.map((c) => cardToNode(c, renderCard)));
+    setNodes((prev) => {
+      const selectedById = new Map(prev.map((n) => [n.id, n.selected]));
+      return cards.map((c) => {
+        const node = cardToNode(c, renderCard);
+        node.selected = selectedById.get(c.id) ?? false;
+        return node;
+      });
+    });
   }
 
   const nodesRef = useRef(nodes);
@@ -140,6 +149,26 @@ export function CanvasAdapter({
     events.onCardOpened?.(node.id);
   };
 
+  const handleNodeContextMenu = (
+    event: React.MouseEvent,
+    node: Node<CardNodeData>,
+  ) => {
+    event.preventDefault();
+    events.onCardContextMenu?.(node.id, event.clientX, event.clientY);
+  };
+
+  // Right-click on the selection overlay (marquee selected nodes): the event
+  // carries the selected nodes, but our app already tracks `selection`, so we
+  // just surface the menu at the pointer using an arbitrary selected id.
+  const handleSelectionContextMenu = (
+    event: React.MouseEvent,
+    nodes: Node<CardNodeData>[],
+  ) => {
+    event.preventDefault();
+    if (nodes.length === 0) return;
+    events.onCardContextMenu?.(nodes[0].id, event.clientX, event.clientY);
+  };
+
   const handleMoveEnd = (_: unknown, vp: { x: number; y: number; zoom: number }) => {
     events.onViewportChanged?.({ viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } });
   };
@@ -172,7 +201,7 @@ export function CanvasAdapter({
         defaultViewport={viewport}
         panOnScroll
         selectionOnDrag
-        panOnDrag={false}
+        panOnDrag={[1, 2]}
         zoomOnScroll
         zoomOnPinch
         zoomOnDoubleClick={false}
@@ -186,6 +215,8 @@ export function CanvasAdapter({
         onSelectionChange={handleSelectionChange}
         onNodeClick={handleNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
+        onNodeContextMenu={handleNodeContextMenu}
+        onSelectionContextMenu={handleSelectionContextMenu}
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={handleMoveEnd}
         minZoom={0.1}

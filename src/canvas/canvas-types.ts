@@ -94,4 +94,6 @@ export interface CanvasEvents {
   onCardActivated?(id: string): void;
   /** A card was double-clicked (open board portals). */
   onCardOpened?(id: string): void;
+  /** A card was right-clicked (request a context menu). Coordinates are screen-space. */
+  onCardContextMenu?(id: string, x: number, y: number): void;
 }

@@ -8,7 +8,7 @@ import { CreateChildBoardCommand, RenameBoardCommand } from "./commands/board-co
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
-import { plainTextToDocument, documentToPlainText } from "./editor/document-codec";
+import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardHistory } from "./navigation/board-history";
 import { MutationQueue } from "./persistence/entity-write-queue";
@@ -65,7 +65,11 @@ function App() {
           breadcrumbs: snapshot.breadcrumbs,
           viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
           viewportRevision: snapshot.viewport.revision,
-          cards: snapshot.cards,
+          cards: snapshot.cards.map((c) =>
+            c.kind === "note"
+              ? { ...c, documentJson: normalizeDocument(c.documentJson) }
+              : c,
+          ),
         });
       } catch (e) {
         if (!cancelled) {
@@ -147,31 +151,41 @@ function App() {
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {
-      const task = queueRef.current
-        .run(async () => {
-          const note = cardsRef.current.find(
-            (n): n is NoteCardDto => n.kind === "note" && n.id === id,
-          );
-          if (!note) return;
-          const plainText = documentToPlainText(document);
-          await gateway.updateNote({
-            id,
-            expectedRevision: note.revision,
-            documentJson: document,
-            plainText,
-          });
-          dispatch({
-            type: "cardContentUpdated",
-            id,
-            revision: note.revision + 1,
-            documentJson: document,
-            plainText,
-          });
-        })
-        .catch((e) => {
-          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+      // The returned promise *rejects* on failure so the note card can keep its
+      // editor open and its draft visible. We surface the error to the banner
+      // here but do NOT swallow it.
+      return queueRef.current.run(async () => {
+        const note = cardsRef.current.find(
+          (n): n is NoteCardDto => n.kind === "note" && n.id === id,
+        );
+        if (!note) return;
+        // Defensive check before persisting: never write a non-object document
+        // into SQLite. A structurally unusual (but still object) document is
+        // preserved as-is — validation is protective, not a source of user-facing
+        // save failures.
+        if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
+          // eslint-disable-next-line no-console
+          console.warn("[note-document] refusing to persist malformed document", document);
+          throw new Error("Note content is not a valid document");
+        }
+        const plainText = documentToPlainText(document);
+        await gateway.updateNote({
+          id,
+          expectedRevision: note.revision,
+          documentJson: document,
+          plainText,
         });
-      return task;
+        dispatch({
+          type: "cardContentUpdated",
+          id,
+          revision: note.revision + 1,
+          documentJson: document,
+          plainText,
+        });
+      }).catch((e) => {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        throw e;
+      });
     },
     [gateway],
   );
@@ -293,9 +307,17 @@ function App() {
     }
   }, [state.cards]);
 
-  const handleRequestContextMenu = useCallback((cardId: string, x: number, y: number) => {
-    setContextMenu({ cardId, x, y });
-  }, []);
+  const handleRequestContextMenu = useCallback(
+    (cardId: string, x: number, y: number) => {
+      // If the right-clicked card isn't part of the current selection, the menu
+      // should act on just that card (and select it), matching Finder/Milanote.
+      if (!state.selection.includes(cardId)) {
+        dispatch({ type: "selectionChanged", ids: [cardId] });
+      }
+      setContextMenu({ cardId, x, y });
+    },
+    [state.selection],
+  );
 
   const handleResizeNote = useCallback(
     (id: string, width: number, height: number) => {
@@ -322,21 +344,28 @@ function App() {
 
   const handleContextDelete = useCallback(() => {
     if (!contextMenu) return;
-    const id = contextMenu.cardId;
-    const card = state.cards.find((c) => c.id === id);
+    // Delete the current selection, not just the single right-clicked card. If
+    // the selection is empty (e.g. cleared), fall back to the clicked card.
+    const ids = state.selection.length > 0 ? state.selection : [contextMenu.cardId];
     setContextMenu(null);
-    if (!card) return;
-    const items =
-      card.kind === "note"
-        ? [{ id: card.id, kind: "note" as const }]
-        : [{ id: card.target.id, kind: "board_portal" as const }];
+
+    const items = ids
+      .map((id) => {
+        const card = state.cards.find((c) => c.id === id);
+        if (!card) return null;
+        if (card.kind === "note") return { id: card.id, kind: "note" as const };
+        return { id: card.target.id, kind: "board_portal" as const };
+      })
+      .filter((x): x is { id: string; kind: "note" | "board_portal" } => x !== null);
+
+    if (items.length === 0) return;
     void dispatcher
       .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
-      .then(() => dispatch({ type: "cardsRemoved", ids: [id] }))
+      .then(() => dispatch({ type: "cardsRemoved", ids }))
       .catch((e) => {
         dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
       });
-  }, [contextMenu, state.cards, dispatcher, idGenerator]);
+  }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator]);
 
   // Load a board's snapshot into the store.
   const navigateTo = useCallback(
@@ -354,7 +383,11 @@ function App() {
         breadcrumbs: snapshot.breadcrumbs,
         viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
         viewportRevision: snapshot.viewport.revision,
-        cards: snapshot.cards,
+        cards: snapshot.cards.map((c) =>
+          c.kind === "note"
+            ? { ...c, documentJson: normalizeDocument(c.documentJson) }
+            : c,
+        ),
       });
     },
     [gateway],
@@ -504,6 +537,7 @@ function App() {
               onSelectionChanged: handleCardsSelected,
               onCardActivated: handleCardActivated,
               onCardOpened: handleCardOpened,
+              onCardContextMenu: handleRequestContextMenu,
             }}
             renderCard={(card) => {
               const full = state.cards.find((c) => c.id === card.id);
