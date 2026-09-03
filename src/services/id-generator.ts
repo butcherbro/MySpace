@@ -20,7 +20,7 @@ export class UuidV7Generator implements IdGenerator {
 
     // Random remainder (10 bytes after the 6-byte timestamp).
     const random = new Uint8Array(10);
-    crypto.getRandomValues(random);
+    fillRandom(random);
 
     // Bytes 0..5: 48-bit timestamp, big-endian (top byte is NUL because today's
     // epoch fits in 42 bits, but we write all 6 bytes to stay RFC-compliant).
@@ -35,6 +35,23 @@ export class UuidV7Generator implements IdGenerator {
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
 
     return formatUuid(bytes);
+  }
+}
+
+/**
+ * Fills `out` with random bytes. Prefers `crypto.getRandomValues` (available
+ * in secure contexts and on localhost); falls back to a Math.random PRNG when
+ * it is missing (e.g. a non-secure Tauri WebView custom scheme). The fallback
+ * is not cryptographic, which is acceptable for local board/card IDs.
+ */
+function fillRandom(out: Uint8Array): void {
+  const getRandomValues = globalThis.crypto?.getRandomValues;
+  if (getRandomValues) {
+    getRandomValues.call(globalThis.crypto, out);
+    return;
+  }
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Math.floor(Math.random() * 256);
   }
 }
 

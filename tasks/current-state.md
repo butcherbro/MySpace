@@ -10,7 +10,7 @@
 - Store текущей доски — **`useReducer` + Context** (без новых зависимостей).
 - Optimistic `revision` + stale-write rejection — на всех мутациях.
 
-## Статус задач (по вердикту рецензента)
+## Статус задач (по вердикту рецензента + слайсам)
 
 - [x] №1 — documentJson + IdGenerator (UUIDv7)
 - [x] №3 — viewport durable (`board_view_states` + `save_viewport` + debounce 400мс)
@@ -19,23 +19,17 @@
 - [x] №5 — transactional `move_cards` (multi-card drag = одна транзакция) + selection-контракт
 - [x] write queue — сериализация мутаций (`MutationQueue`) против revision-гонок
 - [x] e2e — smoke-тест против MockWorkspaceGateway (click-versus-drag)
+- [x] Slice 4 — доски-в-досках: `create_child_board`/`rename_board` (Rust), `BoardPortalCard`,
+  `card-registry`, `BoardHistory`/`BoardBreadcrumbs` + Cmd+[/], порталы переживают рестарт.
 
 ## Следующий шаг
 
-Инженерный долг закрыт. Следующий крупный шаг — **Slice 4: доски-в-досках (порталы)**.
-Перед ним — ручной focus gate в `npm run tauri dev` + повторное ревью среза.
+Инженерный долг и Slice 4 закрыты. На очереди — **Slice 3 (rich-text заметки, Tiptap)**
+либо **Slice 5 (undo + Trash)**.
 
-## Ручной focus gate (до порталов)
+## Крупные открытые фичи
 
-1. Одинарный клик по Note — сразу ввод текста.
-2. Набрать длинный текст без потери фокуса.
-3. Выделить часть текста мышью.
-4. Cmd+A внутри textarea выделяет текст, не карточки.
-5. Click-hold + движение перетаскивает Note без случайного редактирования.
-6. После drag следующий обычный клик снова включает редактор.
-
-## Крупные открытые фичи (после закрытия долга)
-
-- Slice 4: доски-в-досках (порталы-квадратики, breadcrumbs, back/forward, Trash).
-- Slice 5: undo/trash. Slice 6: бэкапы + производительность.
-- Вердикт рецензента: `docs/review-brief.md` (P1/P2 + порядок работ).
+- Slice 3: Tiptap rich-text (находки/заголовки/списки).
+- Slice 5: undo/redo, рекурсивный Trash, наблюдаемые ошибки сохранения.
+- Slice 6: бэкапы + производительность.
+- Вид: палитра порталов (terracotta/moss/sky/sand/ink) реализована в `BoardPortalCard`.
