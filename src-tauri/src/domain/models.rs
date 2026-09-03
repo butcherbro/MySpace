@@ -82,13 +82,56 @@ pub struct BoardPortalDto {
     pub target: PortalTarget,
 }
 
-/// The two card kinds, tagged for the frontend.
+/// An image card: a static image plus an editable rich-text caption.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCardDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    pub asset: AssetDto,
+    pub caption_json: Value,
+    pub caption_plain_text: String,
+}
+
+/// An embed card: a URL with an optional preview image.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedCardDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    pub url: String,
+    pub title: Option<String>,
+    pub provider: Option<String>,
+    pub asset: Option<AssetDto>,
+}
+
+/// Metadata for a stored file asset (image / preview thumbnail).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetDto {
+    pub id: String,
+    pub file_name: String,
+    pub mime_type: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub size_bytes: i64,
+}
+
+/// The card kinds, tagged for the frontend.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CardDto {
     Note(NoteCardDto),
     #[serde(rename = "board_portal")]
     BoardPortal(BoardPortalDto),
+    Image(ImageCardDto),
+    Embed(EmbedCardDto),
 }
 
 impl CardDto {
@@ -97,6 +140,8 @@ impl CardDto {
         match self {
             CardDto::Note(n) => &n.id,
             CardDto::BoardPortal(p) => &p.id,
+            CardDto::Image(i) => &i.id,
+            CardDto::Embed(e) => &e.id,
         }
     }
 }
@@ -180,4 +225,29 @@ pub struct CreateChildBoardInput {
     pub portal_card_id: String,
     pub frame: Frame,
     pub title: String,
+}
+
+/// Input for importing a file into the asset store. The file bytes are read
+/// from `source_path` (a Tauri-provided absolute path from a picker/drop) and
+/// copied into the app's asset dir; metadata is returned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportAssetInput {
+    pub id: String,
+    pub source_path: String,
+    pub file_name: String,
+    pub mime_type: String,
+}
+
+/// Input for creating an image card referencing an already-imported asset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateImageCardInput {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub asset_id: String,
+    pub caption_json: Value,
+    pub caption_plain_text: String,
 }

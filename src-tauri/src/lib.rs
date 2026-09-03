@@ -30,6 +30,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::assets::import_asset,
             commands::boards::load_board_snapshot,
             commands::boards::get_home_board,
             commands::boards::save_viewport,

@@ -14,11 +14,18 @@ pub struct Migration {
 }
 
 /// The ordered list of migrations. Keep this list append-only.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "workspace",
-    sql: include_str!("../../migrations/0001_workspace.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "workspace",
+        sql: include_str!("../../migrations/0001_workspace.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "assets",
+        sql: include_str!("../../migrations/0002_assets.sql"),
+    },
+];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.
 fn ensure_migrations_table(conn: &Connection) -> Result<()> {
