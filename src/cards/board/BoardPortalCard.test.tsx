@@ -42,15 +42,11 @@ describe("BoardPortalCard", () => {
     expect(screen.getByText("📚")).toBeInTheDocument();
   });
 
-  it("opens on double click and Enter", async () => {
+  it("opens on Enter", async () => {
     const user = userEvent.setup();
     const onOpen = vi.fn();
     render(<BoardPortalCard portal={portal()} onOpen={onOpen} />);
 
-    await user.dblClick(screen.getByText("Books"));
-    expect(onOpen).toHaveBeenCalledWith("board-1");
-
-    onOpen.mockClear();
     screen.getByRole("button").focus();
     await user.keyboard("{Enter}");
     expect(onOpen).toHaveBeenCalledWith("board-1");

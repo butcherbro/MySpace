@@ -135,15 +135,20 @@ export function CanvasAdapter({
     event: React.MouseEvent,
     node: Node<CardNodeData>,
   ) => {
-    // A pure click (no drag) on a note activates editing; on a portal it will
-    // open the child board (Slice 4). Modifier-clicks are selection gestures,
-    // not activation.
+    // A pure click (no drag) on a note activates editing; on a portal it opens
+    // via double-click in the card component. Modifier-clicks are selection
+    // gestures, not activation.
     if (event.shiftKey || event.metaKey || event.ctrlKey) {
       return;
     }
-    if (!selectedIdsRef.current.has(node.id) || selectedIdsRef.current.size <= 1) {
-      events.onCardActivated?.(node.id);
-    }
+    events.onCardActivated?.(node.id);
+  };
+
+  const handleNodeDoubleClick = (
+    _: React.MouseEvent,
+    node: Node<CardNodeData>,
+  ) => {
+    events.onCardOpened?.(node.id);
   };
 
   const handleMoveEnd = (_: unknown, vp: { x: number; y: number; zoom: number }) => {
@@ -193,6 +198,7 @@ export function CanvasAdapter({
         selectNodesOnDrag={false}
         onSelectionChange={handleSelectionChange}
         onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={handleMoveEnd}
         minZoom={0.1}

@@ -90,6 +90,8 @@ export interface CanvasEvents {
   onSelectionChanged?(e: SelectionChanged): void;
   /** Viewport changed continuously (pan/zoom). */
   onViewportChanged?(e: ViewportChanged): void;
-  /** A card was double-clicked (open board portals). */
+  /** A card was single-clicked (activate note editing). */
   onCardActivated?(id: string): void;
+  /** A card was double-clicked (open board portals). */
+  onCardOpened?(id: string): void;
 }

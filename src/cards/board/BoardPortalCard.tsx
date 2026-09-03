@@ -41,7 +41,6 @@ export function BoardPortalCard({ portal, onOpen }: BoardPortalCardProps) {
       role="button"
       tabIndex={0}
       aria-label={`Open board ${portal.target.title}`}
-      onDoubleClick={() => onOpen(portal.target.id)}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           e.preventDefault();

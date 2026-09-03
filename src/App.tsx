@@ -311,6 +311,18 @@ function App() {
     [navigateTo],
   );
 
+  // Double-click on a card: if it's a portal, open its target board (the
+  // canvas passes the *card* id, so resolve to the target board first).
+  const handleCardOpened = useCallback(
+    (cardId: string) => {
+      const card = state.cards.find((c) => c.id === cardId);
+      if (card?.kind === "board_portal") {
+        void navigateTo(card.target.id, { push: true });
+      }
+    },
+    [state.cards, navigateTo],
+  );
+
   const handleNavigateBack = useCallback(() => {
     const prev = historyRef.current?.back();
     if (prev) void navigateTo(prev);
@@ -394,6 +406,7 @@ function App() {
               onViewportChanged: handleViewportChanged,
               onSelectionChanged: handleCardsSelected,
               onCardActivated: handleCardActivated,
+              onCardOpened: handleCardOpened,
             }}
             renderCard={(card) => {
               const full = state.cards.find((c) => c.id === card.id);
