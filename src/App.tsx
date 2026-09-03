@@ -336,6 +336,9 @@ function App() {
   // Load a board's snapshot into the store.
   const navigateTo = useCallback(
     async (boardId: string, opts?: { push?: boolean }) => {
+      // Flush any pending note/viewport writes before replacing the projection,
+      // so a debounced save cannot be abandoned by navigation (plan Section H).
+      await queueRef.current.flush();
       const snapshot = await gateway.loadBoardSnapshot(boardId);
       if (opts?.push && historyRef.current) {
         historyRef.current.push(boardId);
@@ -351,6 +354,12 @@ function App() {
     },
     [gateway],
   );
+
+  // Reload the current board (no history push). Used to reconcile UI with the
+  // database after undo/redo.
+  const reloadCurrentBoard = useCallback(() => {
+    if (board) void navigateTo(board.id);
+  }, [board, navigateTo]);
 
   // Open a child board via a portal (double-click / Enter).
   const handleOpenBoard = useCallback(
@@ -408,9 +417,9 @@ function App() {
       } else if (e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) {
-          void dispatcher.redo();
+          void dispatcher.redo().then(() => reloadCurrentBoard());
         } else {
-          void dispatcher.undo();
+          void dispatcher.undo().then(() => reloadCurrentBoard());
         }
       } else if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
@@ -419,7 +428,7 @@ function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, dispatcher, handleDeleteSelection]);
+  }, [handleNavigateBack, handleNavigateForward, dispatcher, handleDeleteSelection, reloadCurrentBoard]);
 
   return (
     <AppShell>

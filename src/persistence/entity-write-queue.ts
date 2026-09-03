@@ -23,4 +23,9 @@ export class MutationQueue {
     );
     return result;
   }
+
+  /** Resolves once all currently-enqueued tasks have settled. */
+  flush(): Promise<void> {
+    return this.tail.then(() => undefined);
+  }
 }
