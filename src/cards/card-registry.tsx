@@ -22,6 +22,8 @@ export interface CardRenderContext {
   onRenameBoard: (boardId: string, title: string) => void;
   /** Request a context menu (right-click) for a card. */
   onContextMenu: (cardId: string, x: number, y: number) => void;
+  /** Persist a manual resize (width/height). */
+  onResizeNote: (id: string, width: number, height: number) => void;
 }
 
 /** Renders a persisted card into the canvas. */
@@ -34,6 +36,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         onDeactivate={ctx.onDeactivate}
         onUpdate={ctx.onUpdateNote}
         onContextMenu={ctx.onContextMenu}
+        onResize={ctx.onResizeNote}
       />
     );
   }

@@ -21,7 +21,7 @@ function makeNote(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
 describe("NoteCard", () => {
   it("renders the note text in display mode", () => {
     render(
-      <NoteCard note={makeNote()} editing={false} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} />,
+      <NoteCard note={makeNote()} editing={false} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
     );
     expect(screen.getByText("hello")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
@@ -29,7 +29,7 @@ describe("NoteCard", () => {
 
   it("shows an editor when editing is true", () => {
     render(
-      <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} />,
+      <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
     );
     expect(screen.getByRole("textbox")).toBeInTheDocument();
   });
@@ -39,7 +39,7 @@ describe("NoteCard", () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     const onDeactivate = vi.fn();
     render(
-      <NoteCard note={makeNote()} editing={true} onDeactivate={onDeactivate} onUpdate={onUpdate} onContextMenu={vi.fn()} />,
+      <NoteCard note={makeNote()} editing={true} onDeactivate={onDeactivate} onUpdate={onUpdate} onContextMenu={vi.fn()} onResize={vi.fn()} />,
     );
 
     const textarea = screen.getByRole("textbox");
@@ -58,7 +58,7 @@ describe("NoteCard", () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     const onDeactivate = vi.fn();
     render(
-      <NoteCard note={makeNote()} editing={true} onDeactivate={onDeactivate} onUpdate={onUpdate} onContextMenu={vi.fn()} />,
+      <NoteCard note={makeNote()} editing={true} onDeactivate={onDeactivate} onUpdate={onUpdate} onContextMenu={vi.fn()} onResize={vi.fn()} />,
     );
 
     const textarea = screen.getByRole("textbox");

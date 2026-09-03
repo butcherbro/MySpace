@@ -16,10 +16,11 @@
 
 .note-card__textarea {
   width: 100%;
-  height: 80px;
+  min-height: 80px;
   border: none;
   outline: none;
   resize: none;
+  overflow: hidden;
   font: inherit;
   background: transparent;
 }
@@ -44,4 +45,25 @@
 
 .note-card__status--error {
   color: #dc2626;
+}
+
+.note-card__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  border-radius: 0 0 8px 0;
+}
+
+.note-card__resize::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid #b7bdb9;
+  border-bottom: 2px solid #b7bdb9;
 }

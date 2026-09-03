@@ -297,6 +297,29 @@ function App() {
     setContextMenu({ cardId, x, y });
   }, []);
 
+  const handleResizeNote = useCallback(
+    (id: string, width: number, height: number) => {
+      const note = cardsRef.current.find((c) => c.kind === "note" && c.id === id);
+      if (!note || note.kind !== "note") return;
+      void queueRef.current
+        .run(async () => {
+          const current = cardsRef.current.find((c) => c.kind === "note" && c.id === id);
+          if (!current || current.kind !== "note") return;
+          const frame = { ...current.frame, width, height };
+          await gateway.moveCard({
+            id,
+            expectedRevision: current.revision,
+            frame,
+          });
+          dispatch({ type: "cardMoved", id, revision: current.revision + 1, frame });
+        })
+        .catch((e) => {
+          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        });
+    },
+    [gateway],
+  );
+
   const handleContextDelete = useCallback(() => {
     if (!contextMenu) return;
     const id = contextMenu.cardId;
@@ -492,6 +515,7 @@ function App() {
                 onOpenBoard: handleOpenBoard,
                 onRenameBoard: handleRenameBoard,
                 onContextMenu: handleRequestContextMenu,
+                onResizeNote: handleResizeNote,
               });
             }}
           />
