@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ImageCardDto } from "../../services/workspace-gateway";
 import { NoteEditor } from "../../editor/NoteEditor";
+import { useDocumentDraft } from "../../editor/use-document-draft";
 import "./image-card.css";
 
 interface ImageCardProps {
@@ -15,18 +16,20 @@ interface ImageCardProps {
 
 /**
  * An image card: a static image with an editable rich-text caption beneath it.
- * Double-clicking the caption opens it for editing; the corner handle resizes
- * the card (same pipeline as a note).
+ * Double-clicking the image opens a fullscreen preview; double-clicking the
+ * caption opens it for editing. The caption draft lifecycle is shared with notes
+ * via `useDocumentDraft`.
  */
 export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCardProps) {
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<unknown>(image.captionJson);
-  const draftRef = useRef<unknown>(image.captionJson);
-  const dirtyRef = useRef(false);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
+    id: image.id,
+    persistedDocument: image.captionJson,
+    onUpdate,
+    onSaved: () => setEditing(false),
+  });
 
   const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
@@ -35,56 +38,6 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
   const appliedWidth = draftSize?.width ?? image.frame.width;
   const appliedHeight = draftSize?.height ?? image.frame.height;
   const src = `myspace-asset://localhost/${image.asset.filePath}`;
-
-  const commit = useCallback(
-    async (doc: unknown) => {
-      setSaving(true);
-      setError(null);
-      try {
-        await onUpdate(image.id, doc);
-        dirtyRef.current = false;
-        setEditing(false);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setSaving(false);
-      }
-    },
-    [image.id, onUpdate],
-  );
-
-  const handleChange = useCallback(
-    (doc: unknown) => {
-      dirtyRef.current = true;
-      draftRef.current = doc;
-      setDraft(doc);
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-      debounceTimer.current = setTimeout(() => {
-        onUpdate(image.id, doc).catch((e) => {
-          setError(e instanceof Error ? e.message : String(e));
-        });
-      }, 250);
-    },
-    [image.id, onUpdate],
-  );
-
-  const handleBlur = useCallback(() => {
-    if (debounceTimer.current) {
-      clearTimeout(debounceTimer.current);
-      debounceTimer.current = null;
-    }
-    if (dirtyRef.current) {
-      void commit(draftRef.current);
-    } else {
-      setEditing(false);
-    }
-  }, [commit]);
-
-  useEffect(() => {
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
-  }, []);
 
   // Close the preview on Escape.
   useEffect(() => {

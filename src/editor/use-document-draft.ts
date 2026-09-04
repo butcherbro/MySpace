@@ -1,0 +1,120 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+
+/**
+ * Shared document-draft lifecycle for editable rich-text cards (notes and image
+ * captions). A document (ProseMirror JSON) is the authoritative content; this
+ * hook owns:
+ *
+ * - a transient `draft` marked `dirty` on change,
+ * - debounced autosave (250 ms),
+ * - flush-on-blur (immediate persist + clean),
+ * - **flush-on-unmount** — because navigation swaps the board projection and the
+ *   component unmounts before a debounced save can be enqueued, the cleanup must
+ *   push any dirty draft out itself,
+ * - incoming `persistedDocument` is adopted only while clean (snapshot reload /
+ *   undo / restore never clobber an in-progress edit).
+ *
+ * `onUpdate(id, doc)` must reject on failure so the caller can keep the editor
+ * open and the draft visible. `onSaved()` fires after a successful flush so the
+ * parent can close editing consistently.
+ */
+export function useDocumentDraft(opts: {
+  id: string;
+  persistedDocument: unknown;
+  onUpdate: (id: string, document: unknown) => Promise<void>;
+  onSaved?: () => void;
+}) {
+  const { id, persistedDocument, onUpdate, onSaved } = opts;
+
+  const [draft, setDraft] = useState<unknown>(persistedDocument);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const draftRef = useRef<unknown>(persistedDocument);
+  const dirtyRef = useRef(false);
+  const persistedRef = useRef<unknown>(persistedDocument);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savingRef = useRef(false);
+
+  // Adopt an externally-changed document only while clean.
+  useEffect(() => {
+    if (dirtyRef.current) return;
+    if (persistedDocument !== persistedRef.current) {
+      persistedRef.current = persistedDocument;
+      draftRef.current = persistedDocument;
+      setDraft(persistedDocument);
+    }
+  }, [persistedDocument]);
+
+  const commit = useCallback(
+    async (doc: unknown) => {
+      setSaving(true);
+      savingRef.current = true;
+      setError(null);
+      try {
+        await onUpdate(id, doc);
+        dirtyRef.current = false;
+        persistedRef.current = doc;
+        onSaved?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSaving(false);
+        savingRef.current = false;
+      }
+    },
+    [id, onUpdate, onSaved],
+  );
+
+  const handleChange = useCallback(
+    (doc: unknown) => {
+      dirtyRef.current = true;
+      draftRef.current = doc;
+      setDraft(doc);
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => {
+        onUpdate(id, doc)
+          .then(() => {
+            if (draftRef.current === doc) {
+              dirtyRef.current = false;
+              persistedRef.current = doc;
+            }
+          })
+          .catch((e) => {
+            setError(e instanceof Error ? e.message : String(e));
+          });
+      }, 250);
+    },
+    [id, onUpdate],
+  );
+
+  const handleBlur = useCallback(() => {
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+    if (dirtyRef.current) {
+      void commit(draftRef.current);
+    } else {
+      onSaved?.();
+    }
+  }, [commit, onSaved]);
+
+  // Flush any dirty draft on unmount (navigation/trash/snapshot swap) so a
+  // pending debounce is never abandoned. Fire-and-forget: the parent owns
+  // reconciliation via its own queue/flush.
+  useEffect(() => {
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      if (dirtyRef.current && !savingRef.current) {
+        const doc = draftRef.current;
+        dirtyRef.current = false;
+        void onUpdate(id, doc).catch(() => {
+          // Best-effort on unmount; surface via parent banner.
+        });
+      }
+    };
+  }, [id, onUpdate]);
+
+  return { draft, saving, error, handleChange, handleBlur };
+}
