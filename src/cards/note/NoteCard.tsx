@@ -43,6 +43,7 @@ export function NoteCard({
   const dirtyRef = useRef(false);
   const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
+  const draftSizeRef = useRef<{ width: number; height: number } | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // The document this draft was based on (persisted). Used to detect external
@@ -173,15 +174,19 @@ export function NoteCard({
     if (!resizeStart.current) return;
     const dx = e.clientX - resizeStart.current.x;
     const dy = e.clientY - resizeStart.current.y;
-    setDraftSize({ width: Math.max(120, resizeStart.current.w + dx), height: Math.max(48, resizeStart.current.h + dy) });
+    const next = { width: Math.max(120, resizeStart.current.w + dx), height: Math.max(48, resizeStart.current.h + dy) };
+    draftSizeRef.current = next;
+    setDraftSize(next);
   }
 
   function onResizeUp() {
     resizeStart.current = null;
     window.removeEventListener("pointermove", onResizeMove);
     window.removeEventListener("pointerup", onResizeUp);
-    if (draftSize) {
-      onResize(note.id, draftSize.width, draftSize.height);
+    const final = draftSizeRef.current;
+    if (final) {
+      onResize(note.id, final.width, final.height);
+      draftSizeRef.current = null;
       setDraftSize(null);
     }
   }

@@ -29,6 +29,7 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
 
   const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
+  const draftSizeRef = useRef<{ width: number; height: number } | null>(null);
 
   const appliedWidth = draftSize?.width ?? image.frame.width;
   const appliedHeight = draftSize?.height ?? image.frame.height;
@@ -101,18 +102,22 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
     if (!resizeStart.current) return;
     const dx = e.clientX - resizeStart.current.x;
     const dy = e.clientY - resizeStart.current.y;
-    setDraftSize({
+    const next = {
       width: Math.max(120, resizeStart.current.w + dx),
       height: Math.max(48, resizeStart.current.h + dy),
-    });
+    };
+    draftSizeRef.current = next;
+    setDraftSize(next);
   }
 
   function onResizeUp() {
     resizeStart.current = null;
     window.removeEventListener("pointermove", onResizeMove);
     window.removeEventListener("pointerup", onResizeUp);
-    if (draftSize) {
-      onResize(image.id, draftSize.width, draftSize.height);
+    const final = draftSizeRef.current;
+    if (final) {
+      onResize(image.id, final.width, final.height);
+      draftSizeRef.current = null;
       setDraftSize(null);
     }
   }
