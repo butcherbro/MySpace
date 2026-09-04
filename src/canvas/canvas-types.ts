@@ -100,4 +100,6 @@ export interface CanvasEvents {
   onCardContextMenu?(id: string, x: number, y: number): void;
   /** A card was dropped onto a board portal (move to that board). */
   onCardDroppedOnPortal?(cardId: string, targetBoardId: string): void;
+  /** A card is being dragged over a portal (or null when it leaves). */
+  onPortalHighlight?(portalId: string | null): void;
 }

@@ -93,10 +93,30 @@ export function CanvasAdapter({
 
   const nodesRef = useRef(nodes);
   const selectedIdsRef = useRef<Set<string>>(new Set());
+  const highlightedPortalRef = useRef<string | null>(null);
 
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
+
+  // Returns the portal card whose bounds contain the given card's center, or null.
+  const portalAtPoint = (node: Node<CardNodeData>): CanvasCard | null => {
+    const source = cards.find((c) => c.id === node.id);
+    if (!source || source.kind === "board_portal") return null;
+    const cx = node.position.x + (node.width ?? source.frame.width) / 2;
+    const cy = node.position.y + (node.height ?? source.frame.height) / 2;
+    return (
+      cards.find((c) => {
+        if (c.kind !== "board_portal" || !c.targetBoardId) return false;
+        return (
+          cx >= c.frame.x &&
+          cx <= c.frame.x + c.frame.width &&
+          cy >= c.frame.y &&
+          cy <= c.frame.y + c.frame.height
+        );
+      }) ?? null
+    );
+  };
 
   const handleNodesChange = (changes: NodeChange<Node<CardNodeData>>[]) => {
     setNodes((prev) => applyNodeChanges(changes, prev) as Node<CardNodeData>[]);
@@ -112,23 +132,18 @@ export function CanvasAdapter({
     const selected = selectedIdsRef.current;
     const ids = selected.has(node.id) && selected.size > 1 ? [...selected] : [node.id];
 
+    // Clear any portal highlight.
+    if (highlightedPortalRef.current !== null) {
+      highlightedPortalRef.current = null;
+      events.onPortalHighlight?.(null);
+    }
+
     // Drop onto a portal: if a single card's center lands inside a board portal,
     // move it to that board instead of repositioning on the current board.
     if (ids.length === 1) {
       const dragged = nodesRef.current.find((n) => n.id === ids[0]);
-      const source = cards.find((c) => c.id === ids[0]);
-      if (dragged && source && source.kind !== "board_portal") {
-        const cx = dragged.position.x + (dragged.width ?? source.frame.width) / 2;
-        const cy = dragged.position.y + (dragged.height ?? source.frame.height) / 2;
-        const portal = cards.find((c) => {
-          if (c.kind !== "board_portal" || !c.targetBoardId) return false;
-          return (
-            cx >= c.frame.x &&
-            cx <= c.frame.x + c.frame.width &&
-            cy >= c.frame.y &&
-            cy <= c.frame.y + c.frame.height
-          );
-        });
+      if (dragged) {
+        const portal = portalAtPoint(dragged);
         if (portal?.targetBoardId) {
           events.onCardDroppedOnPortal?.(ids[0], portal.targetBoardId);
           return;
@@ -167,6 +182,17 @@ export function CanvasAdapter({
       return;
     }
     events.onCardActivated?.(node.id);
+  };
+
+  // During drag, report which portal (if any) the card is over, so the parent
+  // can highlight it. Only emit on change to avoid redundant renders.
+  const handleNodeDrag = (_: unknown, node: Node<CardNodeData>) => {
+    const portal = portalAtPoint(node);
+    const portalId = portal?.id ?? null;
+    if (portalId !== highlightedPortalRef.current) {
+      highlightedPortalRef.current = portalId;
+      events.onPortalHighlight?.(portalId);
+    }
   };
 
   const handleNodeDoubleClick = (
@@ -244,6 +270,7 @@ export function CanvasAdapter({
         onNodeDoubleClick={handleNodeDoubleClick}
         onNodeContextMenu={handleNodeContextMenu}
         onSelectionContextMenu={handleSelectionContextMenu}
+        onNodeDrag={handleNodeDrag}
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={handleMoveEnd}
         onInit={(instance) => {

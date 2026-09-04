@@ -29,6 +29,8 @@ export interface CardRenderContext {
   onResizeNote: (id: string, width: number, height: number) => void;
   /** Persist a manual resize for image cards. */
   onResizeImage: (id: string, width: number, height: number) => void;
+  /** The portal currently being hovered during a card drag, if any. */
+  highlightedPortalId: string | null;
 }
 
 /** Renders a persisted card into the canvas. */
@@ -63,6 +65,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
       onOpen={ctx.onOpenBoard}
       onRename={ctx.onRenameBoard}
       onContextMenu={ctx.onContextMenu}
+      highlighted={card.id === ctx.highlightedPortalId}
     />
   );
 }

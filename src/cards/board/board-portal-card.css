@@ -8,6 +8,13 @@
   padding: 8px;
   cursor: pointer;
   user-select: none;
+  border-radius: 8px;
+  transition: box-shadow 0.1s ease, background-color 0.1s ease;
+}
+
+.board-portal-card--highlighted {
+  background-color: rgba(101, 116, 130, 0.12);
+  box-shadow: 0 0 0 2px rgba(60, 108, 91, 0.55);
 }
 
 .board-portal-card__tile {

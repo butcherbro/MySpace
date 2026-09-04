@@ -7,6 +7,8 @@ interface BoardPortalCardProps {
   onOpen: (boardId: string) => void;
   onRename: (boardId: string, title: string) => void;
   onContextMenu: (boardId: string, x: number, y: number) => void;
+  /** Whether a card is being dragged over this portal. */
+  highlighted?: boolean;
 }
 
 // Maps a color token to its palette color (plan Visual Interface Contract).
@@ -34,6 +36,7 @@ export function BoardPortalCard({
   onOpen,
   onRename,
   onContextMenu,
+  highlighted = false,
 }: BoardPortalCardProps) {
   const [renaming, setRenaming] = useState(false);
   const [titleText, setTitleText] = useState(portal.target.title);
@@ -55,7 +58,7 @@ export function BoardPortalCard({
 
   return (
     <div
-      className="board-portal-card"
+      className={`board-portal-card ${highlighted ? "board-portal-card--highlighted" : ""}`}
       data-testid="board-portal-card"
       data-board-id={portal.target.id}
       tabIndex={0}

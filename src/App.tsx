@@ -28,6 +28,7 @@ function App() {
 
   const [state, dispatch] = useReducer(reducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
+  const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
   const { board, breadcrumbs, viewport, viewportRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
@@ -687,6 +688,7 @@ function App() {
               onCardOpened: handleCardOpened,
               onCardContextMenu: handleRequestContextMenu,
               onCardDroppedOnPortal: handleMoveCardToBoard,
+              onPortalHighlight: setHighlightedPortalId,
             }}
             renderCard={(card) => {
               const full = state.cards.find((c) => c.id === card.id);
@@ -701,6 +703,7 @@ function App() {
                 onContextMenu: handleRequestContextMenu,
                 onResizeNote: handleResizeNote,
                 onResizeImage: handleResizeNote,
+                highlightedPortalId,
               });
             }}
           />
