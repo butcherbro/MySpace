@@ -1,9 +1,10 @@
 //! Repository tests: load a board snapshot and create notes transactionally.
 
 use myspace_lib::db::{bootstrap, open_in_memory};
+use myspace_lib::domain::asset_service;
 use myspace_lib::domain::models::{
-    CreateNoteInput, Frame, MoveCardItem, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
-    UpdateViewportInput,
+    CreateImageCardInput, CreateNoteInput, Frame, ImportAssetInput, MoveCardItem, MoveCardsInput,
+    UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput,
 };
 use myspace_lib::repositories::workspace_repository;
 
@@ -573,4 +574,94 @@ fn move_cards_rolls_back_whole_batch_on_stale_revision() {
         })
         .unwrap();
     assert_eq!(n2, 0.0);
+}
+
+#[test]
+fn create_image_card_then_load_snapshot_roundtrips() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    // Import an asset first (image cards reference a stored asset).
+    let asset_dir =
+        std::env::temp_dir().join(format!("myspace-img-asset-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&asset_dir).unwrap();
+    let source = asset_dir.join("photo.png");
+    std::fs::write(&source, b"png-bytes").unwrap();
+    asset_service::import_asset(
+        &mut conn,
+        &asset_dir,
+        &ImportAssetInput {
+            id: "img-asset-1".to_string(),
+            source_path: source.to_string_lossy().to_string(),
+            file_name: "photo.png".to_string(),
+            mime_type: "image/png".to_string(),
+        },
+    )
+    .unwrap();
+
+    workspace_repository::create_image_card(
+        &mut conn,
+        &CreateImageCardInput {
+            id: "img-card-1".to_string(),
+            board_id: board_id.clone(),
+            frame: Frame {
+                x: 50.0,
+                y: 60.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            z_index: 0,
+            asset_id: "img-asset-1".to_string(),
+            caption_json: serde_json::json!({"type": "doc"}),
+            caption_plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    match &snapshot.cards[0] {
+        myspace_lib::domain::models::CardDto::Image(img) => {
+            assert_eq!(img.id, "img-card-1");
+            assert_eq!(img.frame.x, 50.0);
+            assert_eq!(img.frame.height, 200.0);
+            assert_eq!(img.asset.id, "img-asset-1");
+            assert_eq!(img.asset.file_name, "photo.png");
+            assert_eq!(img.asset.mime_type, "image/png");
+        }
+        other => panic!("expected image card, got {other:?}"),
+    }
+
+    std::fs::remove_dir_all(&asset_dir).ok();
+}
+
+#[test]
+fn create_image_card_with_unknown_asset_is_rejected() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    let result = workspace_repository::create_image_card(
+        &mut conn,
+        &CreateImageCardInput {
+            id: "img-card-2".to_string(),
+            board_id,
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            z_index: 0,
+            asset_id: "does-not-exist".to_string(),
+            caption_json: serde_json::json!({"type": "doc"}),
+            caption_plain_text: "".to_string(),
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
+    ));
+
+    assert_eq!(card_count(&conn), 0, "no orphan cards row on failed insert");
 }

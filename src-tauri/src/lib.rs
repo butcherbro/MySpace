@@ -37,6 +37,7 @@ pub fn run() {
             commands::boards::create_child_board,
             commands::boards::rename_board,
             commands::cards::create_note,
+            commands::cards::create_image_card,
             commands::cards::update_note,
             commands::cards::move_card,
             commands::cards::move_cards,

@@ -7,7 +7,7 @@ use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    CreateNoteInput, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
+    CreateImageCardInput, CreateNoteInput, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -21,6 +21,18 @@ pub fn create_note(db: DbState<'_>, input: CreateNoteInput) -> Result<(), Worksp
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::create_note(&mut conn, &input)
+}
+
+/// Creates an image card referencing an already-imported asset.
+#[tauri::command]
+pub fn create_image_card(
+    db: DbState<'_>,
+    input: CreateImageCardInput,
+) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::create_image_card(&mut conn, &input)
 }
 
 /// Updates a note's content with an optimistic revision guard.

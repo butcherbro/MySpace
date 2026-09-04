@@ -7,9 +7,9 @@ use rusqlite::{params, Connection};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto, CreateNoteInput, Frame,
-    MoveCardsInput, NoteCardDto, PortalTarget, UpdateCardFrameInput, UpdateNoteInput,
-    UpdateViewportInput, Viewport,
+    AssetDto, BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto,
+    CreateImageCardInput, CreateNoteInput, Frame, ImageCardDto, MoveCardsInput, NoteCardDto,
+    PortalTarget, UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -183,6 +183,51 @@ fn load_cards(
                     child_board_count,
                     child_card_count,
                 },
+            }))
+        })?;
+
+        for r in rows {
+            out.push(r?);
+        }
+    }
+
+    // Image cards: a static image plus an editable caption.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                    i.asset_id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes,
+                    i.caption_json, i.caption_plain_text
+             FROM cards c
+             JOIN image_cards i ON i.card_id = c.id
+             JOIN assets a ON a.id = i.asset_id
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL
+             ORDER BY c.z_index, c.id",
+        )?;
+        let rows = stmt.query_map([board_id], |row| {
+            let caption_json: String = row.get(14)?;
+            let caption_json: serde_json::Value =
+                serde_json::from_str(&caption_json).unwrap_or(serde_json::Value::Null);
+            Ok(CardDto::Image(ImageCardDto {
+                id: row.get(0)?,
+                board_id: row.get(1)?,
+                frame: Frame {
+                    x: row.get(2)?,
+                    y: row.get(3)?,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                },
+                z_index: row.get(6)?,
+                revision: row.get(7)?,
+                asset: AssetDto {
+                    id: row.get(8)?,
+                    file_name: row.get(9)?,
+                    mime_type: row.get(10)?,
+                    width: row.get(11)?,
+                    height: row.get(12)?,
+                    size_bytes: row.get(13)?,
+                },
+                caption_json,
+                caption_plain_text: row.get(15)?,
             }))
         })?;
 
@@ -408,5 +453,56 @@ pub fn move_cards(conn: &mut Connection, input: &MoveCardsInput) -> Result<(), W
     }
 
     tx.commit()?;
+    Ok(())
+}
+
+/// Creates an image card referencing an already-imported asset, in one
+/// transaction (cards row + image_cards row). A failed detail insert leaves no
+/// orphaned `cards` row.
+pub fn create_image_card(
+    conn: &mut Connection,
+    input: &CreateImageCardInput,
+) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+    let caption_json = serde_json::to_string(&input.caption_json)
+        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+
+    // The referenced asset must exist.
+    let asset_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM assets WHERE id = ?1",
+        [input.asset_id.as_str()],
+        |r| r.get(0),
+    )?;
+    if asset_exists == 0 {
+        return Err(WorkspaceError::NotFound(input.asset_id.clone()));
+    }
+
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
+         VALUES (?1, ?2, 'image', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)",
+        params![
+            input.id,
+            input.board_id,
+            input.frame.x,
+            input.frame.y,
+            input.frame.width,
+            input.frame.height,
+            input.z_index,
+            now,
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO image_cards (card_id, asset_id, caption_json, caption_plain_text)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![
+            input.id,
+            input.asset_id,
+            caption_json,
+            input.caption_plain_text,
+        ],
+    )?;
+    tx.commit()?;
+
     Ok(())
 }
