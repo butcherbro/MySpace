@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import type { CardDto } from "../services/workspace-gateway";
 import { BoardPortalCard } from "./board/BoardPortalCard";
 import { NoteCard } from "./note/NoteCard";
+import { ImageCard } from "./image/ImageCard";
 
 export interface CardRenderContext {
   /** Whether the card (if a note) is currently being edited. */
@@ -39,6 +40,10 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         onResize={ctx.onResizeNote}
       />
     );
+  }
+
+  if (card.kind === "image") {
+    return <ImageCard asset={card.asset} captionPlainText={card.captionPlainText} />;
   }
 
   return (

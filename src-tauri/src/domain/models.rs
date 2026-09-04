@@ -121,6 +121,8 @@ pub struct AssetDto {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub size_bytes: i64,
+    /// Path relative to the asset root, used to build the asset URL.
+    pub file_path: String,
 }
 
 /// The card kinds, tagged for the frontend.

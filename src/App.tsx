@@ -14,7 +14,8 @@ import { BoardHistory } from "./navigation/board-history";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
-import type { BoardPortalDto, NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
+import { pickImageFile } from "./services/asset-picker";
+import type { BoardPortalDto, ImageCardDto, NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
 import {
   initialState,
   reducer,
@@ -149,6 +150,46 @@ function App() {
     }
   }, [board, dispatcher, idGenerator, state.cards.length]);
 
+  const handleCreateImage = useCallback(async () => {
+    if (!board) return;
+    const picked = await pickImageFile();
+    if (!picked) return;
+
+    const assetId = idGenerator.nextId();
+    const cardId = idGenerator.nextId();
+    try {
+      const asset = await gateway.importAsset({
+        id: assetId,
+        sourcePath: picked.path,
+        fileName: picked.fileName,
+        mimeType: picked.mimeType,
+      });
+      const card: ImageCardDto = {
+        kind: "image",
+        id: cardId,
+        boardId: board.id,
+        frame: { x: 80, y: 80 + state.cards.length * 24, width: 320, height: 240 },
+        zIndex: state.cards.length,
+        revision: 1,
+        asset,
+        captionJson: plainTextToDocument(""),
+        captionPlainText: "",
+      };
+      await gateway.createImageCard({
+        id: cardId,
+        boardId: board.id,
+        frame: card.frame,
+        zIndex: card.zIndex,
+        assetId,
+        captionJson: card.captionJson,
+        captionPlainText: "",
+      });
+      dispatch({ type: "cardAdded", card });
+    } catch (e) {
+      dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+    }
+  }, [board, gateway, idGenerator, state.cards.length]);
+
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {
       // The returned promise *rejects* on failure so the note card can keep its
@@ -250,10 +291,12 @@ function App() {
       .map((id) => {
         const card = state.cards.find((c) => c.id === id);
         if (!card) return null;
-        if (card.kind === "note") return { id: card.id, kind: "note" as const };
-        return { id: card.target.id, kind: "board_portal" as const };
+        if (card.kind === "board_portal") {
+          return { id: card.target.id, kind: "board_portal" as const };
+        }
+        return { id: card.id, kind: card.kind as "note" | "image" };
       })
-      .filter((x): x is { id: string; kind: "note" | "board_portal" } => x !== null);
+      .filter((x): x is { id: string; kind: "note" | "image" | "board_portal" } => x !== null);
 
     if (items.length === 0) return;
 
@@ -353,10 +396,12 @@ function App() {
       .map((id) => {
         const card = state.cards.find((c) => c.id === id);
         if (!card) return null;
-        if (card.kind === "note") return { id: card.id, kind: "note" as const };
-        return { id: card.target.id, kind: "board_portal" as const };
+        if (card.kind === "board_portal") {
+          return { id: card.target.id, kind: "board_portal" as const };
+        }
+        return { id: card.id, kind: card.kind as "note" | "image" };
       })
-      .filter((x): x is { id: string; kind: "note" | "board_portal" } => x !== null);
+      .filter((x): x is { id: string; kind: "note" | "image" | "board_portal" } => x !== null);
 
     if (items.length === 0) return;
     void dispatcher
@@ -505,6 +550,9 @@ function App() {
           </button>
           <button type="button" onClick={() => void handleCreateChildBoard()}>
             New board
+          </button>
+          <button type="button" onClick={() => void handleCreateImage()}>
+            Add image
           </button>
         </div>
         <BoardBreadcrumbs breadcrumbs={breadcrumbs} onNavigate={(id) => void navigateTo(id, { push: true })} />

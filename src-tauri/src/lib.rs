@@ -14,7 +14,29 @@ type DbHandle = Mutex<Connection>;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .register_uri_scheme_protocol("myspace-asset", |app, request| {
+            // `myspace-asset://localhost/<file-path>` serves an imported file
+            // from the asset directory, keyed by the relative path stored in
+            // SQLite. The path is constrained to the asset dir, so the frontend
+            // cannot reach arbitrary files through this scheme.
+            let relative = request.uri().path().trim_start_matches('/').to_string();
+            let asset_dir = app
+                .app_handle()
+                .path()
+                .app_data_dir()
+                .unwrap_or_default()
+                .join("assets");
+            let path = asset_dir.join(relative);
+            match std::fs::read(&path) {
+                Ok(bytes) => tauri::http::Response::builder().body(bytes).unwrap(),
+                Err(_) => tauri::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap(),
+            }
+        })
         .setup(|app| {
             let data_dir = app
                 .path()

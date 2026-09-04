@@ -11,14 +11,14 @@ use crate::domain::errors::WorkspaceError;
 
 use super::super::db;
 
-/// Trashes a note card (soft-delete of its `cards` row). Returns the batch id
-/// used for restore.
+/// Trashes a leaf card (note, image, or embed) — soft-delete of its `cards`
+/// row. Returns the batch id used for restore.
 pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, WorkspaceError> {
     let now = db::migrations::now_millis();
     let batch_id = uuid::Uuid::now_v7().to_string();
     let changed = conn.execute(
         "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-         WHERE id = ?3 AND kind = 'note' AND deleted_at IS NULL",
+         WHERE id = ?3 AND kind IN ('note', 'image', 'embed') AND deleted_at IS NULL",
         params![now, batch_id, card_id],
     )?;
     if changed == 0 {

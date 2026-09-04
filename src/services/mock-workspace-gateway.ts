@@ -1,8 +1,11 @@
 import type {
+  AssetDto,
   BoardSnapshot,
   BoardSummary,
   CreateChildBoardInput,
+  CreateImageCardInput,
   CreateNoteInput,
+  ImportAssetInput,
   MoveCardInput,
   MoveCardsInput,
   SaveViewportInput,
@@ -162,6 +165,43 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   restoreTrashBatch(batchId: string): Promise<void> {
     void batchId;
+    return Promise.resolve();
+  }
+
+  importAsset(input: ImportAssetInput): Promise<AssetDto> {
+    const asset: AssetDto = {
+      id: input.id,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      width: null,
+      height: null,
+      sizeBytes: 0,
+      filePath: `${input.id}.bin`,
+    };
+    return Promise.resolve(asset);
+  }
+
+  createImageCard(input: CreateImageCardInput): Promise<void> {
+    const card = {
+      kind: "image" as const,
+      id: input.id,
+      boardId: input.boardId,
+      frame: { ...input.frame },
+      zIndex: input.zIndex,
+      revision: 1,
+      asset: {
+        id: input.assetId,
+        fileName: "",
+        mimeType: "",
+        width: null,
+        height: null,
+        sizeBytes: 0,
+        filePath: `${input.assetId}.bin`,
+      },
+      captionJson: input.captionJson,
+      captionPlainText: input.captionPlainText,
+    };
+    this.snapshot.cards.push(card);
     return Promise.resolve();
   }
 }

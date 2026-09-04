@@ -1,0 +1,37 @@
+.image-card {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.image-card__image {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5;
+}
+
+.image-card__image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.image-card__caption {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #1f2430;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-top: 1px solid #e0e0e0;
+}

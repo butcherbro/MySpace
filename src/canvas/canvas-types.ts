@@ -5,7 +5,7 @@
 // canvas emits. No React Flow `Node` or viewport type may appear here or leak
 // into domain, persistence, or repository modules.
 
-export type CanvasCardKind = "note" | "board_portal";
+export type CanvasCardKind = "note" | "board_portal" | "image";
 
 /** A card's placement rectangle in board-space coordinates. */
 export interface CanvasFrame {

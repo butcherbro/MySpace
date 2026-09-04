@@ -88,10 +88,20 @@
 1. ✅ Assets-фундамент (Rust): миграция `0002_assets` (`assets` + `image_cards` + `embed_cards` +
    `kind` `image`/`embed`), `asset_service::import_asset` (copy-in + метаданные, идемпотентный),
    команда `import_asset`, тесты.
-2. ⏳ `create_image_card` (repo + команда) — карточка-изображение, объединённая с asset.
-3. ⏳ Фронт: `ImageCardDto` в gateway + `ImageCard` (картинка + подпись-заметка снизу,
-   двойной клик по подписи → редактирование) + кнопка/drag-drop «Добавить картинку».
+2. ✅ `create_image_card` (repo + команда) — карточка-изображение, объединённая с asset.
+3. ✅ Фронт: `ImageCardDto`/`AssetDto` в gateway + mock + `ImageCard` (картинка через
+   `myspace-asset://` протокол) + кнопка «Add image» (dialog-плагин) + drag-drop файла.
+   Подпись-заметка снизу (редактирование) — следующий шаг.
 4. ⏳ `EmbedCard` + oEmbed-команда для превью ссылок (YouTube сначала).
+
+### Закрыто в шаге 3 (фронт картинок)
+
+- Rust: custom URI protocol `myspace-asset://localhost/<file_path>` (отдаёт файл из
+  `assets/`, путь ограничен asset-дир); `AssetDto.file_path`; `trash_note` принимает
+  note/image/embed (leaf card).
+- Фронт: `ImageCard` + `card-registry` ветка `image`; `AssetPick` через
+  `tauri-plugin-dialog` (изолирован в `src/services/asset-picker.ts`); кнопка toolbar.
+- `handleDeleteSelection`/`handleContextDelete` различают note/image/board_portal.
 
 ## Крупные открытые фичи
 

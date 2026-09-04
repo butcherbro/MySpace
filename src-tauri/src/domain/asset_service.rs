@@ -64,13 +64,14 @@ pub fn import_asset(
         width: None,
         height: None,
         size_bytes,
+        file_path: relative.clone(),
     })
 }
 
 /// Loads an asset's metadata by id, if it exists.
 pub fn load_asset(conn: &Connection, id: &str) -> Result<Option<AssetDto>, WorkspaceError> {
     let mut stmt = conn.prepare(
-        "SELECT id, file_name, mime_type, width, height, size_bytes FROM assets WHERE id = ?1",
+        "SELECT id, file_name, mime_type, width, height, size_bytes, file_path FROM assets WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map([id], |row| {
         Ok(AssetDto {
@@ -80,6 +81,7 @@ pub fn load_asset(conn: &Connection, id: &str) -> Result<Option<AssetDto>, Works
             width: row.get(3)?,
             height: row.get(4)?,
             size_bytes: row.get(5)?,
+            file_path: row.get(6)?,
         })
     })?;
 

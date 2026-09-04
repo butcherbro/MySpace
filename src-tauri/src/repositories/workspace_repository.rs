@@ -195,7 +195,7 @@ fn load_cards(
     {
         let mut stmt = conn.prepare(
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    i.asset_id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes,
+                    i.asset_id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
                     i.caption_json, i.caption_plain_text
              FROM cards c
              JOIN image_cards i ON i.card_id = c.id
@@ -204,7 +204,7 @@ fn load_cards(
              ORDER BY c.z_index, c.id",
         )?;
         let rows = stmt.query_map([board_id], |row| {
-            let caption_json: String = row.get(14)?;
+            let caption_json: String = row.get(15)?;
             let caption_json: serde_json::Value =
                 serde_json::from_str(&caption_json).unwrap_or(serde_json::Value::Null);
             Ok(CardDto::Image(ImageCardDto {
@@ -225,9 +225,10 @@ fn load_cards(
                     width: row.get(11)?,
                     height: row.get(12)?,
                     size_bytes: row.get(13)?,
+                    file_path: row.get(14)?,
                 },
                 caption_json,
-                caption_plain_text: row.get(15)?,
+                caption_plain_text: row.get(16)?,
             }))
         })?;
 

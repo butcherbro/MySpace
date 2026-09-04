@@ -56,7 +56,31 @@ export interface BoardPortalDto {
   };
 }
 
-export type CardDto = NoteCardDto | BoardPortalDto;
+/** Metadata for a stored file asset (image / preview thumbnail). */
+export interface AssetDto {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  width: number | null;
+  height: number | null;
+  sizeBytes: number;
+  filePath: string;
+}
+
+/** An image card: a static image plus an editable rich-text caption. */
+export interface ImageCardDto {
+  kind: "image";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  revision: number;
+  asset: AssetDto;
+  captionJson: unknown;
+  captionPlainText: string;
+}
+
+export type CardDto = NoteCardDto | BoardPortalDto | ImageCardDto;
 
 export interface BoardSnapshot {
   board: BoardSummary;
@@ -113,6 +137,23 @@ export interface CreateChildBoardInput {
   title: string;
 }
 
+export interface ImportAssetInput {
+  id: string;
+  sourcePath: string;
+  fileName: string;
+  mimeType: string;
+}
+
+export interface CreateImageCardInput {
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  assetId: string;
+  captionJson: unknown;
+  captionPlainText: string;
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -130,4 +171,6 @@ export interface WorkspaceGateway {
   trashNote(cardId: string): Promise<string>;
   trashBoard(boardId: string): Promise<string>;
   restoreTrashBatch(batchId: string): Promise<void>;
+  importAsset(input: ImportAssetInput): Promise<AssetDto>;
+  createImageCard(input: CreateImageCardInput): Promise<void>;
 }

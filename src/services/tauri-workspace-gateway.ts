@@ -1,9 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AssetDto,
   BoardSnapshot,
   BoardSummary,
   CreateChildBoardInput,
+  CreateImageCardInput,
   CreateNoteInput,
+  ImportAssetInput,
   MoveCardInput,
   MoveCardsInput,
   SaveViewportInput,
@@ -63,5 +66,13 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   restoreTrashBatch(batchId: string): Promise<void> {
     return invoke<void>("restore_trash_batch", { batchId });
+  }
+
+  importAsset(input: ImportAssetInput): Promise<AssetDto> {
+    return invoke<AssetDto>("import_asset", { input });
+  }
+
+  createImageCard(input: CreateImageCardInput): Promise<void> {
+    return invoke<void>("create_image_card", { input });
   }
 }
