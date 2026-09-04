@@ -20,6 +20,7 @@ interface ImageCardProps {
  */
 export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCardProps) {
   const [editing, setEditing] = useState(false);
+  const [preview, setPreview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<unknown>(image.captionJson);
@@ -85,6 +86,16 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
     };
   }, []);
 
+  // Close the preview on Escape.
+  useEffect(() => {
+    if (!preview) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setPreview(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview]);
+
   function onResizePointerDown(e: React.PointerEvent) {
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -133,7 +144,13 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
         onContextMenu(image.id, e.clientX, e.clientY);
       }}
     >
-      <div className="image-card__image">
+      <div
+        className="image-card__image"
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setPreview(true);
+        }}
+      >
         <img src={src} alt={image.asset.fileName} />
       </div>
       <div
@@ -158,6 +175,15 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
       </div>
       {saving && <div className="image-card__status">Saving…</div>}
       {error && <div className="image-card__status image-card__status--error">{error}</div>}
+      {preview && (
+        <div
+          className="image-card__preview"
+          data-testid="image-preview"
+          onClick={() => setPreview(false)}
+        >
+          <img src={src} alt={image.asset.fileName} />
+        </div>
+      )}
       <div
         className="image-card__resize nodrag nopan"
         data-testid="image-resize"
