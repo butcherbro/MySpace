@@ -17,7 +17,7 @@ export interface TrashItem {
 export class TrashSelectionCommand implements WorkspaceCommand {
   id: string;
   label = "Move to Trash";
-  private batchIds: string[] = [];
+  private batchId: string | null = null;
 
   constructor(
     id: string,
@@ -27,21 +27,14 @@ export class TrashSelectionCommand implements WorkspaceCommand {
   }
 
   async execute(gateway: WorkspaceGateway): Promise<void> {
-    for (const item of this.items) {
-      if (item.kind === "board_portal") {
-        const batch = await gateway.trashBoard(item.id);
-        this.batchIds.push(batch);
-      } else {
-        // note / image / embed all share the leaf-card trash path.
-        const batch = await gateway.trashNote(item.id);
-        this.batchIds.push(batch);
-      }
-    }
+    // One atomic backend call: a single transaction and a single batch id, so a
+    // partial trash can never occur and undo restores the whole selection.
+    this.batchId = await gateway.trashSelection({ items: this.items });
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
-    for (const batch of this.batchIds) {
-      await gateway.restoreTrashBatch(batch);
+    if (this.batchId) {
+      await gateway.restoreTrashBatch(this.batchId);
     }
   }
 }

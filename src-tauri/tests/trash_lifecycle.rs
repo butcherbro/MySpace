@@ -2,7 +2,9 @@
 
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::board_service;
-use myspace_lib::domain::models::{CreateChildBoardInput, Frame};
+use myspace_lib::domain::models::{
+    CreateChildBoardInput, CreateNoteInput, Frame, TrashItem, TrashSelectionInput,
+};
 use myspace_lib::domain::trash_service;
 use myspace_lib::repositories::workspace_repository;
 
@@ -122,4 +124,112 @@ fn restore_trash_batch_restores_subtree_and_portal() {
     // The portal p1 is visible again on Home.
     let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
     assert!(snapshot.cards.iter().any(|c| c.id() == "p1"));
+}
+
+#[test]
+fn trash_selection_atomically_trashes_leaf_and_board() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    // A note card on Home, and a child board (b1) with its portal.
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-sel".to_string(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+    board_service::create_child_board(&mut conn, &child_input(&home, "bsel", "psel")).unwrap();
+
+    // Trash note + board in one selection.
+    let batch = trash_service::trash_selection(
+        &mut conn,
+        &TrashSelectionInput {
+            items: vec![
+                TrashItem {
+                    id: "note-sel".to_string(),
+                    kind: "note".to_string(),
+                },
+                TrashItem {
+                    id: "bsel".to_string(),
+                    kind: "board_portal".to_string(),
+                },
+            ],
+        },
+    )
+    .unwrap();
+
+    // Both are gone from the active snapshot.
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    assert!(!snapshot
+        .cards
+        .iter()
+        .any(|c| c.id() == "note-sel" || c.id() == "psel"));
+
+    // Restore brings both back.
+    trash_service::restore_trash_batch(&mut conn, &batch).unwrap();
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    assert!(snapshot.cards.iter().any(|c| c.id() == "note-sel"));
+    assert!(snapshot.cards.iter().any(|c| c.id() == "psel"));
+}
+
+#[test]
+fn trash_selection_rolls_back_on_bad_item() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-ok".to_string(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    // First item valid, second references a missing card -> whole batch rolls back.
+    let result = trash_service::trash_selection(
+        &mut conn,
+        &TrashSelectionInput {
+            items: vec![
+                TrashItem {
+                    id: "note-ok".to_string(),
+                    kind: "note".to_string(),
+                },
+                TrashItem {
+                    id: "missing".to_string(),
+                    kind: "note".to_string(),
+                },
+            ],
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
+    ));
+
+    // The valid note must NOT have been trashed (rollback).
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    assert!(snapshot.cards.iter().any(|c| c.id() == "note-ok"));
 }

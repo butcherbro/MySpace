@@ -91,6 +91,7 @@ pub fn run() {
             commands::cards::move_cards,
             commands::trash::trash_note,
             commands::trash::trash_board,
+            commands::trash::trash_selection,
             commands::trash::restore_trash_batch,
         ])
         .run(tauri::generate_context!())

@@ -264,3 +264,21 @@ pub struct UpdateImageCaptionInput {
     pub caption_json: Value,
     pub caption_plain_text: String,
 }
+
+/// A single item to trash: a leaf card by card id, or a board (portal) by its
+/// target board id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashItem {
+    pub id: String,
+    /// One of `note` | `image` | `embed` | `board_portal`.
+    pub kind: String,
+}
+
+/// Input for atomically trashing a mixed selection (leaf cards + boards) in one
+/// transaction under a single trash batch id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashSelectionInput {
+    pub items: Vec<TrashItem>,
+}

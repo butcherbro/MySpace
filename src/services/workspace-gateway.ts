@@ -161,6 +161,15 @@ export interface UpdateImageCaptionInput {
   captionPlainText: string;
 }
 
+export interface TrashItemInput {
+  id: string;
+  kind: "note" | "image" | "embed" | "board_portal";
+}
+
+export interface TrashSelectionInput {
+  items: TrashItemInput[];
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -181,4 +190,5 @@ export interface WorkspaceGateway {
   importAsset(input: ImportAssetInput): Promise<AssetDto>;
   createImageCard(input: CreateImageCardInput): Promise<void>;
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
+  trashSelection(input: TrashSelectionInput): Promise<string>;
 }

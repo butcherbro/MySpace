@@ -10,6 +10,7 @@ import type {
   MoveCardInput,
   MoveCardsInput,
   SaveViewportInput,
+  TrashSelectionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
   WorkspaceGateway,
@@ -79,5 +80,9 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
     return invoke<void>("update_image_caption", { input });
+  }
+
+  trashSelection(input: TrashSelectionInput): Promise<string> {
+    return invoke<string>("trash_selection", { input });
   }
 }

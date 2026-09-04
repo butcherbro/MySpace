@@ -9,6 +9,7 @@ import type {
   MoveCardInput,
   MoveCardsInput,
   SaveViewportInput,
+  TrashSelectionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
   WorkspaceGateway,
@@ -220,5 +221,11 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     card.captionJson = input.captionJson;
     card.captionPlainText = input.captionPlainText;
     return Promise.resolve();
+  }
+
+  trashSelection(input: TrashSelectionInput): Promise<string> {
+    const ids = new Set(input.items.map((i) => i.id));
+    this.snapshot.cards = this.snapshot.cards.filter((c) => !ids.has(c.id) && !(c.kind === "board_portal" && ids.has(c.target.id)));
+    return Promise.resolve("batch");
   }
 }
