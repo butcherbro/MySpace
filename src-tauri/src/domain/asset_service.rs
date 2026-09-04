@@ -15,6 +15,15 @@ use crate::domain::models::{AssetDto, ImportAssetInput};
 
 use super::super::db;
 
+/// Validates that `id` is a well-formed UUID so it can never be used to build a
+/// path that escapes the asset directory (path boundary). Frontend generates
+/// UUIDv7, but this backstops any malformed input from the IPC boundary.
+fn validate_uuid(id: &str) -> Result<(), WorkspaceError> {
+    uuid::Uuid::parse_str(id)
+        .map(|_| ())
+        .map_err(|_| WorkspaceError::ConstraintViolation(format!("invalid asset id: {id}")))
+}
+
 /// Copies the source file into `asset_dir/<id>.<ext>`, records metadata in the
 /// `assets` table, and returns the stored `AssetDto`. Idempotent: an existing
 /// asset id returns the existing row without re-copying.
@@ -23,6 +32,10 @@ pub fn import_asset(
     asset_dir: &Path,
     input: &ImportAssetInput,
 ) -> Result<AssetDto, WorkspaceError> {
+    // Path boundary: the asset id is used to derive the on-disk filename, so it
+    // must be a valid UUID (never a path component like `../`).
+    validate_uuid(&input.id)?;
+
     // Idempotent replay: return the existing metadata unchanged.
     if let Some(existing) = load_asset(conn, &input.id)? {
         return Ok(existing);

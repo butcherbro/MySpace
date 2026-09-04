@@ -17,20 +17,45 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .register_uri_scheme_protocol("myspace-asset", |app, request| {
-            // `myspace-asset://localhost/<file-path>` serves an imported file
-            // from the asset directory, keyed by the relative path stored in
-            // SQLite. The path is constrained to the asset dir, so the frontend
-            // cannot reach arbitrary files through this scheme.
+            // `myspace-asset://localhost/<file-name>` serves an imported file
+            // from the asset directory. The incoming path is treated strictly as
+            // a single filename component: any `/`, `\`, `..` or empty segment
+            // is rejected, and the canonical resolved path must stay inside the
+            // asset dir (path boundary).
             let relative = request.uri().path().trim_start_matches('/').to_string();
+            if !is_safe_asset_name(&relative) {
+                return tauri::http::Response::builder()
+                    .status(400)
+                    .body(Vec::new())
+                    .unwrap();
+            }
             let asset_dir = app
                 .app_handle()
                 .path()
                 .app_data_dir()
                 .unwrap_or_default()
                 .join("assets");
-            let path = asset_dir.join(relative);
+            let path = asset_dir.join(&relative);
+            // Reject if canonicalization escapes the asset dir.
+            let canonical_asset_dir = asset_dir.canonicalize().unwrap_or(asset_dir.clone());
+            let resolved = path.canonicalize();
+            let allowed = match &resolved {
+                Ok(p) => p.starts_with(&canonical_asset_dir),
+                // A file that doesn't exist yet simply yields 404 below.
+                Err(_) => true,
+            };
+            if !allowed {
+                return tauri::http::Response::builder()
+                    .status(403)
+                    .body(Vec::new())
+                    .unwrap();
+            }
+            let mime = mime_for_asset_name(&relative);
             match std::fs::read(&path) {
-                Ok(bytes) => tauri::http::Response::builder().body(bytes).unwrap(),
+                Ok(bytes) => tauri::http::Response::builder()
+                    .header("Content-Type", mime)
+                    .body(bytes)
+                    .unwrap(),
                 Err(_) => tauri::http::Response::builder()
                     .status(404)
                     .body(Vec::new())
@@ -70,4 +95,30 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// A safe asset name is a single non-empty filename component: no path
+/// separators, no `..`, no leading dots, no control characters.
+pub fn is_safe_asset_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && name == name.trim()
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+}
+
+/// Maps a stored asset filename extension back to a Content-Type header.
+pub fn mime_for_asset_name(name: &str) -> &'static str {
+    match name.rsplit('.').next().unwrap_or("") {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "heic" => "image/heic",
+        _ => "application/octet-stream",
+    }
 }

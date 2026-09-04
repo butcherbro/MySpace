@@ -588,11 +588,12 @@ fn create_image_card_then_load_snapshot_roundtrips() {
     std::fs::create_dir_all(&asset_dir).unwrap();
     let source = asset_dir.join("photo.png");
     std::fs::write(&source, b"png-bytes").unwrap();
+    let asset_id = uuid::Uuid::now_v7().to_string();
     asset_service::import_asset(
         &mut conn,
         &asset_dir,
         &ImportAssetInput {
-            id: "img-asset-1".to_string(),
+            id: asset_id.clone(),
             source_path: source.to_string_lossy().to_string(),
             file_name: "photo.png".to_string(),
             mime_type: "image/png".to_string(),
@@ -612,7 +613,7 @@ fn create_image_card_then_load_snapshot_roundtrips() {
                 height: 200.0,
             },
             z_index: 0,
-            asset_id: "img-asset-1".to_string(),
+            asset_id: asset_id.clone(),
             caption_json: serde_json::json!({"type": "doc"}),
             caption_plain_text: "".to_string(),
         },
@@ -625,7 +626,7 @@ fn create_image_card_then_load_snapshot_roundtrips() {
             assert_eq!(img.id, "img-card-1");
             assert_eq!(img.frame.x, 50.0);
             assert_eq!(img.frame.height, 200.0);
-            assert_eq!(img.asset.id, "img-asset-1");
+            assert_eq!(img.asset.id, asset_id);
             assert_eq!(img.asset.file_name, "photo.png");
             assert_eq!(img.asset.mime_type, "image/png");
         }
@@ -676,11 +677,12 @@ fn update_image_caption_persists_and_bumps_revision() {
     std::fs::create_dir_all(&asset_dir).unwrap();
     let source = asset_dir.join("photo.png");
     std::fs::write(&source, b"png").unwrap();
+    let asset_id = uuid::Uuid::now_v7().to_string();
     asset_service::import_asset(
         &mut conn,
         &asset_dir,
         &ImportAssetInput {
-            id: "cap-asset-1".to_string(),
+            id: asset_id.clone(),
             source_path: source.to_string_lossy().to_string(),
             file_name: "photo.png".to_string(),
             mime_type: "image/png".to_string(),
@@ -700,7 +702,7 @@ fn update_image_caption_persists_and_bumps_revision() {
                 height: 200.0,
             },
             z_index: 0,
-            asset_id: "cap-asset-1".to_string(),
+            asset_id,
             caption_json: serde_json::json!({ "type": "doc" }),
             caption_plain_text: "".to_string(),
         },
