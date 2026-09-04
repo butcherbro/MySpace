@@ -112,6 +112,30 @@ export function CanvasAdapter({
     const selected = selectedIdsRef.current;
     const ids = selected.has(node.id) && selected.size > 1 ? [...selected] : [node.id];
 
+    // Drop onto a portal: if a single card's center lands inside a board portal,
+    // move it to that board instead of repositioning on the current board.
+    if (ids.length === 1) {
+      const dragged = nodesRef.current.find((n) => n.id === ids[0]);
+      const source = cards.find((c) => c.id === ids[0]);
+      if (dragged && source && source.kind !== "board_portal") {
+        const cx = dragged.position.x + (dragged.width ?? source.frame.width) / 2;
+        const cy = dragged.position.y + (dragged.height ?? source.frame.height) / 2;
+        const portal = cards.find((c) => {
+          if (c.kind !== "board_portal" || !c.targetBoardId) return false;
+          return (
+            cx >= c.frame.x &&
+            cx <= c.frame.x + c.frame.width &&
+            cy >= c.frame.y &&
+            cy <= c.frame.y + c.frame.height
+          );
+        });
+        if (portal?.targetBoardId) {
+          events.onCardDroppedOnPortal?.(ids[0], portal.targetBoardId);
+          return;
+        }
+      }
+    }
+
     const moved = ids.map((id) => {
       const movedNode = nodesRef.current.find((n) => n.id === id);
       const source = cards.find((c) => c.id === id);

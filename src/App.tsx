@@ -208,8 +208,8 @@ function App() {
   const handleCreateImage = useCallback(async () => {
     const picked = await pickImageFile();
     if (!picked) return;
-    await importImageCard(picked.path, picked.fileName, picked.mimeType, 80, 80 + state.cards.length * 24);
-  }, [importImageCard, state.cards.length]);
+    await importImageCard(picked.path, picked.fileName, picked.mimeType, 80, 80 + cardsRef.current.length * 24);
+  }, [importImageCard]);
 
   // Native drag-drop: import dropped image files at the current cursor position.
   useEffect(() => {
@@ -310,6 +310,7 @@ function App() {
     frame: c.frame,
     zIndex: c.zIndex,
     revision: c.revision,
+    targetBoardId: c.kind === "board_portal" ? c.target.id : undefined,
   }));
 
   const handleCardsMoved = useCallback(
@@ -354,6 +355,31 @@ function App() {
         });
     },
     [idGenerator, dispatcher],
+  );
+
+  // Moving a card onto a board portal: change its board. After the move the
+  // card no longer belongs to the current projection, so remove it from the
+  // local state (the target board now owns it).
+  const handleMoveCardToBoard = useCallback(
+    (cardId: string, targetBoardId: string) => {
+      const card = cardsRef.current.find((c) => c.id === cardId);
+      if (!card) return;
+      void queueRef.current
+        .run(async () => {
+          const current = cardsRef.current.find((c) => c.id === cardId);
+          if (!current) return;
+          await gateway.moveCardToBoard({
+            id: cardId,
+            expectedRevision: current.revision,
+            targetBoardId,
+          });
+          dispatch({ type: "cardsRemoved", ids: [cardId] });
+        })
+        .catch((err) => {
+          dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
+        });
+    },
+    [gateway],
   );
 
   const handleDeleteSelection = useCallback(async () => {
@@ -660,6 +686,7 @@ function App() {
               onCardActivated: handleCardActivated,
               onCardOpened: handleCardOpened,
               onCardContextMenu: handleRequestContextMenu,
+              onCardDroppedOnPortal: handleMoveCardToBoard,
             }}
             renderCard={(card) => {
               const full = state.cards.find((c) => c.id === card.id);

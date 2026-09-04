@@ -27,6 +27,8 @@ export interface CanvasCard {
    * changes (which bump revision) and rebuild its node contents accordingly.
    */
   revision: number;
+  /** For board portals, the id of the board they lead to. */
+  targetBoardId?: string;
 }
 
 /** A point in board-space coordinates. */
@@ -96,4 +98,6 @@ export interface CanvasEvents {
   onCardOpened?(id: string): void;
   /** A card was right-clicked (request a context menu). Coordinates are screen-space. */
   onCardContextMenu?(id: string, x: number, y: number): void;
+  /** A card was dropped onto a board portal (move to that board). */
+  onCardDroppedOnPortal?(cardId: string, targetBoardId: string): void;
 }

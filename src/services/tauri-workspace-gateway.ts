@@ -9,6 +9,7 @@ import type {
   ImportAssetInput,
   MoveCardInput,
   MoveCardsInput,
+  MoveCardToBoardInput,
   SaveViewportInput,
   TrashSelectionInput,
   UpdateImageCaptionInput,
@@ -44,6 +45,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   moveCards(input: MoveCardsInput): Promise<void> {
     return invoke<void>("move_cards", { input });
+  }
+
+  moveCardToBoard(input: MoveCardToBoardInput): Promise<void> {
+    return invoke<void>("move_card_to_board", { input });
   }
 
   saveViewport(input: SaveViewportInput): Promise<void> {
