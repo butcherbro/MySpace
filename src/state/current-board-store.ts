@@ -66,12 +66,20 @@ export function reducer(
     case "loading":
       return { ...state, loading: true, error: null };
 
-    case "snapshotLoaded":
+    case "snapshotLoaded": {
+      // Clamp the loaded viewport to the board origin (top-left). A previously
+      // persisted pan-up/left must never reopen the board scrolled away from its
+      // content; the board grows right/down only.
+      const viewport: CanvasViewport = {
+        x: Math.max(0, action.viewport.x),
+        y: Math.max(0, action.viewport.y),
+        zoom: action.viewport.zoom,
+      };
       return {
         ...state,
         board: action.board,
         breadcrumbs: action.breadcrumbs,
-        viewport: action.viewport,
+        viewport,
         viewportRevision: action.viewportRevision,
         cards: action.cards,
         selection: [],
@@ -79,6 +87,7 @@ export function reducer(
         loading: false,
         error: null,
       };
+    }
 
     case "cardAdded":
       return { ...state, cards: [...state.cards, action.card] };

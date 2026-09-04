@@ -409,7 +409,15 @@ function App() {
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleViewportChanged = useCallback(
     (e: { viewport: CanvasViewport }) => {
-      dispatch({ type: "viewportChanged", viewport: e.viewport });
+      // The board's origin is its top-left corner; content grows only right and
+      // down. Clamp the viewport to non-negative x/y so a pan-up/left can never
+      // persist a state that hides content beyond the origin on the next open.
+      const clamped: CanvasViewport = {
+        x: Math.max(0, e.viewport.x),
+        y: Math.max(0, e.viewport.y),
+        zoom: e.viewport.zoom,
+      };
+      dispatch({ type: "viewportChanged", viewport: clamped });
       if (viewportTimer.current) clearTimeout(viewportTimer.current);
       viewportTimer.current = setTimeout(() => {
         if (!board) return;
@@ -417,9 +425,9 @@ function App() {
           .saveViewport({
             boardId: board.id,
             expectedRevision: viewportRevisionRef.current,
-            x: e.viewport.x,
-            y: e.viewport.y,
-            zoom: e.viewport.zoom,
+            x: clamped.x,
+            y: clamped.y,
+            zoom: clamped.zoom,
           })
           .then(() => {
             dispatch({ type: "viewportSaved", revision: viewportRevisionRef.current + 1 });

@@ -98,6 +98,30 @@ describe("current board reducer", () => {
     expect(state.selection).toEqual([]);
   });
 
+  it("clamps a persisted negative viewport back to the board origin", () => {
+    const state = reducer(initialState, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: -240, y: -80, zoom: 1 },
+      viewportRevision: 1,
+      cards: [note("a", 40)],
+    });
+    expect(state.viewport).toEqual({ x: 0, y: 0, zoom: 1 });
+  });
+
+  it("keeps a positive viewport unchanged on load", () => {
+    const state = reducer(initialState, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 120, y: 300, zoom: 1.5 },
+      viewportRevision: 1,
+      cards: [note("a", 40)],
+    });
+    expect(state.viewport).toEqual({ x: 120, y: 300, zoom: 1.5 });
+  });
+
   it("records errors and clears them", () => {
     let state: CurrentBoardState = reducer(initialState, { type: "failed", message: "boom" });
     expect(state.error).toBe("boom");
