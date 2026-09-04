@@ -7,7 +7,8 @@ use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    CreateImageCardInput, CreateNoteInput, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
+    CreateImageCardInput, CreateNoteInput, MoveCardsInput, UpdateCardFrameInput,
+    UpdateImageCaptionInput, UpdateNoteInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -42,6 +43,18 @@ pub fn update_note(db: DbState<'_>, input: UpdateNoteInput) -> Result<(), Worksp
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::update_note(&mut conn, &input)
+}
+
+/// Updates an image card's caption, bumping its revision.
+#[tauri::command]
+pub fn update_image_caption(
+    db: DbState<'_>,
+    input: UpdateImageCaptionInput,
+) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::update_image_caption(&mut conn, &input)
 }
 
 /// Moves/resizes a card (note or portal) with an optimistic revision guard.

@@ -61,6 +61,7 @@ pub fn run() {
             commands::cards::create_note,
             commands::cards::create_image_card,
             commands::cards::update_note,
+            commands::cards::update_image_caption,
             commands::cards::move_card,
             commands::cards::move_cards,
             commands::trash::trash_note,

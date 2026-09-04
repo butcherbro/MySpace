@@ -10,6 +10,7 @@ import type {
   MoveCardInput,
   MoveCardsInput,
   SaveViewportInput,
+  UpdateImageCaptionInput,
   UpdateNoteInput,
   WorkspaceGateway,
 } from "./workspace-gateway";
@@ -74,5 +75,9 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   createImageCard(input: CreateImageCardInput): Promise<void> {
     return invoke<void>("create_image_card", { input });
+  }
+
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
+    return invoke<void>("update_image_caption", { input });
   }
 }

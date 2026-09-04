@@ -154,6 +154,13 @@ export interface CreateImageCardInput {
   captionPlainText: string;
 }
 
+export interface UpdateImageCaptionInput {
+  id: string;
+  expectedRevision: number;
+  captionJson: unknown;
+  captionPlainText: string;
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -173,4 +180,5 @@ export interface WorkspaceGateway {
   restoreTrashBatch(batchId: string): Promise<void>;
   importAsset(input: ImportAssetInput): Promise<AssetDto>;
   createImageCard(input: CreateImageCardInput): Promise<void>;
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
 }

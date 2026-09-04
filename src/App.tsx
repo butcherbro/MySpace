@@ -205,8 +205,6 @@ function App() {
         // preserved as-is — validation is protective, not a source of user-facing
         // save failures.
         if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
-          // eslint-disable-next-line no-console
-          console.warn("[note-document] refusing to persist malformed document", document);
           throw new Error("Note content is not a valid document");
         }
         const plainText = documentToPlainText(document);
@@ -222,6 +220,38 @@ function App() {
           revision: note.revision + 1,
           documentJson: document,
           plainText,
+        });
+      }).catch((e) => {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        throw e;
+      });
+    },
+    [gateway],
+  );
+
+  const handleUpdateImageCaption = useCallback(
+    (id: string, document: unknown): Promise<void> => {
+      return queueRef.current.run(async () => {
+        const image = cardsRef.current.find(
+          (c): c is ImageCardDto => c.kind === "image" && c.id === id,
+        );
+        if (!image) return;
+        if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
+          throw new Error("Image caption is not a valid document");
+        }
+        const captionPlainText = documentToPlainText(document);
+        await gateway.updateImageCaption({
+          id,
+          expectedRevision: image.revision,
+          captionJson: document,
+          captionPlainText,
+        });
+        dispatch({
+          type: "imageCaptionUpdated",
+          id,
+          revision: image.revision + 1,
+          captionJson: document,
+          captionPlainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
@@ -594,6 +624,7 @@ function App() {
                 editing: state.editingCardId === full.id,
                 onDeactivate: handleEditDeactivate,
                 onUpdateNote: handleUpdateNote,
+                onUpdateImageCaption: handleUpdateImageCaption,
                 onOpenBoard: handleOpenBoard,
                 onRenameBoard: handleRenameBoard,
                 onContextMenu: handleRequestContextMenu,

@@ -45,7 +45,10 @@ fn applied_versions(conn: &Connection) -> Result<Vec<i64>> {
     rows.collect()
 }
 
-/// Applies any pending migrations in a single transaction.
+/// Applies any pending migrations. Foreign keys are temporarily disabled on
+/// the connection (outside any transaction, where the pragma actually takes
+/// effect) so no-op table-recreation migrations (e.g. widening a CHECK) can drop
+/// and rebuild `cards` without tripping `FOREIGN KEY` from child tables.
 pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     ensure_migrations_table(conn)?;
 
@@ -56,6 +59,10 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
             continue;
         }
 
+        // `PRAGMA foreign_keys` is a no-op inside a transaction, so it must be
+        // set here, before the migration's own transaction begins.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+
         let tx: Transaction = conn.transaction()?;
         tx.execute_batch(migration.sql)?;
         tx.execute(
@@ -63,6 +70,8 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
             rusqlite::params![migration.version, migration.name, now_millis(),],
         )?;
         tx.commit()?;
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     }
 
     Ok(())

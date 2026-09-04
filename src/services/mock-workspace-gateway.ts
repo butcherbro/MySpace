@@ -9,6 +9,7 @@ import type {
   MoveCardInput,
   MoveCardsInput,
   SaveViewportInput,
+  UpdateImageCaptionInput,
   UpdateNoteInput,
   WorkspaceGateway,
 } from "./workspace-gateway";
@@ -202,6 +203,22 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       captionPlainText: input.captionPlainText,
     };
     this.snapshot.cards.push(card);
+    return Promise.resolve();
+  }
+
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
+    const card = this.snapshot.cards.find(
+      (c) => c.kind === "image" && c.id === input.id,
+    );
+    if (!card || card.kind !== "image") {
+      return Promise.reject(new Error(`image not found: ${input.id}`));
+    }
+    if (card.revision !== input.expectedRevision) {
+      return Promise.reject(new Error(`stale revision for ${input.id}`));
+    }
+    card.revision += 1;
+    card.captionJson = input.captionJson;
+    card.captionPlainText = input.captionPlainText;
     return Promise.resolve();
   }
 }

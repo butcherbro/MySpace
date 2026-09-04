@@ -9,7 +9,8 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AssetDto, BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto,
     CreateImageCardInput, CreateNoteInput, Frame, ImageCardDto, MoveCardsInput, NoteCardDto,
-    PortalTarget, UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput, Viewport,
+    PortalTarget, UpdateCardFrameInput, UpdateImageCaptionInput, UpdateNoteInput,
+    UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -314,6 +315,53 @@ pub fn update_note(conn: &mut Connection, input: &UpdateNoteInput) -> Result<(),
     tx.execute(
         "UPDATE note_cards SET document_json = ?1, plain_text = ?2 WHERE card_id = ?3",
         params![document_json, input.plain_text, input.id],
+    )?;
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// Updates an image card's caption, bumping its revision with an optimistic
+/// `expected_revision` guard (mirrors `update_note`).
+pub fn update_image_caption(
+    conn: &mut Connection,
+    input: &UpdateImageCaptionInput,
+) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+    let caption_json = serde_json::to_string(&input.caption_json)
+        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+
+    let tx = conn.transaction()?;
+
+    let changed = tx.execute(
+        "UPDATE cards SET revision = revision + 1, updated_at = ?1
+         WHERE id = ?2 AND revision = ?3 AND kind = 'image'",
+        params![now, input.id, input.expected_revision],
+    )?;
+
+    if changed == 0 {
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(WorkspaceError::NotFound(input.id.clone()));
+        }
+        let actual: i64 = tx.query_row(
+            "SELECT revision FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_revision,
+            actual,
+        });
+    }
+
+    tx.execute(
+        "UPDATE image_cards SET caption_json = ?1, caption_plain_text = ?2 WHERE card_id = ?3",
+        params![caption_json, input.caption_plain_text, input.id],
     )?;
 
     tx.commit()?;

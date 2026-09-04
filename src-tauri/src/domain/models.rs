@@ -253,3 +253,14 @@ pub struct CreateImageCardInput {
     pub caption_json: Value,
     pub caption_plain_text: String,
 }
+
+/// Input for updating an image card's caption, bumping its revision with an
+/// optimistic guard (mirrors `UpdateNoteInput`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateImageCaptionInput {
+    pub id: String,
+    pub expected_revision: i64,
+    pub caption_json: Value,
+    pub caption_plain_text: String,
+}

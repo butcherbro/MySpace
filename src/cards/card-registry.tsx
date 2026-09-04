@@ -17,6 +17,8 @@ export interface CardRenderContext {
   onDeactivate: () => void;
   /** Persist note content as an authoritative document. */
   onUpdateNote: (id: string, document: unknown) => Promise<void>;
+  /** Persist an image card's caption. */
+  onUpdateImageCaption: (id: string, document: unknown) => Promise<void>;
   /** Open a board portal. */
   onOpenBoard: (boardId: string) => void;
   /** Rename a board. */
@@ -43,7 +45,13 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
   }
 
   if (card.kind === "image") {
-    return <ImageCard asset={card.asset} captionPlainText={card.captionPlainText} />;
+    return (
+      <ImageCard
+        image={card}
+        onUpdate={ctx.onUpdateImageCaption}
+        onContextMenu={ctx.onContextMenu}
+      />
+    );
   }
 
   return (

@@ -665,3 +665,67 @@ fn create_image_card_with_unknown_asset_is_rejected() {
 
     assert_eq!(card_count(&conn), 0, "no orphan cards row on failed insert");
 }
+
+#[test]
+fn update_image_caption_persists_and_bumps_revision() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    let asset_dir = std::env::temp_dir().join(format!("myspace-img-cap-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&asset_dir).unwrap();
+    let source = asset_dir.join("photo.png");
+    std::fs::write(&source, b"png").unwrap();
+    asset_service::import_asset(
+        &mut conn,
+        &asset_dir,
+        &ImportAssetInput {
+            id: "cap-asset-1".to_string(),
+            source_path: source.to_string_lossy().to_string(),
+            file_name: "photo.png".to_string(),
+            mime_type: "image/png".to_string(),
+        },
+    )
+    .unwrap();
+
+    workspace_repository::create_image_card(
+        &mut conn,
+        &CreateImageCardInput {
+            id: "cap-card-1".to_string(),
+            board_id: board_id.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            z_index: 0,
+            asset_id: "cap-asset-1".to_string(),
+            caption_json: serde_json::json!({ "type": "doc" }),
+            caption_plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    workspace_repository::update_image_caption(
+        &mut conn,
+        &myspace_lib::domain::models::UpdateImageCaptionInput {
+            id: "cap-card-1".to_string(),
+            expected_revision: 1,
+            caption_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello caption"}]}]}),
+            caption_plain_text: "hello caption".to_string(),
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    match &snapshot.cards[0] {
+        myspace_lib::domain::models::CardDto::Image(img) => {
+            assert_eq!(img.caption_plain_text, "hello caption");
+            assert_eq!(img.revision, 2);
+        }
+        other => panic!("expected image card, got {other:?}"),
+    }
+
+    std::fs::remove_dir_all(&asset_dir).ok();
+}

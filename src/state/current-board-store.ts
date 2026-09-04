@@ -34,6 +34,7 @@ export type CurrentBoardAction =
     }
   | { type: "cardAdded"; card: CardDto }
   | { type: "cardContentUpdated"; id: string; revision: number; documentJson: unknown; plainText: string }
+  | { type: "imageCaptionUpdated"; id: string; revision: number; captionJson: unknown; captionPlainText: string }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardsRemoved"; ids: string[] }
   | { type: "boardRenamed"; boardId: string; title: string }
@@ -92,6 +93,21 @@ export function reducer(
                 revision: action.revision,
                 documentJson: action.documentJson,
                 plainText: action.plainText,
+              }
+            : c,
+        ),
+      };
+
+    case "imageCaptionUpdated":
+      return {
+        ...state,
+        cards: state.cards.map((c) =>
+          c.id === action.id && c.kind === "image"
+            ? {
+                ...c,
+                revision: action.revision,
+                captionJson: action.captionJson,
+                captionPlainText: action.captionPlainText,
               }
             : c,
         ),

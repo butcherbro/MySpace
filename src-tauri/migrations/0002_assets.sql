@@ -37,9 +37,9 @@ CREATE TABLE embed_cards (
 );
 
 -- Widen the card kind whitelist. SQLite has no ALTER CHECK, so recreate the
--- table preserving existing rows.
-PRAGMA foreign_keys = OFF;
-
+-- table preserving existing rows. Foreign keys are disabled on the connection
+-- (outside this statement) by the migration runner, so DROP TABLE cards does
+-- not trip FK from note_cards/board_portal_cards.
 CREATE TABLE cards_new (
     id TEXT PRIMARY KEY,
     board_id TEXT NOT NULL REFERENCES boards(id),
@@ -61,8 +61,6 @@ SELECT id, board_id, kind, x, y, width, height, z_index, revision, created_at, u
 
 DROP TABLE cards;
 ALTER TABLE cards_new RENAME TO cards;
-
-PRAGMA foreign_keys = ON;
 
 CREATE INDEX idx_cards_board_active
     ON cards(board_id, deleted_at, z_index);

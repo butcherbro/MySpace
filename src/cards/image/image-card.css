@@ -34,4 +34,22 @@
   white-space: pre-wrap;
   word-break: break-word;
   border-top: 1px solid #e0e0e0;
+  min-height: 1.4em;
+}
+
+.image-card__caption-display {
+  min-height: 1.4em;
+  cursor: text;
+}
+
+.image-card__status {
+  position: absolute;
+  top: -20px;
+  right: 0;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.image-card__status--error {
+  color: #dc2626;
 }
