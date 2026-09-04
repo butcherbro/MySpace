@@ -265,6 +265,16 @@ pub struct UpdateImageCaptionInput {
     pub caption_plain_text: String,
 }
 
+/// Input for moving a card to a different board (e.g. dropping a note onto a
+/// board portal), bumping its revision with an optimistic guard.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCardToBoardInput {
+    pub id: String,
+    pub expected_revision: i64,
+    pub target_board_id: String,
+}
+
 /// A single item to trash: a leaf card by card id, or a board (portal) by its
 /// target board id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -731,3 +731,106 @@ fn update_image_caption_persists_and_bumps_revision() {
 
     std::fs::remove_dir_all(&asset_dir).ok();
 }
+
+#[test]
+fn move_card_to_board_changes_board_and_resets_position() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    myspace_lib::domain::board_service::create_child_board(
+        &mut conn,
+        &myspace_lib::domain::models::CreateChildBoardInput {
+            parent_board_id: home.clone(),
+            board_id: "target-b".to_string(),
+            portal_card_id: "target-p".to_string(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 112.0,
+            },
+            title: "Target".to_string(),
+        },
+    )
+    .unwrap();
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-mv".to_string(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 500.0,
+                y: 500.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    workspace_repository::move_card_to_board(
+        &mut conn,
+        &myspace_lib::domain::models::MoveCardToBoardInput {
+            id: "note-mv".to_string(),
+            expected_revision: 1,
+            target_board_id: "target-b".to_string(),
+        },
+    )
+    .unwrap();
+
+    let home_snap = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    assert!(!home_snap.cards.iter().any(|c| c.id() == "note-mv"));
+
+    let target_snap = workspace_repository::load_board_snapshot(&conn, "target-b").unwrap();
+    match target_snap.cards.iter().find(|c| c.id() == "note-mv") {
+        Some(myspace_lib::domain::models::CardDto::Note(n)) => {
+            assert_eq!(n.frame.x, 40.0);
+            assert_eq!(n.frame.y, 40.0);
+            assert_eq!(n.revision, 2);
+        }
+        other => panic!("expected moved note on target, got {other:?}"),
+    }
+}
+
+#[test]
+fn move_card_to_board_rejects_unknown_target() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-mv2".to_string(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    let result = workspace_repository::move_card_to_board(
+        &mut conn,
+        &myspace_lib::domain::models::MoveCardToBoardInput {
+            id: "note-mv2".to_string(),
+            expected_revision: 1,
+            target_board_id: "does-not-exist".to_string(),
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
+    ));
+}

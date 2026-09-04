@@ -7,8 +7,8 @@ use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    CreateImageCardInput, CreateNoteInput, MoveCardsInput, UpdateCardFrameInput,
-    UpdateImageCaptionInput, UpdateNoteInput,
+    CreateImageCardInput, CreateNoteInput, MoveCardToBoardInput, MoveCardsInput,
+    UpdateCardFrameInput, UpdateImageCaptionInput, UpdateNoteInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -73,4 +73,16 @@ pub fn move_cards(db: DbState<'_>, input: MoveCardsInput) -> Result<(), Workspac
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::move_cards(&mut conn, &input)
+}
+
+/// Moves a leaf card to a different board (drop onto a board portal).
+#[tauri::command]
+pub fn move_card_to_board(
+    db: DbState<'_>,
+    input: MoveCardToBoardInput,
+) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::move_card_to_board(&mut conn, &input)
 }

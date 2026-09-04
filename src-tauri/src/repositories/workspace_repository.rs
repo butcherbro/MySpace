@@ -8,9 +8,9 @@ use rusqlite::{params, Connection};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AssetDto, BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto,
-    CreateImageCardInput, CreateNoteInput, Frame, ImageCardDto, MoveCardsInput, NoteCardDto,
-    PortalTarget, UpdateCardFrameInput, UpdateImageCaptionInput, UpdateNoteInput,
-    UpdateViewportInput, Viewport,
+    CreateImageCardInput, CreateNoteInput, Frame, ImageCardDto, MoveCardToBoardInput,
+    MoveCardsInput, NoteCardDto, PortalTarget, UpdateCardFrameInput, UpdateImageCaptionInput,
+    UpdateNoteInput, UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -553,5 +553,62 @@ pub fn create_image_card(
     )?;
     tx.commit()?;
 
+    Ok(())
+}
+
+/// Moves a leaf card (note/image/embed) to a different board, resetting its
+/// position to the target board's origin and bumping its revision with an
+/// optimistic `expected_revision` guard. Used to drop a card onto a board portal.
+pub fn move_card_to_board(
+    conn: &mut Connection,
+    input: &MoveCardToBoardInput,
+) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+
+    // The target board must exist and not be trashed.
+    let target_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
+        [input.target_board_id.as_str()],
+        |r| r.get(0),
+    )?;
+    if target_exists == 0 {
+        return Err(WorkspaceError::NotFound(input.target_board_id.clone()));
+    }
+
+    let tx = conn.transaction()?;
+
+    let changed = tx.execute(
+        "UPDATE cards
+         SET board_id = ?1, x = 40, y = 40, revision = revision + 1, updated_at = ?2
+         WHERE id = ?3 AND revision = ?4 AND kind IN ('note', 'image', 'embed')",
+        params![
+            input.target_board_id,
+            now,
+            input.id,
+            input.expected_revision
+        ],
+    )?;
+
+    if changed == 0 {
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(WorkspaceError::NotFound(input.id.clone()));
+        }
+        let actual: i64 = tx.query_row(
+            "SELECT revision FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_revision,
+            actual,
+        });
+    }
+
+    tx.commit()?;
     Ok(())
 }

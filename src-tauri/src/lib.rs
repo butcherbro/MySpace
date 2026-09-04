@@ -89,6 +89,7 @@ pub fn run() {
             commands::cards::update_image_caption,
             commands::cards::move_card,
             commands::cards::move_cards,
+            commands::cards::move_card_to_board,
             commands::trash::trash_note,
             commands::trash::trash_board,
             commands::trash::trash_selection,
