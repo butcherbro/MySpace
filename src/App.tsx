@@ -394,12 +394,12 @@ function App() {
 
   const handleResizeNote = useCallback(
     (id: string, width: number, height: number) => {
-      const note = cardsRef.current.find((c) => c.kind === "note" && c.id === id);
-      if (!note || note.kind !== "note") return;
+      const card = cardsRef.current.find((c) => c.id === id);
+      if (!card) return;
       void queueRef.current
         .run(async () => {
-          const current = cardsRef.current.find((c) => c.kind === "note" && c.id === id);
-          if (!current || current.kind !== "note") return;
+          const current = cardsRef.current.find((c) => c.id === id);
+          if (!current) return;
           const frame = { ...current.frame, width, height };
           await gateway.moveCard({
             id,
@@ -629,6 +629,7 @@ function App() {
                 onRenameBoard: handleRenameBoard,
                 onContextMenu: handleRequestContextMenu,
                 onResizeNote: handleResizeNote,
+                onResizeImage: handleResizeNote,
               });
             }}
           />

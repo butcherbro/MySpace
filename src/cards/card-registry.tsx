@@ -27,6 +27,8 @@ export interface CardRenderContext {
   onContextMenu: (cardId: string, x: number, y: number) => void;
   /** Persist a manual resize (width/height). */
   onResizeNote: (id: string, width: number, height: number) => void;
+  /** Persist a manual resize for image cards. */
+  onResizeImage: (id: string, width: number, height: number) => void;
 }
 
 /** Renders a persisted card into the canvas. */
@@ -49,6 +51,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
       <ImageCard
         image={card}
         onUpdate={ctx.onUpdateImageCaption}
+        onResize={ctx.onResizeImage}
         onContextMenu={ctx.onContextMenu}
       />
     );

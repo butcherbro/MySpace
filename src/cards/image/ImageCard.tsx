@@ -7,16 +7,18 @@ interface ImageCardProps {
   image: ImageCardDto;
   /** Persist the caption as an authoritative document. Rejects on failure. */
   onUpdate: (id: string, document: unknown) => Promise<void>;
+  /** Persist a manual resize (width/height in CSS px). */
+  onResize: (id: string, width: number, height: number) => void;
   /** Request a context menu (right-click). */
   onContextMenu: (cardId: string, x: number, y: number) => void;
 }
 
 /**
  * An image card: a static image with an editable rich-text caption beneath it.
- * Double-clicking the caption opens it for editing (same NoteEditor/commit
- * pipeline as a note); single-click keeps the card draggable.
+ * Double-clicking the caption opens it for editing; the corner handle resizes
+ * the card (same pipeline as a note).
  */
-export function ImageCard({ image, onUpdate, onContextMenu }: ImageCardProps) {
+export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCardProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +27,11 @@ export function ImageCard({ image, onUpdate, onContextMenu }: ImageCardProps) {
   const dirtyRef = useRef(false);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
+
+  const appliedWidth = draftSize?.width ?? image.frame.width;
+  const appliedHeight = draftSize?.height ?? image.frame.height;
   const src = `myspace-asset://localhost/${image.asset.filePath}`;
 
   const commit = useCallback(
@@ -77,10 +84,44 @@ export function ImageCard({ image, onUpdate, onContextMenu }: ImageCardProps) {
     };
   }, []);
 
+  function onResizePointerDown(e: React.PointerEvent) {
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    resizeStart.current = {
+      x: e.clientX,
+      y: e.clientY,
+      w: image.frame.width,
+      h: image.frame.height,
+    };
+    window.addEventListener("pointermove", onResizeMove);
+    window.addEventListener("pointerup", onResizeUp);
+  }
+
+  function onResizeMove(e: PointerEvent) {
+    if (!resizeStart.current) return;
+    const dx = e.clientX - resizeStart.current.x;
+    const dy = e.clientY - resizeStart.current.y;
+    setDraftSize({
+      width: Math.max(120, resizeStart.current.w + dx),
+      height: Math.max(48, resizeStart.current.h + dy),
+    });
+  }
+
+  function onResizeUp() {
+    resizeStart.current = null;
+    window.removeEventListener("pointermove", onResizeMove);
+    window.removeEventListener("pointerup", onResizeUp);
+    if (draftSize) {
+      onResize(image.id, draftSize.width, draftSize.height);
+      setDraftSize(null);
+    }
+  }
+
   return (
     <div
       className="image-card"
       data-testid="image-card"
+      style={{ width: appliedWidth, height: appliedHeight }}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -105,11 +146,18 @@ export function ImageCard({ image, onUpdate, onContextMenu }: ImageCardProps) {
             onBlur={handleBlur}
           />
         ) : (
-          <div className="image-card__caption-display">{image.captionPlainText || "Add caption…"}</div>
+          <div className="image-card__caption-display">
+            {image.captionPlainText || "Add caption…"}
+          </div>
         )}
       </div>
       {saving && <div className="image-card__status">Saving…</div>}
       {error && <div className="image-card__status image-card__status--error">{error}</div>}
+      <div
+        className="image-card__resize nodrag nopan"
+        data-testid="image-resize"
+        onPointerDown={onResizePointerDown}
+      />
     </div>
   );
 }

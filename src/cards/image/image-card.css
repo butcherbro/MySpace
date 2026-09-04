@@ -53,3 +53,24 @@
 .image-card__status--error {
   color: #dc2626;
 }
+
+.image-card__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  border-radius: 0 0 8px 0;
+}
+
+.image-card__resize::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid #b7bdb9;
+  border-bottom: 2px solid #b7bdb9;
+}
