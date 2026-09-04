@@ -164,6 +164,10 @@ function App() {
     async (sourcePath: string, fileName: string, mimeType: string, boardX: number, boardY: number) => {
       const currentBoard = boardRef.current;
       if (!currentBoard) return;
+      // Guard against NaN/Infinity (e.g. screen->board conversion before the
+      // canvas instance is ready) — such values serialize to null/error over IPC.
+      const x = Number.isFinite(boardX) ? boardX : 80;
+      const y = Number.isFinite(boardY) ? boardY : 80;
       const assetId = idGenerator.nextId();
       const cardId = idGenerator.nextId();
       try {
@@ -177,7 +181,7 @@ function App() {
           kind: "image",
           id: cardId,
           boardId: currentBoard.id,
-          frame: { x: boardX, y: boardY, width: 320, height: 240 },
+          frame: { x, y, width: 320, height: 240 },
           zIndex: cardsRef.current.length,
           revision: 1,
           asset,
@@ -212,9 +216,17 @@ function App() {
     return subscribeToImageDrops((files, x, y) => {
       const screenToFlow = screenToFlowRef.current;
       for (const file of files) {
-        const flow = screenToFlow ? screenToFlow(x, y) : { x: 80, y: 80 };
+        let flowX = 80;
+        let flowY = 80 + cardsRef.current.length * 24;
+        if (screenToFlow && Number.isFinite(x) && Number.isFinite(y)) {
+          const flow = screenToFlow(x, y);
+          if (Number.isFinite(flow.x) && Number.isFinite(flow.y)) {
+            flowX = flow.x;
+            flowY = flow.y;
+          }
+        }
         // Center the new card under the cursor.
-        void importImageCard(file.path, file.fileName, file.mimeType, flow.x - 160, flow.y - 120);
+        void importImageCard(file.path, file.fileName, file.mimeType, flowX - 160, flowY - 120);
       }
     });
   }, [importImageCard]);
