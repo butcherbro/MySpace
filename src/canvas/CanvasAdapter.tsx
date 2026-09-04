@@ -27,6 +27,8 @@ interface CanvasAdapterProps {
   renderCard: (card: CanvasCard) => ReactNode;
   /** The id of the card currently being edited, if any (forces node rebuild). */
   editingCardId?: string | null;
+  /** Exposes a screen->board coordinate converter (used for file drops). */
+  onScreenToFlowReady?: (fn: (x: number, y: number) => { x: number; y: number }) => void;
 }
 
 type CardNodeData = { content: ReactNode };
@@ -61,6 +63,7 @@ export function CanvasAdapter({
   events,
   renderCard,
   editingCardId = null,
+  onScreenToFlowReady,
 }: CanvasAdapterProps) {
   const [nodes, setNodes] = useState<Node<CardNodeData>[]>(() =>
     cards.map((c) => cardToNode(c, renderCard)),
@@ -219,6 +222,9 @@ export function CanvasAdapter({
         onSelectionContextMenu={handleSelectionContextMenu}
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={handleMoveEnd}
+        onInit={(instance) => {
+          onScreenToFlowReady?.((x, y) => instance.screenToFlowPosition({ x, y }));
+        }}
         minZoom={0.1}
         maxZoom={4}
         proOptions={{ hideAttribution: true }}

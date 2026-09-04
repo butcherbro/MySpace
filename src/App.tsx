@@ -15,6 +15,7 @@ import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickImageFile } from "./services/asset-picker";
+import { subscribeToImageDrops } from "./services/drag-drop";
 import type { BoardPortalDto, ImageCardDto, NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
 import {
   initialState,
@@ -44,6 +45,13 @@ function App() {
   useEffect(() => {
     cardsRef.current = state.cards;
   }, [state.cards]);
+
+  // Screen->board coordinate converter, populated by CanvasAdapter on init.
+  const screenToFlowRef = useRef<((x: number, y: number) => { x: number; y: number }) | null>(null);
+  const boardRef = useRef(board);
+  useEffect(() => {
+    boardRef.current = board;
+  }, [board]);
 
   const viewportRevisionRef = useRef(viewportRevision);
   useEffect(() => {
@@ -150,45 +158,66 @@ function App() {
     }
   }, [board, dispatcher, idGenerator, state.cards.length]);
 
+  // Imports an image and creates a card at the given board coordinates. Shared
+  // by the file picker (button) and native drag-drop.
+  const importImageCard = useCallback(
+    async (sourcePath: string, fileName: string, mimeType: string, boardX: number, boardY: number) => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard) return;
+      const assetId = idGenerator.nextId();
+      const cardId = idGenerator.nextId();
+      try {
+        const asset = await gateway.importAsset({
+          id: assetId,
+          sourcePath,
+          fileName,
+          mimeType,
+        });
+        const card: ImageCardDto = {
+          kind: "image",
+          id: cardId,
+          boardId: currentBoard.id,
+          frame: { x: boardX, y: boardY, width: 320, height: 240 },
+          zIndex: cardsRef.current.length,
+          revision: 1,
+          asset,
+          captionJson: plainTextToDocument(""),
+          captionPlainText: "",
+        };
+        await gateway.createImageCard({
+          id: cardId,
+          boardId: currentBoard.id,
+          frame: card.frame,
+          zIndex: card.zIndex,
+          assetId,
+          captionJson: card.captionJson,
+          captionPlainText: "",
+        });
+        dispatch({ type: "cardAdded", card });
+      } catch (e) {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [gateway, idGenerator],
+  );
+
   const handleCreateImage = useCallback(async () => {
-    if (!board) return;
     const picked = await pickImageFile();
     if (!picked) return;
+    await importImageCard(picked.path, picked.fileName, picked.mimeType, 80, 80 + state.cards.length * 24);
+  }, [importImageCard, state.cards.length]);
 
-    const assetId = idGenerator.nextId();
-    const cardId = idGenerator.nextId();
-    try {
-      const asset = await gateway.importAsset({
-        id: assetId,
-        sourcePath: picked.path,
-        fileName: picked.fileName,
-        mimeType: picked.mimeType,
-      });
-      const card: ImageCardDto = {
-        kind: "image",
-        id: cardId,
-        boardId: board.id,
-        frame: { x: 80, y: 80 + state.cards.length * 24, width: 320, height: 240 },
-        zIndex: state.cards.length,
-        revision: 1,
-        asset,
-        captionJson: plainTextToDocument(""),
-        captionPlainText: "",
-      };
-      await gateway.createImageCard({
-        id: cardId,
-        boardId: board.id,
-        frame: card.frame,
-        zIndex: card.zIndex,
-        assetId,
-        captionJson: card.captionJson,
-        captionPlainText: "",
-      });
-      dispatch({ type: "cardAdded", card });
-    } catch (e) {
-      dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
-    }
-  }, [board, gateway, idGenerator, state.cards.length]);
+  // Native drag-drop: import dropped image files at the current cursor position.
+  useEffect(() => {
+    return subscribeToImageDrops((files, x, y) => {
+      const screenToFlow = screenToFlowRef.current;
+      for (const file of files) {
+        const flow = screenToFlow ? screenToFlow(x, y) : { x: 80, y: 80 };
+        // Center the new card under the cursor.
+        void importImageCard(file.path, file.fileName, file.mimeType, flow.x - 160, flow.y - 120);
+      }
+    });
+  }, [importImageCard]);
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {
@@ -609,6 +638,9 @@ function App() {
             cards={canvasCards}
             viewport={viewport}
             editingCardId={state.editingCardId}
+            onScreenToFlowReady={(fn) => {
+              screenToFlowRef.current = fn;
+            }}
             events={{
               onCardsMoved: handleCardsMoved,
               onViewportChanged: handleViewportChanged,
