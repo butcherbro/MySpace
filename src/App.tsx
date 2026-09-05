@@ -4,7 +4,7 @@ import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { MoveCardsCommand, CreateNoteCommand } from "./commands/card-commands";
-import { CreateChildBoardCommand, RenameBoardCommand } from "./commands/board-commands";
+import { CreateChildBoardCommand, MoveBoardCommand, RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
@@ -197,6 +197,7 @@ function App() {
       revision: 1,
       target: {
         id: boardId,
+        boardRevision: 1,
         title: "New Board",
         colorToken: "terracotta",
         symbol: null,
@@ -497,13 +498,42 @@ function App() {
     [idGenerator, dispatcher],
   );
 
-  // Moving a card onto a board portal: change its board. After the move the
-  // card no longer belongs to the current projection, so remove it from the
-  // local state (the target board now owns it).
-  const handleMoveCardToBoard = useCallback(
+  // Moving a card onto a board portal. A leaf card (note/image/embed) changes
+  // board via moveCardToBoard; a board_portal reparents the underlying board via
+  // the undoable MoveBoardCommand. After a successful move the card no longer
+  // belongs to the current projection, so remove it from local state.
+  const handleCardDroppedOnPortal = useCallback(
     (cardId: string, targetBoardId: string) => {
       const card = cardsRef.current.find((c) => c.id === cardId);
       if (!card) return;
+
+      if (card.kind === "board_portal") {
+        const portal = card;
+        const prevParent = portal.boardId;
+        const prevFrame = portal.frame;
+        const nextFrame = { x: 40, y: 40, width: portal.frame.width, height: portal.frame.height };
+        void dispatcher
+          .execute(
+            new MoveBoardCommand(
+              idGenerator.nextId(),
+              portal.target.id,
+              prevParent,
+              prevFrame,
+              targetBoardId,
+              nextFrame,
+              portal.target.boardRevision,
+              portal.revision,
+            ),
+          )
+          .then(() => {
+            dispatch({ type: "cardsRemoved", ids: [cardId] });
+          })
+          .catch((err) => {
+            dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
+          });
+        return;
+      }
+
       void queueRef.current
         .run(async () => {
           const current = cardsRef.current.find((c) => c.id === cardId);
@@ -519,7 +549,7 @@ function App() {
           dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
         });
     },
-    [gateway],
+    [gateway, dispatcher, idGenerator],
   );
 
   const handleDeleteSelection = useCallback(async () => {
@@ -835,7 +865,7 @@ function App() {
               onCardActivated: handleCardActivated,
               onCardOpened: handleCardOpened,
               onCardContextMenu: handleRequestContextMenu,
-              onCardDroppedOnPortal: handleMoveCardToBoard,
+              onCardDroppedOnPortal: handleCardDroppedOnPortal,
               onPortalHighlight: setHighlightedPortalId,
               onPaneDoubleClick: (point) => {
                 void handleCreateNote(point);

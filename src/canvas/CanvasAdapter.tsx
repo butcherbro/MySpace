@@ -149,14 +149,17 @@ export function CanvasAdapter({
   }, [viewportResetToken]);
 
   // Returns the portal card whose bounds contain the given card's center, or null.
+  // A board_portal source may now target OTHER portals (Board-on-Board), but never
+  // itself.
   const portalAtPoint = (node: Node<CardNodeData>): CanvasCard | null => {
     const source = cards.find((c) => c.id === node.id);
-    if (!source || source.kind === "board_portal") return null;
+    if (!source) return null;
     const cx = node.position.x + (node.width ?? source.frame.width) / 2;
     const cy = node.position.y + (node.height ?? source.frame.height) / 2;
     return (
       cards.find((c) => {
         if (c.kind !== "board_portal" || !c.targetBoardId) return false;
+        if (c.id === source.id) return false; // never drop onto itself
         return (
           cx >= c.frame.x &&
           cx <= c.frame.x + c.frame.width &&

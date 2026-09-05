@@ -48,6 +48,7 @@ export interface BoardPortalDto {
   revision: number;
   target: {
     id: string;
+    boardRevision: number;
     title: string;
     colorToken: string;
     symbol: string | null;

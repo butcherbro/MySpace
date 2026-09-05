@@ -50,6 +50,7 @@ pub struct Viewport {
 #[serde(rename_all = "camelCase")]
 pub struct PortalTarget {
     pub id: String,
+    pub board_revision: i64,
     pub title: String,
     pub color_token: String,
     pub symbol: Option<String>,

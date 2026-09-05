@@ -156,6 +156,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     portal.boardId = input.targetParentBoardId;
     portal.frame = { ...input.frame };
     portal.revision += 1;
+    if (portal.target.id === input.boardId) {
+      portal.target.boardRevision = board.revision;
+    }
     return Promise.resolve();
   }
 
@@ -190,6 +193,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       revision: 1,
       target: {
         id: input.boardId,
+        boardRevision: 1,
         title: input.title,
         colorToken: "terracotta",
         symbol: null,

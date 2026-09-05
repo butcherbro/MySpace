@@ -14,6 +14,7 @@ function portal(overrides: Partial<BoardPortalDto["target"]> = {}): BoardPortalD
     revision: 1,
     target: {
       id: "board-1",
+      boardRevision: 1,
       title: "Books",
       colorToken: "terracotta",
       symbol: null,

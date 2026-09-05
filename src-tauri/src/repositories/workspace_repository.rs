@@ -142,7 +142,7 @@ fn load_cards(
     {
         let mut stmt = conn.prepare(
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    p.target_board_id, b.title, b.color_token, b.symbol,
+                    p.target_board_id, b.revision, b.title, b.color_token, b.symbol,
                     COALESCE(child.child_board_count, 0),
                     COALESCE(cardchild.child_card_count, 0)
              FROM cards c
@@ -162,7 +162,7 @@ fn load_cards(
         let rows = stmt.query_map([board_id], |row| {
             let target_id: String = row.get(8)?;
             let (child_board_count, child_card_count) = if include_subtree_counts {
-                (row.get::<_, i64>(12)?, row.get::<_, i64>(13)?)
+                (row.get::<_, i64>(13)?, row.get::<_, i64>(14)?)
             } else {
                 (0, 0)
             };
@@ -179,9 +179,10 @@ fn load_cards(
                 revision: row.get(7)?,
                 target: PortalTarget {
                     id: target_id,
-                    title: row.get(9)?,
-                    color_token: row.get(10)?,
-                    symbol: row.get(11)?,
+                    board_revision: row.get(9)?,
+                    title: row.get(10)?,
+                    color_token: row.get(11)?,
+                    symbol: row.get(12)?,
                     child_board_count,
                     child_card_count,
                 },
