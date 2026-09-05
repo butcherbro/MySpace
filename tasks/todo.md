@@ -13,8 +13,9 @@
 - [ ] Extend mock navigation for nested-board e2e and add hierarchy acceptance coverage.
 - [ ] Let Note, Image, and Link Cards move to breadcrumb ancestors through the existing leaf-card command.
 - [ ] Verify clean live Link Card auto-fit and YouTube channel Retry outside hot reload.
-- [ ] Harden startup snapshots: validate DB/assets, publish atomically, and rate-limit normal dev-start backups.
-- [ ] Add and rehearse a restore flow that preserves the damaged live database/assets before replacement.
+- [x] Harden startup snapshots: validate DB/assets, publish atomically, and rate-limit normal dev-start backups.
+- [x] Add and rehearse a restore flow that preserves the damaged live database/assets before replacement.
+- [ ] (optional) Expose a manual restore command in the UI/CLI.
 - [ ] Add explicit clipboard replacement for Link previews and Board Portal covers.
 - [ ] Implement asset garbage collection for permanently deleted cards.
 - [ ] Continue the Milanote-like left rail, top navigation, contextual formatting, and Search from `docs/plans/2026-09-04-spatial-workspace-interface.md`.
