@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A spatial project surface"
 authors = ["you"]
 edition = "2021"
+default-run = "myspace"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

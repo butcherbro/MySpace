@@ -19,6 +19,7 @@
 - [ ] Add explicit clipboard replacement for Link previews and Board Portal covers.
 - [ ] Implement asset garbage collection for permanently deleted cards.
 - [ ] Continue the Milanote-like left rail, top navigation, contextual formatting, and Search from `docs/plans/2026-09-04-spatial-workspace-interface.md`.
+- [ ] Implement the accepted Quiet Desk visual shell and dense-board acceptance gate from `docs/plans/2026-09-05-quiet-desk-visual-shell.md`.
 
 ## Backlog — user-requested features (not yet scheduled)
 
@@ -95,6 +96,39 @@ architecture pass before sizing; `blocked` = depends on another item.
   *currently open* board (empty-canvas or breadcrumb right-click); the card-level
   slice is done. Also: asset links in the UI (`myspace-asset://` vs real path).
 
+### 8. Empty Trash + asset garbage collection
+
+- `next` (scheduled, not urgent) — no Trash UI exists yet; soft-delete marks
+  `deleted_at`/`trash_batch_id` but never removes files from `assets/` (on purpose,
+  so Undo/restore keep working). This slice adds a permanent "Empty Trash" that
+  hard-deletes trashed cards/detail rows + boards, then runs **mark-and-sweep GC**
+  over assets still referenced by no active `image_cards`/`embed_cards` (delete
+  file first, then metadata row; a missing file counts as success), with a
+  startup sweep to finish interrupted deletions. Reference: `tasks/todo.md` item
+  "Implement asset garbage collection", ADR-006, and the architect's GC guidance
+  (refcount not needed; mark-and-sweep is sufficient).
+- Open UX decisions (to confirm before coding — this is irreversible on real data):
+  - minimum UI (an "Empty Trash" button + count) vs. full Trash view with
+    per-item restore;
+  - explicit confirmation dialog required;
+  - whether GC ships in the same slice as Empty Trash or as the following step.
+
+### 9. Quiet Desk visual shell (design slice)
+
+- `next` (recorded; start after the technical slices below) — the accepted design
+  direction from `.interface-design/system.md` (Quiet Desk, Retina smoothing,
+  dense-board rules). Full 10-step TDD plan in
+  `docs/plans/2026-09-05-quiet-desk-visual-shell.md`: tokens → AppShell (top bar +
+  fixed rail + canvas) → icon outline → creation rail → top navigation → Desk
+  theme / neutralize React Flow defaults → Portal/card material grammar →
+  type-aware context menu (preserving Copy/Delete) → dense-board visual acceptance.
+- Supersedes Tasks 1–5, 9, and the visual-acceptance part of Task 12 of
+  `docs/plans/2026-09-04-spatial-workspace-interface.md`, which remains the source
+  for contextual rail behavior, Note appearance, shared rich-text tools,
+  creation placement, and Search. Locked decisions:
+  macOS system font (no web font), top bar `44px`, rail `56px`, breadcrumbs as the
+  navigation anchor, no dead controls, default rail Note/Link/Board/Image.
+
 ## Ordering decision
 
 1. Finish the current block: breadcrumb order (✅), breadcrumb navigation (✅),
@@ -107,8 +141,15 @@ architecture pass before sizing; `blocked` = depends on another item.
    ✅ cross-process refresh (get_data_version + frontend polling).
    ✅ durable batch undo (trash_links).
    ✅ asynchronous Link enrichment (enrich_links).
+   ✅ MCP read_card + Copy MySpace Link / Copy File Path (stable entity
+   addressing resolves `myspace://card/<id>` back to content).
    Remaining refinement: durable batch identity is a receipt table; agent write
    confirmation UX is the UI's concern, not the protocol slice.
 4. Browser-like board tabs + Quick Boards, then clipboard copy of images.
-5. Filesystem shortcuts after the external addressing/access model is proven; do
+5. Then (explicitly recorded, in this order):
+   a. Empty Trash + asset garbage collection (backlog #8; irreversible, so
+      confirm the two open UX decisions before coding);
+   b. Quiet Desk visual shell (backlog #9, `docs/plans/2026-09-05-quiet-desk-visual-shell.md`),
+      then its handoff slices (contextual rail, Search).
+6. Filesystem shortcuts after the external addressing/access model is proven; do
    not add a speculative card kind to the schema now.
