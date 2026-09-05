@@ -15,6 +15,25 @@
 - The agent provider is intentionally undecided (a terminal agent or Hermes-like installation are candidates). Provider-specific APIs must not enter the V1 board/card domain model.
 - This agent surface is a future control plane over the visual workspace, not part of V1 and not the product's primary navigation model.
 
+## 2026-09-05 — The agent surface is the product's core value
+
+- User clarification (extends and strengthens the north-star): the key value of MySpace is
+  **flexible interaction with any agent that has access to the MySpace store** — to easily
+  add things to a Board or read information back out.
+- Consequence: agents must interact through a **stable storage interface** (typed workspace
+  commands), not through fragile references to the internal physical layout (`assets/<uuid>`,
+  per-board folders). A per-asset file path exists, but a "board path" as a folder does not.
+- The agent contract is therefore a first-class control plane (read/add/move cards, notes,
+  links, images, boards), not an afterthought export path. Provider-specific APIs stay out of
+  the board/card domain model; any agent is a client of the same command layer as the UI.
+- Do not couple the agent surface to a single provider (terminal, Hermes, etc.); the surface
+  must remain provider-agnostic so "any agent with access" is a supported client.
+
+## 2026-09-05 — Backups protect live working data during development
+
+- User clarification: backups are needed now because the normal workspace database is already being filled with real Boards, Notes, images, and links while migrations and command contracts are still changing.
+- Consequence: a startup copy is not merely V1.1 polish. Before further risky migrations or any external agent write surface, MySpace needs validated snapshots, retention that cannot be exhausted by rapid dev restarts, and a tested restore path that a non-developer can execute without manually manipulating WAL/SHM files.
+
 ## 2026-09-01 — ID generation stays on the frontend
 
 - Decision (review follow-up): keep card/board IDs as an input to `create_*` commands rather than returning backend-generated IDs.

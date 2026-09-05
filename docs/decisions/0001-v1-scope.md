@@ -74,7 +74,10 @@ provides an explicit Duplicate command for selected notes only.
 
 - Files, folders, images, link previews, filesystem shortcuts, or external
   mounts.
-- LLM integration, agents, tool calling, or generated content.
+- Embedded agent chat, provider-specific integration, autonomous agent behavior,
+  or generated content. The provider-agnostic local MCP workspace surface is
+  governed separately by ADR-0005 and supersedes the original blanket agent
+  non-goal recorded by this ADR.
 - Cloud sync, collaboration, accounts, authentication, sharing, or web access.
 - Tags, status, tables, gallery views, global search, tasks, columns, drawing,
   arrows, or comments.
