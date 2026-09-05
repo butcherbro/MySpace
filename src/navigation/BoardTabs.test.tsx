@@ -12,6 +12,7 @@ describe("BoardTabs", () => {
   it("renders nothing when only Home is open", () => {
     render(
       <BoardTabs
+        homeBoardId="home"
         tabs={[tab("home", "Home")]}
         activeBoardId="home"
         onActivate={vi.fn()}
@@ -24,6 +25,7 @@ describe("BoardTabs", () => {
   it("renders one tab per open board with Home active", () => {
     render(
       <BoardTabs
+        homeBoardId="home"
         tabs={[tab("home", "Home"), tab("a", "Books"), tab("b", "Notes")]}
         activeBoardId="home"
         onActivate={vi.fn()}
@@ -41,6 +43,7 @@ describe("BoardTabs", () => {
     const onActivate = vi.fn();
     render(
       <BoardTabs
+        homeBoardId="home"
         tabs={[tab("home", "Home"), tab("a", "Books")]}
         activeBoardId="home"
         onActivate={onActivate}
@@ -56,6 +59,7 @@ describe("BoardTabs", () => {
     const onClose = vi.fn();
     render(
       <BoardTabs
+        homeBoardId="home"
         tabs={[tab("home", "Home"), tab("a", "Books")]}
         activeBoardId="a"
         onActivate={vi.fn()}
@@ -67,10 +71,12 @@ describe("BoardTabs", () => {
   });
 
   it("does not render a close control for Home", () => {
+    const homeId = "0199f4f0-1234-7abc-8def-0123456789ab";
     render(
       <BoardTabs
-        tabs={[tab("home", "Home"), tab("a", "Books")]}
-        activeBoardId="home"
+        homeBoardId={homeId}
+        tabs={[tab(homeId, "Home"), tab("a", "Books")]}
+        activeBoardId={homeId}
         onActivate={vi.fn()}
         onClose={vi.fn()}
       />,

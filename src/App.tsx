@@ -970,6 +970,7 @@ function App() {
         </div>
         {tabs && (
           <BoardTabs
+            homeBoardId={tabs.homeBoardId}
             tabs={tabs.tabs}
             activeBoardId={tabs.activeBoardId}
             onActivate={handleTabActivate}

@@ -16,17 +16,17 @@ export interface BoardTab {
 }
 
 export interface BoardTabsState {
+  /** The id of the Home board; used so Home stays pinned even with UUID ids. */
+  homeBoardId: string;
   /** Ordered tabs, left-to-right (Home first). */
   tabs: BoardTab[];
   /** The id of the active tab. Invariant: always set. */
   activeBoardId: string;
 }
 
-/** A tab id for the Home board ("home" is referenced by its real board id). */
-export const HOME_TAB_ID = "home";
-
 export function createBoardTabs(homeId: string, homeTitle: string): BoardTabsState {
   return {
+    homeBoardId: homeId,
     tabs: [{ boardId: homeId, title: homeTitle }],
     activeBoardId: homeId,
   };
@@ -43,6 +43,7 @@ export function openBoardTab(
     return { ...state, activeBoardId: boardId };
   }
   return {
+    homeBoardId: state.homeBoardId,
     tabs: [...state.tabs, { boardId, title }],
     activeBoardId: boardId,
   };
@@ -56,7 +57,7 @@ export function closeBoardTab(
   state: BoardTabsState,
   boardId: string,
 ): BoardTabsState {
-  if (boardId === HOME_TAB_ID) {
+  if (boardId === state.homeBoardId) {
     return state;
   }
   const idx = state.tabs.findIndex((t) => t.boardId === boardId);
@@ -71,7 +72,7 @@ export function closeBoardTab(
     // to the previous tab; Home guarantees at least one tab remains.
     activeBoardId = tabs[Math.min(idx, tabs.length - 1)].boardId;
   }
-  return { tabs, activeBoardId };
+  return { homeBoardId: state.homeBoardId, tabs, activeBoardId };
 }
 
 /** Activates a tab without changing the set of open tabs. */

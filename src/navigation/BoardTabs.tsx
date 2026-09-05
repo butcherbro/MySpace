@@ -2,6 +2,7 @@ import type { BoardTab } from "./board-tabs";
 import "./board-tabs.css";
 
 interface BoardTabsProps {
+  homeBoardId: string;
   tabs: BoardTab[];
   activeBoardId: string;
   onActivate: (boardId: string) => void;
@@ -13,7 +14,13 @@ interface BoardTabsProps {
  * closed. This is session-only navigation state; it renders inside the workspace
  * region (above breadcrumbs) and never mutates the `AppShell` chrome.
  */
-export function BoardTabs({ tabs, activeBoardId, onActivate, onClose }: BoardTabsProps) {
+export function BoardTabs({
+  homeBoardId,
+  tabs,
+  activeBoardId,
+  onActivate,
+  onClose,
+}: BoardTabsProps) {
   if (tabs.length <= 1) return null;
 
   return (
@@ -43,7 +50,7 @@ export function BoardTabs({ tabs, activeBoardId, onActivate, onClose }: BoardTab
             >
               {tab.title}
             </button>
-            {tab.boardId !== "home" && (
+            {tab.boardId !== homeBoardId && (
               <button
                 type="button"
                 className="board-tabs__close"

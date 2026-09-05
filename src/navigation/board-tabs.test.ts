@@ -58,10 +58,11 @@ describe("BoardTabs", () => {
   });
 
   it("Home can never be closed", () => {
-    const s = createBoardTabs("home", "Home");
-    const after = closeBoardTab(s, "home");
-    expect(after.tabs.map((t) => t.boardId)).toEqual(["home"]);
-    expect(after.activeBoardId).toBe("home");
+    const homeId = "0199f4f0-1234-7abc-8def-0123456789ab";
+    const s = createBoardTabs(homeId, "Home");
+    const after = closeBoardTab(s, homeId);
+    expect(after.tabs.map((t) => t.boardId)).toEqual([homeId]);
+    expect(after.activeBoardId).toBe(homeId);
   });
 
   it("closing an unknown tab is a no-op", () => {
