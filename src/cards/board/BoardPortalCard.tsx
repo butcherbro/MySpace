@@ -80,7 +80,10 @@ export function BoardPortalCard({
     >
       <div
         className="board-portal-card__tile"
-        onDoubleClick={() => onOpen(portal.target.id)}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          onOpen(portal.target.id);
+        }}
       >
         <span className="board-portal-card__symbol">{symbol}</span>
       </div>

@@ -445,3 +445,31 @@ test("opening boards creates tabs; closing a tab does not delete the board", asy
   await expect(page.getByTestId("board-tabs")).toHaveCount(0);
   await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
 });
+
+test("Back recreates a board tab that was closed while inactive", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "New board", exact: true }).click();
+  await page.locator(".board-portal-card__tile").first().dblclick();
+  await expect(page.getByTestId("board-tab")).toHaveCount(2);
+  const firstChildId = await page.getByTestId("board-tab").nth(1).getAttribute("data-board-id");
+  expect(firstChildId).toBeTruthy();
+
+  await page.getByTestId("board-tab").first().getByRole("button", { name: "Home" }).click();
+  await page.getByRole("button", { name: "New board", exact: true }).click();
+  await page.locator(".board-portal-card__tile").last().dblclick();
+  await expect(page.getByTestId("board-tab")).toHaveCount(3);
+
+  await page
+    .getByTestId("board-tab")
+    .nth(1)
+    .getByRole("button", { name: /Close tab/ })
+    .click();
+  await expect(page.getByTestId("board-tab")).toHaveCount(2);
+
+  await page.keyboard.press("Control+BracketLeft");
+
+  const restored = page.locator(`[data-testid="board-tab"][data-board-id="${firstChildId}"]`);
+  await expect(restored).toHaveAttribute("data-active", "true");
+  await expect(page.getByTestId("board-tab")).toHaveCount(3);
+});

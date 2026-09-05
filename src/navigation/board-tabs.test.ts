@@ -3,7 +3,9 @@ import {
   activateBoardTab,
   closeBoardTab,
   createBoardTabs,
+  navigateBoardTab,
   openBoardTab,
+  syncBoardTab,
 } from "./board-tabs";
 
 describe("BoardTabs", () => {
@@ -26,6 +28,17 @@ describe("BoardTabs", () => {
     s = openBoardTab(s, "b", "Notes");
     s = openBoardTab(s, "a", "Books");
     expect(s.tabs.map((t) => t.boardId)).toEqual(["home", "a", "b"]);
+    expect(s.activeBoardId).toBe("a");
+  });
+
+  it("opening an already-open board updates its title in place", () => {
+    let s = createBoardTabs("home", "Home");
+    s = openBoardTab(s, "a", "Books");
+    s = openBoardTab(s, "a", "Renamed Books");
+    expect(s.tabs).toEqual([
+      { boardId: "home", title: "Home" },
+      { boardId: "a", title: "Renamed Books" },
+    ]);
     expect(s.activeBoardId).toBe("a");
   });
 
@@ -76,5 +89,43 @@ describe("BoardTabs", () => {
     const before = s;
     s = activateBoardTab(s, "missing");
     expect(s).toEqual(before);
+  });
+
+  it("syncing an existing tab updates its title without changing order", () => {
+    let s = createBoardTabs("home", "Home");
+    s = openBoardTab(s, "a", "Books");
+    const synced = syncBoardTab(s, "a", "Renamed Books");
+    expect(synced.tabs).toEqual([
+      { boardId: "home", title: "Home" },
+      { boardId: "a", title: "Renamed Books" },
+    ]);
+    expect(synced.activeBoardId).toBe("a");
+  });
+
+  it("syncing an unknown tab is a no-op", () => {
+    const s = createBoardTabs("home", "Home");
+    expect(syncBoardTab(s, "missing", "Nope")).toEqual(s);
+  });
+
+  it("navigating with open mode recreates a closed board tab", () => {
+    let s = createBoardTabs("home", "Home");
+    s = openBoardTab(s, "a", "A");
+    s = closeBoardTab(s, "a");
+
+    const next = navigateBoardTab(s, "a", "A v2", "open");
+
+    expect(next.tabs.map((t) => t.boardId)).toEqual(["home", "a"]);
+    expect(next.tabs[1]).toEqual({ boardId: "a", title: "A v2" });
+    expect(next.activeBoardId).toBe("a");
+  });
+
+  it("navigating with sync mode does not recreate a closed board tab", () => {
+    let s = createBoardTabs("home", "Home");
+    s = openBoardTab(s, "a", "A");
+    s = closeBoardTab(s, "a");
+
+    const next = navigateBoardTab(s, "a", "A v2", "sync");
+
+    expect(next).toEqual(s);
   });
 });

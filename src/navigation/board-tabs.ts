@@ -40,13 +40,48 @@ export function openBoardTab(
 ): BoardTabsState {
   const existing = state.tabs.find((t) => t.boardId === boardId);
   if (existing) {
-    return { ...state, activeBoardId: boardId };
+    return {
+      ...state,
+      tabs: state.tabs.map((tab) =>
+        tab.boardId === boardId ? { ...tab, title } : tab,
+      ),
+      activeBoardId: boardId,
+    };
   }
   return {
     homeBoardId: state.homeBoardId,
     tabs: [...state.tabs, { boardId, title }],
     activeBoardId: boardId,
   };
+}
+
+/** Syncs the title of an already-open tab without opening or reordering tabs. */
+export function syncBoardTab(
+  state: BoardTabsState,
+  boardId: string,
+  title: string,
+): BoardTabsState {
+  if (!state.tabs.some((t) => t.boardId === boardId)) {
+    return state;
+  }
+  return {
+    ...state,
+    tabs: state.tabs.map((tab) =>
+      tab.boardId === boardId ? { ...tab, title } : tab,
+    ),
+  };
+}
+
+/** Applies a navigation intent to tabs. Open recreates missing tabs; sync does not. */
+export function navigateBoardTab(
+  state: BoardTabsState,
+  boardId: string,
+  title: string,
+  mode: "open" | "sync",
+): BoardTabsState {
+  return mode === "open"
+    ? openBoardTab(state, boardId, title)
+    : syncBoardTab(state, boardId, title);
 }
 
 /**

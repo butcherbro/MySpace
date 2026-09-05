@@ -72,6 +72,16 @@ describe("BoardPortalCard", () => {
     expect(onOpen).toHaveBeenCalledWith("board-1");
   });
 
+  it("opens the tile once on double-click", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    renderCard(portal(), { onOpen });
+
+    await user.dblClick(screen.getByTestId("board-portal-card").querySelector(".board-portal-card__tile") as HTMLElement);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith("board-1");
+  });
+
   it("shows Empty when there are no children", () => {
     renderCard(portal({ childBoardCount: 0, childCardCount: 0 }));
     expect(screen.getByTestId("portal-count")).toHaveTextContent("Empty");

@@ -18,6 +18,14 @@ describe("BoardHistory", () => {
     expect(h.canForward()).toBe(false);
   });
 
+  it("pushing the current board id is a no-op", () => {
+    const h = new BoardHistory("home");
+    h.push("home");
+    expect(h.current()).toBe("home");
+    expect(h.canBack()).toBe(false);
+    expect(h.canForward()).toBe(false);
+  });
+
   it("back and forward navigate the stack", () => {
     const h = new BoardHistory("home");
     h.push("a");

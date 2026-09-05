@@ -15,8 +15,8 @@ import { BoardTabs } from "./navigation/BoardTabs";
 import {
   activateBoardTab,
   createBoardTabs,
-  openBoardTab,
   closeBoardTab,
+  navigateBoardTab,
   type BoardTabsState,
 } from "./navigation/board-tabs";
 import { BoardHistory } from "./navigation/board-history";
@@ -771,14 +771,18 @@ function App() {
 
   // Load a board's snapshot into the store.
   const navigateTo = useCallback(
-    async (boardId: string, opts?: { push?: boolean }) => {
+    async (
+      boardId: string,
+      opts?: { pushHistory?: boolean; tabMode?: "open" | "sync" },
+    ) => {
       // Flush any pending note/viewport writes before replacing the projection,
       // so a debounced save cannot be abandoned by navigation (plan Section H).
       await queueRef.current.flush();
       const snapshot = await gateway.loadBoardSnapshot(boardId);
-      if (opts?.push && historyRef.current) {
+      if (opts?.pushHistory && historyRef.current) {
         historyRef.current.push(boardId);
       }
+      const tabMode = opts?.tabMode ?? "sync";
       // Track the board as an open tab: explicit navigation opens/activates a
       // tab; a reload just re-syncs the active id to the loaded board.
       setTabs((prev) => {
@@ -787,10 +791,13 @@ function App() {
           base.tabs.length === 0
             ? createBoardTabs(snapshot.board.id, snapshot.board.title)
             : base;
-        if (opts?.push) {
-          return openBoardTab(withHome, snapshot.board.id, snapshot.board.title);
-        }
-        return activateBoardTab(withHome, snapshot.board.id);
+        const next = navigateBoardTab(
+          withHome,
+          snapshot.board.id,
+          snapshot.board.title,
+          tabMode,
+        );
+        return tabMode === "sync" ? activateBoardTab(next, snapshot.board.id) : next;
       });
       dispatch({
         type: "snapshotLoaded",
@@ -860,7 +867,7 @@ function App() {
   // Open a child board via a portal (double-click / Enter).
   const handleOpenBoard = useCallback(
     (boardId: string) => {
-      void navigateTo(boardId, { push: true });
+      void navigateTo(boardId, { pushHistory: true, tabMode: "open" });
     },
     [navigateTo],
   );
@@ -871,7 +878,7 @@ function App() {
     (cardId: string) => {
       const card = state.cards.find((c) => c.id === cardId);
       if (card?.kind === "board_portal") {
-        void navigateTo(card.target.id, { push: true });
+        void navigateTo(card.target.id, { pushHistory: true, tabMode: "open" });
       }
     },
     [state.cards, navigateTo],
@@ -879,19 +886,19 @@ function App() {
 
   const handleNavigateBack = useCallback(() => {
     const prev = historyRef.current?.back();
-    if (prev) void navigateTo(prev);
+    if (prev) void navigateTo(prev, { tabMode: "open" });
   }, [navigateTo]);
 
   const handleNavigateForward = useCallback(() => {
     const next = historyRef.current?.forward();
-    if (next) void navigateTo(next);
+    if (next) void navigateTo(next, { tabMode: "open" });
   }, [navigateTo]);
 
   // Tab interactions: switching loads the board (no history push); closing
   // removes the tab and, if it was active, navigates to the neighbor.
   const handleTabActivate = useCallback(
     (boardId: string) => {
-      void navigateTo(boardId);
+      void navigateTo(boardId, { tabMode: "sync" });
     },
     [navigateTo],
   );
@@ -903,7 +910,7 @@ function App() {
       const next = closeBoardTab(prev, boardId);
       setTabs(next);
       if (next.activeBoardId !== prev.activeBoardId) {
-        void navigateTo(next.activeBoardId);
+        void navigateTo(next.activeBoardId, { tabMode: "sync" });
       }
     },
     [navigateTo],
@@ -981,7 +988,7 @@ function App() {
           breadcrumbs={breadcrumbs}
           currentBoardId={board?.id ?? ""}
           dropTargetBoardId={dropTargetBoardId}
-          onNavigate={(id) => void navigateTo(id, { push: true })}
+          onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
         />
         {contextMenu && (
           <div

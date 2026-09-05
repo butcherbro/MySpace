@@ -19,6 +19,9 @@ export class BoardHistory {
 
   /** Navigates to a new board, truncating any forward history. */
   push(id: string): void {
+    if (this.current() === id) {
+      return;
+    }
     this.stack = this.stack.slice(0, this.index + 1);
     this.stack.push(id);
     this.index = this.stack.length - 1;
