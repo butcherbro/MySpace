@@ -60,7 +60,7 @@ fn load_breadcrumbs(conn: &Connection, board_id: &str) -> Result<Vec<Breadcrumb>
             FROM boards b
             JOIN ancestors a ON b.id = a.parent_board_id
         )
-        SELECT id, title FROM ancestors ORDER BY depth DESC",
+        SELECT id, title FROM ancestors ORDER BY depth ASC",
     )?;
 
     let rows = stmt.query_map([board_id], |row| {

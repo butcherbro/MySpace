@@ -1006,3 +1006,65 @@ fn convert_note_to_embed_errors_on_non_note() {
         Err(myspace_lib::domain::errors::WorkspaceError::ConstraintViolation(_))
     ));
 }
+
+#[test]
+fn breadcrumbs_are_root_to_leaf() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    // Home -> A -> B
+    myspace_lib::domain::board_service::create_child_board(
+        &mut conn,
+        &myspace_lib::domain::models::CreateChildBoardInput {
+            parent_board_id: home.clone(),
+            board_id: "a".to_string(),
+            portal_card_id: "p-a".to_string(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 112.0,
+            },
+            title: "A".to_string(),
+        },
+    )
+    .unwrap();
+    myspace_lib::domain::board_service::create_child_board(
+        &mut conn,
+        &myspace_lib::domain::models::CreateChildBoardInput {
+            parent_board_id: "a".to_string(),
+            board_id: "b".to_string(),
+            portal_card_id: "p-b".to_string(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 112.0,
+            },
+            title: "B".to_string(),
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, "b").unwrap();
+    let ids: Vec<&str> = snapshot.breadcrumbs.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, vec![home.as_str(), "a", "b"]);
+    let titles: Vec<&str> = snapshot
+        .breadcrumbs
+        .iter()
+        .map(|c| c.title.as_str())
+        .collect();
+    assert_eq!(titles, vec!["Home", "A", "B"]);
+}
+
+#[test]
+fn home_breadcrumbs_contain_only_home() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    let ids: Vec<&str> = snapshot.breadcrumbs.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, vec![home.as_str()]);
+}
