@@ -1,28 +1,3 @@
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.5;
-  font-weight: 400;
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  margin: 0;
-  height: 100%;
-}
-
 .workspace {
   display: flex;
   flex-direction: column;
@@ -35,8 +10,29 @@ body,
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
-  border-bottom: 1px solid #e5e5e5;
-  background: #ffffff;
+  border-bottom: 1px solid var(--edge-subtle);
+  background: var(--chrome-surface);
+}
+
+.workspace__toolbar button {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+  color: var(--ink-secondary);
+  background: var(--paper-raised);
+  cursor: pointer;
+  box-shadow: 0 1px 1px rgba(31, 37, 33, 0.04);
+}
+
+.workspace__toolbar button:hover {
+  color: var(--ink);
+  border-color: var(--edge-strong);
+  box-shadow: var(--shadow-paper);
+}
+
+.workspace__toolbar button:active {
+  background: var(--desk);
 }
 
 .workspace__board-title {
@@ -45,9 +41,9 @@ body,
 
 .workspace__error {
   padding: 8px 16px;
-  background: #fef2f2;
-  color: #b91c1c;
-  border-bottom: 1px solid #fecaca;
+  background: var(--danger-surface);
+  color: var(--danger);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
 .workspace__canvas {
@@ -57,7 +53,7 @@ body,
   min-height: 0;
   /* dotted board background (React Flow also renders one; this is the fallback
      beneath the absolute-positioned canvas surface). */
-  background-color: #f6f6f6;
+  background-color: var(--desk);
 }
 
 /* React Flow needs an explicit sized box; make it fill the canvas region. */
@@ -74,39 +70,18 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #9e9e9e;
+  color: var(--ink-tertiary);
   pointer-events: none;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid #d4d4d4;
-  padding: 0.5em 1em;
-  font-size: 0.9em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
 }
 
 .context-menu {
   position: fixed;
   z-index: 1000;
   min-width: 140px;
-  background: #fff;
-  border: 1px solid #d4d4d4;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  background: var(--paper-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-menu);
+  box-shadow: var(--shadow-menu);
   padding: 4px;
 }
 
@@ -117,44 +92,17 @@ button:active {
   border: none;
   background: none;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   cursor: pointer;
-  color: #b91c1c;
+  color: var(--ink);
 }
 
 .context-menu__item:hover {
-  background: #f3f4f6;
+  background: color-mix(in srgb, var(--desk) 60%, transparent);
 }
 
 .context-menu__backdrop {
   position: fixed;
   inset: 0;
   z-index: 999;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  .workspace__toolbar {
-    background: #2f2f2f;
-    border-bottom-color: #3a3a3a;
-  }
-
-  .workspace__canvas {
-    background-color: #2f2f2f;
-  }
-
-  button {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-    border-color: #4a4a4a;
-  }
-
-  .note-card {
-    background: #3a3a3a;
-    border-color: #4a4a4a;
-  }
 }

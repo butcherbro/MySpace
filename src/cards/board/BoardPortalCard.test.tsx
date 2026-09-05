@@ -47,6 +47,11 @@ describe("BoardPortalCard", () => {
     expect(screen.getByTestId("portal-count")).toHaveTextContent("2 boards · 5 cards");
   });
 
+  it("exposes the board-portal semantic kind", () => {
+    renderCard();
+    expect(screen.getByTestId("board-portal-card")).toHaveAttribute("data-kind", "board-portal");
+  });
+
   it("uses an explicit symbol when set", () => {
     renderCard(portal({ symbol: "🚀" }));
     expect(screen.getByText("🚀")).toBeInTheDocument();

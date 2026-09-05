@@ -1,0 +1,89 @@
+:root {
+  color-scheme: light dark;
+
+  --desk: #f3f5f4;
+  --desk-dot: rgba(74, 82, 78, 0.14);
+  --chrome-surface: rgba(255, 255, 255, 0.96);
+  --paper: #fffefa;
+  --paper-raised: #ffffff;
+
+  --ink: #252927;
+  --ink-secondary: #5f6763;
+  --ink-tertiary: #929995;
+  --ink-muted: #bdc2bf;
+
+  --edge-subtle: rgba(54, 63, 58, 0.1);
+  --edge-strong: rgba(54, 63, 58, 0.2);
+  --edge-focus: #527a6a;
+  --focus-halo: rgba(82, 122, 106, 0.18);
+
+  --portal-terracotta: #c77b55;
+  --portal-moss: #899b71;
+  --portal-sky: #72a9c7;
+  --portal-sand: #c3a66d;
+  --portal-ink: #657482;
+
+  --link: #cf4f2f;
+  --link-hover: #a83e27;
+
+  --note-yellow: #fff2b8;
+  --note-rose: #f7d7d3;
+  --note-blue: #dcecf2;
+  --note-green: #dfead9;
+  --note-lilac: #e8dff0;
+
+  --danger: #b42318;
+  --danger-surface: #fef3f2;
+
+  --shadow-paper:
+    0 1px 2px rgba(31, 37, 33, 0.08),
+    0 5px 16px rgba(31, 37, 33, 0.05);
+  --shadow-hover:
+    0 2px 4px rgba(31, 37, 33, 0.1),
+    0 8px 22px rgba(31, 37, 33, 0.07);
+  --shadow-menu: 0 8px 28px rgba(20, 24, 22, 0.18);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-content: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+
+  --radius-note: 5px;
+  --radius-image: 4px;
+  --radius-portal: 11px;
+  --radius-control: 6px;
+  --radius-menu: 8px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --desk: #171a18;
+    --desk-dot: rgba(255, 255, 255, 0.1);
+    --chrome-surface: rgba(24, 28, 25, 0.96);
+    --paper: #1d221f;
+    --paper-raised: #242923;
+
+    --ink: #eef0ee;
+    --ink-secondary: #c8ceca;
+    --ink-tertiary: #99a19c;
+    --ink-muted: #6f7873;
+
+    --edge-subtle: rgba(255, 255, 255, 0.08);
+    --edge-strong: rgba(255, 255, 255, 0.14);
+    --edge-focus: #7ca895;
+    --focus-halo: rgba(124, 168, 149, 0.18);
+
+    --shadow-paper:
+      0 1px 2px rgba(0, 0, 0, 0.28),
+      0 6px 18px rgba(0, 0, 0, 0.18);
+    --shadow-hover:
+      0 2px 5px rgba(0, 0, 0, 0.26),
+      0 10px 24px rgba(0, 0, 0, 0.18);
+    --shadow-menu: 0 8px 28px rgba(0, 0, 0, 0.34);
+  }
+}

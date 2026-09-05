@@ -8,7 +8,7 @@ import "./app-shell.css";
  */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="app-shell" data-testid="app-shell">
+    <div className="app-shell" data-testid="app-shell" data-theme="system">
       <header className="app-shell__header">
         <span className="app-shell__title">MySpace</span>
       </header>

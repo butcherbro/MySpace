@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import type { BoardPortalDto } from "../../services/workspace-gateway";
 import "./board-portal-card.css";
 
@@ -60,9 +60,11 @@ export function BoardPortalCard({
     <div
       className={`board-portal-card ${highlighted ? "board-portal-card--highlighted" : ""}`}
       data-testid="board-portal-card"
+      data-kind="board-portal"
       data-board-id={portal.target.id}
       tabIndex={0}
       aria-label={`Open board ${portal.target.title}`}
+      style={{ "--portal-accent": color } as CSSProperties}
       onKeyDown={(e) => {
         if (renaming) return;
         if (e.key === "Enter") {
@@ -78,7 +80,6 @@ export function BoardPortalCard({
     >
       <div
         className="board-portal-card__tile"
-        style={{ backgroundColor: color }}
         onDoubleClick={() => onOpen(portal.target.id)}
       >
         <span className="board-portal-card__symbol">{symbol}</span>
