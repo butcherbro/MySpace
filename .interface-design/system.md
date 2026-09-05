@@ -28,6 +28,10 @@ The primary daily loop is:
 
 Quiet, spatial, precise, lightweight, and personal. The interface may borrow Milanote's successful spatial grammar, but it should feel more native to macOS and less like a hosted SaaS product.
 
+**Direction accepted:** 2026-09-05. Preserve Milanote's density and ease of
+spatial recognition, while making MySpace quieter, more compact, and more native
+to macOS. Copy the visual principles, not Milanote's branding or SaaS chrome.
+
 Use the macOS system font stack intentionally. Do not introduce a web font for V1.
 
 ## Signature element
@@ -90,6 +94,22 @@ The application shell has three regions:
 - Dot gap: `20px` at zoom 1.
 - No permanent minimap, zoom widget, tips panel, or inspector.
 - Empty-state copy is quiet and placed near the initial working area, not centered like an onboarding page.
+
+### Dense-board calibration
+
+Dense Boards are the primary design test, not an edge case. A crowded Desk remains
+readable because hierarchy comes from object silhouette and spatial grouping rather
+than large gaps or heavy containers.
+
+- Chrome recedes behind content; it must never be the strongest contrast on screen.
+- Notes, Images, Links, and Portals remain recognizable by shape/material when text
+  is too small to read at the current zoom.
+- Cards may sit close together without merging visually; use quiet depth and material
+  changes instead of permanent borders.
+- Keep surrounding card chrome minimal so screenshots and long notes can occupy most
+  of their footprint.
+- Validate every visual slice with a fixture containing at least twelve Portals and a
+  mixed set of long Notes, Images, and Link Cards at once.
 
 ## Rail modes
 
@@ -204,6 +224,10 @@ Dark mode should be token-driven, not implemented with card-specific overrides s
 --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
 --font-content: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
 ```
+
+Use `-webkit-font-smoothing: antialiased` and
+`-moz-osx-font-smoothing: grayscale` at the application root. Do not force a web
+font or use ultra-light weights that become fragile on a Retina canvas.
 
 - UI labels: 12–13px, regular or medium.
 - Note body: 14px, line-height 1.48.
@@ -320,6 +344,13 @@ Search is mandatory.
 ## Menus and contextual surfaces
 
 - Context menus use `--paper-raised`, `--shadow-menu`, 8px radius, and 4px outer padding.
+- Standard context-menu width is `220–260px`; rows are `32–34px` high with a
+  left-aligned label and a right-aligned shortcut column.
+- Separate semantic groups with `--edge-subtle` hairlines. Do not render a separator
+  before or after an empty group.
+- Menu content is type-aware. A Board Portal exposes Board actions; a Note, Image, or
+  Link exposes Card actions. Existing `Copy MySpace Link` and Image-only
+  `Copy File Path` actions remain available after visual refactoring.
 - Destructive actions are separated and use `--danger`, not a fully red menu.
 - Color selection uses a compact popover attached to the rail button.
 - Popovers must remain inside the window and close on Escape or outside click.
