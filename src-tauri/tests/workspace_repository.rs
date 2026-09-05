@@ -3,8 +3,9 @@
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::asset_service;
 use myspace_lib::domain::models::{
-    CreateImageCardInput, CreateNoteInput, Frame, ImportAssetInput, MoveCardItem, MoveCardsInput,
-    UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput,
+    CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame, ImportAssetInput,
+    LinkBatchItem, MoveCardItem, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
+    UpdateViewportInput,
 };
 use myspace_lib::repositories::workspace_repository;
 
@@ -1067,4 +1068,74 @@ fn home_breadcrumbs_contain_only_home() {
     let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
     let ids: Vec<&str> = snapshot.breadcrumbs.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids, vec![home.as_str()]);
+}
+
+#[test]
+fn create_link_batch_creates_links_and_is_idempotent() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    let input = CreateLinkBatchInput {
+        idempotency_key: "req-1".to_string(),
+        board_id: home.clone(),
+        links: vec![
+            LinkBatchItem {
+                id: "l1".to_string(),
+                source_url: "https://a.com".to_string(),
+                title: "A".to_string(),
+            },
+            LinkBatchItem {
+                id: "l2".to_string(),
+                source_url: "https://b.com".to_string(),
+                title: "B".to_string(),
+            },
+        ],
+    };
+
+    let first = workspace_repository::create_link_batch(&mut conn, &input).unwrap();
+    assert_eq!(first.card_ids.len(), 2);
+    assert!(!first.batch_id.is_empty());
+
+    // Two embed cards exist.
+    let embed_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cards WHERE kind = 'embed'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(embed_count, 2);
+
+    // Replaying the same idempotency key returns the same result, no duplicates.
+    let replay = workspace_repository::create_link_batch(&mut conn, &input).unwrap();
+    assert_eq!(replay.batch_id, first.batch_id);
+    assert_eq!(replay.card_ids, first.card_ids);
+    let embed_count_after: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cards WHERE kind = 'embed'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(embed_count_after, 2);
+}
+
+#[test]
+fn create_link_batch_rejects_unknown_board() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+
+    let result = workspace_repository::create_link_batch(
+        &mut conn,
+        &CreateLinkBatchInput {
+            idempotency_key: "req-2".to_string(),
+            board_id: "does-not-exist".to_string(),
+            links: vec![LinkBatchItem {
+                id: "l1".to_string(),
+                source_url: "https://a.com".to_string(),
+                title: "A".to_string(),
+            }],
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
+    ));
 }

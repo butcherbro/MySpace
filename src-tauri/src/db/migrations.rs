@@ -35,6 +35,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "top_left_board_origin",
         sql: include_str!("../../migrations/0004_top_left_board_origin.sql"),
     },
+    Migration {
+        version: 5,
+        name: "mutation_idempotency",
+        sql: include_str!("../../migrations/0005_mutation_idempotency.sql"),
+    },
 ];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.

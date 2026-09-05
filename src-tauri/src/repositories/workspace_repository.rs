@@ -8,10 +8,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     ApplyEmbedMetadataInput, AssetDto, BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb,
-    CardDto, ConvertNoteToEmbedInput, CreateImageCardInput, CreateNoteInput, EmbedCardDto,
-    EmbedForMetadata, Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, NoteCardDto,
-    PortalTarget, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
-    UpdateNoteInput, UpdateViewportInput, Viewport,
+    CardDto, ConvertNoteToEmbedInput, CreateImageCardInput, CreateLinkBatchInput,
+    CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata, Frame, ImageCardDto,
+    MoveCardToBoardInput, MoveCardsInput, NoteCardDto, PortalTarget, UpdateCardFrameInput,
+    UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput,
+    Viewport,
 };
 
 use super::super::db;
@@ -1034,4 +1035,95 @@ pub fn move_card_to_board(
 
     tx.commit()?;
     Ok(())
+}
+
+/// Creates a batch of Link Cards in one durable operation. Idempotent under a
+/// caller-supplied `idempotency_key`: a replayed key returns the original batch
+/// id and card ids instead of creating duplicates. Cards are placed with a
+/// deterministic downward cascade so they never overlap unseen.
+pub fn create_link_batch(
+    conn: &mut Connection,
+    input: &CreateLinkBatchInput,
+) -> Result<CreateLinkBatchResult, WorkspaceError> {
+    let now = db::migrations::now_millis();
+
+    // Idempotent replay: return the recorded result for a seen key.
+    if let Some((batch_id, card_ids_json)) = conn
+        .query_row(
+            "SELECT batch_id, card_ids FROM mutation_receipts WHERE idempotency_key = ?1",
+            [input.idempotency_key.as_str()],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?
+    {
+        let card_ids: Vec<String> = serde_json::from_str(&card_ids_json).unwrap_or_default();
+        return Ok(CreateLinkBatchResult { batch_id, card_ids });
+    }
+
+    // The target board must exist and be active.
+    let board_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
+        [input.board_id.as_str()],
+        |r| r.get(0),
+    )?;
+    if board_exists == 0 {
+        return Err(WorkspaceError::NotFound(input.board_id.clone()));
+    }
+
+    let batch_id = uuid::Uuid::now_v7().to_string();
+    let mut card_ids = Vec::with_capacity(input.links.len());
+    let mut next_y = next_card_y(conn, &input.board_id);
+
+    let tx = conn.transaction()?;
+    for link in &input.links {
+        let display_url = link.source_url.clone(); // enriched later if needed
+        let description_json = "{\"type\":\"doc\",\"content\":[]}".to_string();
+
+        tx.execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
+             VALUES (?1, ?2, 'embed', 40, ?3, 320, 240, ?4, 1, ?5, ?5)",
+            params![
+                link.id,
+                input.board_id,
+                next_y,
+                card_ids.len() as i64,
+                now,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, metadata_status)
+             VALUES (?1, ?2, ?3, ?4, ?5, '', 'pending')",
+            params![link.id, link.source_url, display_url, link.title, description_json],
+        )?;
+
+        card_ids.push(link.id.clone());
+        next_y += 264.0; // 240 height + 24 gap
+    }
+
+    let card_ids_json =
+        serde_json::to_string(&card_ids).map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    tx.execute(
+        "INSERT INTO mutation_receipts (idempotency_key, batch_id, card_ids, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![input.idempotency_key, batch_id, card_ids_json, now],
+    )?;
+    tx.commit()?;
+
+    Ok(CreateLinkBatchResult { batch_id, card_ids })
+}
+
+/// Returns the y coordinate for the next card on a board (cascade below the
+/// lowest existing card).
+fn next_card_y(conn: &Connection, board_id: &str) -> f64 {
+    let max_bottom: f64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(y + height), 0.0) FROM cards WHERE board_id = ?1 AND deleted_at IS NULL",
+            [board_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    if max_bottom <= 0.0 {
+        return 40.0;
+    }
+    max_bottom + 24.0
 }

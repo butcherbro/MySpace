@@ -378,3 +378,31 @@ pub struct TrashItem {
 pub struct TrashSelectionInput {
     pub items: Vec<TrashItem>,
 }
+
+/// A single Link Card to create in a batch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkBatchItem {
+    /// Stable client-supplied card id (UUIDv7). Enables idempotent replay.
+    pub id: String,
+    pub source_url: String,
+    pub title: String,
+}
+
+/// Input for creating a batch of Link Cards in one durable operation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLinkBatchInput {
+    pub idempotency_key: String,
+    pub board_id: String,
+    pub links: Vec<LinkBatchItem>,
+}
+
+/// Result of a batch Link Card create: the created card ids plus a durable batch
+/// id that represents the operation as one undo/trash unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLinkBatchResult {
+    pub batch_id: String,
+    pub card_ids: Vec<String>,
+}
