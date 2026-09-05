@@ -796,7 +796,11 @@ function App() {
             Add image
           </button>
         </div>
-        <BoardBreadcrumbs breadcrumbs={breadcrumbs} onNavigate={(id) => void navigateTo(id, { push: true })} />
+        <BoardBreadcrumbs
+          breadcrumbs={breadcrumbs}
+          currentBoardId={board?.id ?? ""}
+          onNavigate={(id) => void navigateTo(id, { push: true })}
+        />
         {contextMenu && (
           <div
             className="context-menu"

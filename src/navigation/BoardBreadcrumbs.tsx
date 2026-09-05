@@ -3,19 +3,31 @@ import "./board-breadcrumbs.css";
 
 interface BoardBreadcrumbsProps {
   breadcrumbs: Breadcrumb[];
+  /** The id of the currently-open board. Marked with `aria-current="page"`. */
+  currentBoardId: string;
   onNavigate: (boardId: string) => void;
+  /** When true, show the full path without collapsing (used during drag). */
+  dragActive?: boolean;
 }
 
 const MAX_VISIBLE = 3;
 
 /**
  * Breadcrumb trail (Home ... current). Keeps Home and the current/tail boards,
- * collapsing the middle ancestors behind an ellipsis when deep (plan G).
+ * collapsing the middle ancestors behind an ellipsis when deep (plan G). Every
+ * visible crumb is an enabled navigation button; the current board is marked
+ * with `aria-current` rather than disabled so activating it is a safe same-board
+ * navigation.
  */
-export function BoardBreadcrumbs({ breadcrumbs, onNavigate }: BoardBreadcrumbsProps) {
+export function BoardBreadcrumbs({
+  breadcrumbs,
+  currentBoardId,
+  onNavigate,
+  dragActive = false,
+}: BoardBreadcrumbsProps) {
   if (breadcrumbs.length === 0) return null;
 
-  const crumbs = collapseMiddle(breadcrumbs);
+  const crumbs = dragActive ? breadcrumbs : collapseMiddle(breadcrumbs);
 
   return (
     <nav className="breadcrumbs" aria-label="Board path" data-testid="breadcrumbs">
@@ -30,7 +42,7 @@ export function BoardBreadcrumbs({ breadcrumbs, onNavigate }: BoardBreadcrumbsPr
             <button
               type="button"
               className="breadcrumbs__link"
-              disabled={i === crumbs.length - 1}
+              aria-current={item.id === currentBoardId ? "page" : undefined}
               onClick={() => onNavigate(item.id)}
             >
               {item.title}

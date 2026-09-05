@@ -13,6 +13,7 @@ describe("BoardBreadcrumbs", () => {
     render(
       <BoardBreadcrumbs
         breadcrumbs={[b("home", "Home"), b("a", "Books")]}
+        currentBoardId="a"
         onNavigate={vi.fn()}
       />,
     );
@@ -22,24 +23,53 @@ describe("BoardBreadcrumbs", () => {
 
   it("collapses middle ancestors for deep trails", () => {
     const trail = [b("home", "Home"), b("a", "A"), b("b", "B"), b("c", "C"), b("d", "Deep")];
-    render(<BoardBreadcrumbs breadcrumbs={trail} onNavigate={vi.fn()} />);
-    // Home and the last two are shown; middle "B" is collapsed.
+    render(
+      <BoardBreadcrumbs breadcrumbs={trail} currentBoardId="d" onNavigate={vi.fn()} />,
+    );
     expect(screen.getByText("Home")).toBeInTheDocument();
     expect(screen.getByText("Deep")).toBeInTheDocument();
     expect(screen.queryByText("B")).not.toBeInTheDocument();
     expect(screen.getByText("…")).toBeInTheDocument();
   });
 
-  it("navigates when a non-current crumb is clicked", async () => {
+  it("marks the current board with aria-current and does not disable it", () => {
+    render(
+      <BoardBreadcrumbs
+        breadcrumbs={[b("home", "Home"), b("a", "Books")]}
+        currentBoardId="a"
+        onNavigate={vi.fn()}
+      />,
+    );
+    const books = screen.getByText("Books");
+    expect(books.closest("button")).toHaveAttribute("aria-current", "page");
+    expect(books.closest("button")).not.toBeDisabled();
+  });
+
+  it("navigates when any crumb (including current) is clicked", async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();
     render(
       <BoardBreadcrumbs
         breadcrumbs={[b("home", "Home"), b("a", "Books")]}
+        currentBoardId="a"
         onNavigate={onNavigate}
       />,
     );
     await user.click(screen.getByText("Home"));
     expect(onNavigate).toHaveBeenCalledWith("home");
+
+    await user.click(screen.getByText("Books"));
+    expect(onNavigate).toHaveBeenCalledWith("a");
+  });
+
+  it("does not apply aria-current when the id does not match", () => {
+    render(
+      <BoardBreadcrumbs
+        breadcrumbs={[b("home", "Home"), b("a", "Books")]}
+        currentBoardId="missing"
+        onNavigate={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Books").closest("button")).not.toHaveAttribute("aria-current");
   });
 });
