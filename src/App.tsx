@@ -12,6 +12,7 @@ import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./e
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardTabs } from "./navigation/BoardTabs";
+import { QuickBoardsBar } from "./navigation/QuickBoardsBar";
 import {
   activateBoardTab,
   createBoardTabs,
@@ -32,6 +33,7 @@ import type {
   EmbedCardDto,
   ImageCardDto,
   NoteCardDto,
+  QuickBoardDto,
   WorkspaceGateway,
 } from "./services/workspace-gateway";
 import {
@@ -52,6 +54,10 @@ function App() {
   // and React Flow fires `onNodeDragStop` right after the final `onNodeDrag` in
   // the same pointer gesture, so state alone is too stale to resolve the drop.
   const dropTargetBoardIdRef = useRef<string | null>(null);
+  // Whether the pointer is over the Quick Boards region during a Board Portal
+  // drag, so a drop pins a reference instead of reparenting the Board.
+  const overQuickBoardsRef = useRef<boolean>(false);
+  const [dropActiveQuickBoards, setDropActiveQuickBoards] = useState(false);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
@@ -65,6 +71,9 @@ function App() {
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
+
+  // Quick Boards: persisted, ordered references to Boards.
+  const [quickBoards, setQuickBoards] = useState<QuickBoardDto[]>([]);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -171,6 +180,20 @@ function App() {
       cancelled = true;
     };
   }, [gateway]);
+
+  // Load persisted Quick Board references once at startup.
+  const loadQuickBoards = useCallback(() => {
+    void gateway
+      .listQuickBoards()
+      .then(setQuickBoards)
+      .catch((e) => {
+        dispatch({ type: "failed", message: errorMessage(e) });
+      });
+  }, [gateway]);
+
+  useEffect(() => {
+    loadQuickBoards();
+  }, [loadQuickBoards]);
 
   const handleCreateNote = useCallback(
     async (position?: { x: number; y: number }) => {
@@ -577,6 +600,32 @@ function App() {
     [gateway, dispatcher, idGenerator],
   );
 
+  // Quick Boards: remove deletes only the reference, and pin adds a reference
+  // without moving/reparenting the Board. (Open lives after `navigateTo`.)
+  const handleQuickBoardRemove = useCallback(
+    (boardId: string) => {
+      void gateway
+        .removeQuickBoard(boardId)
+        .then(loadQuickBoards)
+        .catch((e) => {
+          dispatch({ type: "failed", message: errorMessage(e) });
+        });
+    },
+    [gateway, loadQuickBoards],
+  );
+
+  const handleQuickBoardPin = useCallback(
+    (boardId: string) => {
+      void gateway
+        .addQuickBoard({ boardId })
+        .then(loadQuickBoards)
+        .catch((e) => {
+          dispatch({ type: "failed", message: errorMessage(e) });
+        });
+    },
+    [gateway, loadQuickBoards],
+  );
+
   // During a card drag, resolve the board the pointer is over by hit-testing the
   // breadcrumb ancestor trail. Only the hovered board id is kept in state; the
   // actual drop is routed through handleCardDroppedOnPortal.
@@ -588,18 +637,35 @@ function App() {
     const boardId = crumbEl?.getAttribute("data-board-drop-id") ?? null;
     dropTargetBoardIdRef.current = boardId;
     setDropTargetBoardId(boardId);
+    // Also hit-test the Quick Boards region so a Board Portal drop there pins a
+    // reference instead of reparenting the Board.
+    const quickEl = el?.closest?.("[data-quick-boards-drop]") as HTMLElement | null;
+    const overQuick = Boolean(quickEl);
+    overQuickBoardsRef.current = overQuick;
+    setDropActiveQuickBoards(overQuick);
   }, []);
 
   const handleCardDragEnd = useCallback(() => {
     const cardId = lastDraggedCardIdRef.current;
     const targetBoardId = dropTargetBoardIdRef.current;
+    const overQuick = overQuickBoardsRef.current;
     dropTargetBoardIdRef.current = null;
+    overQuickBoardsRef.current = false;
     setDropTargetBoardId(null);
+    setDropActiveQuickBoards(false);
     lastDraggedCardIdRef.current = null;
+    if (cardId && overQuick) {
+      // Pin the dragged Board Portal as a Quick Board reference (no move/reparent).
+      const card = cardsRef.current.find((c) => c.id === cardId);
+      if (card?.kind === "board_portal") {
+        handleQuickBoardPin(card.target.id);
+      }
+      return;
+    }
     if (cardId && targetBoardId) {
       handleCardDroppedOnPortal(cardId, targetBoardId);
     }
-  }, [handleCardDroppedOnPortal]);
+  }, [handleCardDroppedOnPortal, handleQuickBoardPin]);
 
   const handleDeleteSelection = useCallback(async () => {
     if (state.selection.length === 0) return;
@@ -821,6 +887,14 @@ function App() {
     if (board) void navigateTo(board.id);
   }, [board, navigateTo]);
 
+  // Quick Boards: open navigates (opening/activating a tab).
+  const handleQuickBoardOpen = useCallback(
+    (boardId: string) => {
+      void navigateTo(boardId, { pushHistory: true, tabMode: "open" });
+    },
+    [navigateTo],
+  );
+
   // Detect external (agent) writes by polling SQLite's PRAGMA data_version. Any
   // commit from another connection changes it; then reload the open Board so the
   // UI reflects the external change without a manual refresh.
@@ -984,12 +1058,22 @@ function App() {
             onClose={handleTabClose}
           />
         )}
-        <BoardBreadcrumbs
-          breadcrumbs={breadcrumbs}
-          currentBoardId={board?.id ?? ""}
-          dropTargetBoardId={dropTargetBoardId}
-          onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
-        />
+        <div className="workspace__nav-row">
+          <BoardBreadcrumbs
+            breadcrumbs={breadcrumbs}
+            currentBoardId={board?.id ?? ""}
+            dropTargetBoardId={dropTargetBoardId}
+            onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
+          />
+          <div className="quick-boards-dropzone" data-quick-boards-drop="true">
+            <QuickBoardsBar
+              quickBoards={quickBoards}
+              onOpen={handleQuickBoardOpen}
+              onRemove={handleQuickBoardRemove}
+              dropActive={dropActiveQuickBoards}
+            />
+          </div>
+        </div>
         {contextMenu && (
           <div
             className="context-menu"

@@ -1,4 +1,5 @@
 import type {
+  AddQuickBoardInput,
   AssetDto,
   BoardSnapshot,
   BoardSummary,
@@ -13,6 +14,8 @@ import type {
   MoveCardInput,
   MoveCardsInput,
   MoveCardToBoardInput,
+  QuickBoardDto,
+  ReorderQuickBoardsInput,
   SaveViewportInput,
   TrashSelectionInput,
   UpdateEmbedDescriptionInput,
@@ -40,6 +43,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
     cards: [],
   };
+
+  private quickBoards: QuickBoardDto[] = [];
 
   private dataVersion = 0;
 
@@ -389,6 +394,57 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     this.snapshot.cards = this.snapshot.cards.filter((c) => !ids.has(c.id) && !(c.kind === "board_portal" && ids.has(c.target.id)));
     return Promise.resolve("batch");
+  }
+
+  listQuickBoards(): Promise<QuickBoardDto[]> {
+    // Only return references to active (still-existing) boards.
+    return Promise.resolve(
+      this.quickBoards
+        .filter((q) => this.boards.has(q.boardId))
+        .map((q) => ({ ...q })),
+    );
+  }
+
+  addQuickBoard(input: AddQuickBoardInput): Promise<void> {
+    const board = this.boards.get(input.boardId);
+    if (!board) return Promise.reject(new Error(`board not found: ${input.boardId}`));
+    if (board.id === this.board.id) {
+      // Home is never pinnable (mirrors RootBoardProtected).
+      return Promise.reject(new Error("root board is protected"));
+    }
+    if (!this.quickBoards.some((q) => q.boardId === input.boardId)) {
+      const colorToken = "terracotta";
+      this.quickBoards.push({
+        boardId: input.boardId,
+        title: board.title,
+        colorToken,
+        sortOrder: this.quickBoards.length,
+      });
+    }
+    return Promise.resolve();
+  }
+
+  removeQuickBoard(boardId: string): Promise<void> {
+    this.quickBoards = this.quickBoards.filter((q) => q.boardId !== boardId);
+    this.quickBoards.forEach((q, i) => {
+      q.sortOrder = i;
+    });
+    return Promise.resolve();
+  }
+
+  reorderQuickBoards(input: ReorderQuickBoardsInput): Promise<void> {
+    if (input.boardIds.length !== this.quickBoards.length) {
+      return Promise.reject(new Error("reorder must include every pinned board exactly once"));
+    }
+    const byId = new Map(this.quickBoards.map((q) => [q.boardId, q]));
+    const next: QuickBoardDto[] = [];
+    for (const id of input.boardIds) {
+      const q = byId.get(id);
+      if (!q) return Promise.reject(new Error(`board not found: ${id}`));
+      next.push({ ...q, sortOrder: next.length });
+    }
+    this.quickBoards = next;
+    return Promise.resolve();
   }
 
   private buildBreadcrumbs(boardId: string) {

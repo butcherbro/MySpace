@@ -28,6 +28,17 @@ export interface Viewport {
   revision: number;
 }
 
+/**
+ * A Quick Board reference: a stable, ordered, workspace-scoped pointer to a
+ * (non-Home) Board. Not a tab, portal, copy, or move.
+ */
+export interface QuickBoardDto {
+  boardId: string;
+  title: string;
+  colorToken: string;
+  sortOrder: number;
+}
+
 export interface NoteCardDto {
   kind: "note";
   id: string;
@@ -234,6 +245,14 @@ export interface TrashSelectionInput {
   items: TrashItemInput[];
 }
 
+export interface AddQuickBoardInput {
+  boardId: string;
+}
+
+export interface ReorderQuickBoardsInput {
+  boardIds: string[];
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -262,4 +281,8 @@ export interface WorkspaceGateway {
   enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto>;
   updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void>;
   trashSelection(input: TrashSelectionInput): Promise<string>;
+  listQuickBoards(): Promise<QuickBoardDto[]>;
+  addQuickBoard(input: AddQuickBoardInput): Promise<void>;
+  removeQuickBoard(boardId: string): Promise<void>;
+  reorderQuickBoards(input: ReorderQuickBoardsInput): Promise<void>;
 }

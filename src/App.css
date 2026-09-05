@@ -39,6 +39,31 @@
   font-weight: 600;
 }
 
+/* One shared navigation row: breadcrumbs then Quick Boards (no second strip). */
+.workspace__nav-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--edge-subtle);
+  background: var(--chrome-surface);
+  min-height: 36px;
+  padding-right: var(--space-3);
+}
+
+.workspace__nav-row .breadcrumbs {
+  flex: 0 1 auto;
+  border-bottom: none;
+}
+
+/* The Quick Boards drop zone is a flex-grow sibling after breadcrumbs so it is
+   always present (hit-testable) but occupies no width when empty. */
+.quick-boards-dropzone {
+  flex: 1 1 auto;
+  min-width: 48px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+}
+
 .workspace__error {
   padding: 8px 16px;
   background: var(--danger-surface);

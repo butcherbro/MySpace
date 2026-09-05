@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AddQuickBoardInput,
   AssetDto,
   BoardSnapshot,
   BoardSummary,
@@ -14,6 +15,8 @@ import type {
   MoveCardInput,
   MoveCardsInput,
   MoveCardToBoardInput,
+  QuickBoardDto,
+  ReorderQuickBoardsInput,
   SaveViewportInput,
   TrashSelectionInput,
   UpdateEmbedDescriptionInput,
@@ -122,5 +125,21 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   trashSelection(input: TrashSelectionInput): Promise<string> {
     return invoke<string>("trash_selection", { input });
+  }
+
+  listQuickBoards(): Promise<QuickBoardDto[]> {
+    return invoke<QuickBoardDto[]>("list_quick_boards", {});
+  }
+
+  addQuickBoard(input: AddQuickBoardInput): Promise<void> {
+    return invoke<void>("add_quick_board", { input });
+  }
+
+  removeQuickBoard(boardId: string): Promise<void> {
+    return invoke<void>("remove_quick_board", { boardId });
+  }
+
+  reorderQuickBoards(input: ReorderQuickBoardsInput): Promise<void> {
+    return invoke<void>("reorder_quick_boards", { input });
   }
 }

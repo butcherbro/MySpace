@@ -473,3 +473,37 @@ test("Back recreates a board tab that was closed while inactive", async ({ page 
   await expect(restored).toHaveAttribute("data-active", "true");
   await expect(page.getByTestId("board-tab")).toHaveCount(3);
 });
+
+// --- Quick Boards ---
+
+test("dropping a board portal pins a quick board; click opens; remove unpins", async ({ page }) => {
+  await page.goto("/");
+
+  // No quick boards yet.
+  await expect(page.getByTestId("quick-boards")).toHaveCount(0);
+
+  // Create a child board portal.
+  await page.getByRole("button", { name: "New board", exact: true }).click();
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+
+  // Drag the portal onto the Quick Boards region (the nav row). The region is
+  // empty, so it only appears as a drop target while a portal is being dragged.
+  const tileCenter = await centerOf(page, ".board-portal-card__tile");
+  const navRow = page.locator(".workspace__nav-row");
+  const navBox = await navRow.boundingBox();
+  expect(navBox).not.toBeNull();
+  if (!navBox) return;
+
+  await dragCenter(page, tileCenter, { x: navBox.x + navBox.width - 20, y: navBox.y + navBox.height / 2 });
+
+  // A quick board chip now appears for the pinned board.
+  await expect(page.getByTestId("quick-board")).toHaveCount(1);
+
+  // Click it to open/activate the board tab.
+  await page.getByTestId("quick-board").locator(".quick-boards__open").click();
+  await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
+
+  // Remove the pin; the chip disappears but the board still exists.
+  await page.getByRole("button", { name: /Remove quick board New Board/ }).click();
+  await expect(page.getByTestId("quick-boards")).toHaveCount(0);
+});
