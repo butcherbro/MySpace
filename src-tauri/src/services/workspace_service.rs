@@ -10,8 +10,8 @@ use rusqlite::Connection;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    BoardSnapshot, BoardSummary, CardDto, CreateLinkBatchInput, CreateLinkBatchResult, TrashItem,
-    TrashSelectionInput,
+    AddQuickBoardInput, BoardSnapshot, BoardSummary, CardDto, CreateLinkBatchInput,
+    CreateLinkBatchResult, QuickBoardDto, ReorderQuickBoardsInput, TrashItem, TrashSelectionInput,
 };
 use crate::domain::trash_service;
 use crate::repositories::workspace_repository;
@@ -138,5 +138,31 @@ impl WorkspaceService {
             })
             .collect();
         trash_service::trash_selection(conn, &TrashSelectionInput { items })
+    }
+
+    /// Lists Quick Boards in persisted order.
+    pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, WorkspaceError> {
+        workspace_repository::list_quick_boards(conn)
+    }
+
+    /// Adds a Quick Board reference idempotently (non-Home, active Board only).
+    pub fn add_quick_board(
+        conn: &mut Connection,
+        input: &AddQuickBoardInput,
+    ) -> Result<(), WorkspaceError> {
+        workspace_repository::add_quick_board(conn, input)
+    }
+
+    /// Removes a Quick Board reference.
+    pub fn remove_quick_board(conn: &mut Connection, board_id: &str) -> Result<(), WorkspaceError> {
+        workspace_repository::remove_quick_board(conn, board_id)
+    }
+
+    /// Reorders Quick Board references transactionally.
+    pub fn reorder_quick_boards(
+        conn: &mut Connection,
+        input: &ReorderQuickBoardsInput,
+    ) -> Result<(), WorkspaceError> {
+        workspace_repository::reorder_quick_boards(conn, input)
     }
 }

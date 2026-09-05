@@ -45,6 +45,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "mutation_receipts_card_ids",
         sql: include_str!("../../migrations/0006_mutation_receipts_card_ids.sql"),
     },
+    Migration {
+        version: 7,
+        name: "quick_boards",
+        sql: include_str!("../../migrations/0007_quick_boards.sql"),
+    },
 ];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.

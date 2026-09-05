@@ -109,6 +109,10 @@ pub fn run() {
             commands::trash::trash_selection,
             commands::trash::restore_trash_batch,
             commands::clipboard::copy_text_command,
+            commands::quick_boards::list_quick_boards,
+            commands::quick_boards::add_quick_board,
+            commands::quick_boards::remove_quick_board,
+            commands::quick_boards::reorder_quick_boards,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

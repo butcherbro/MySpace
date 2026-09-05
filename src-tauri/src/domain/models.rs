@@ -406,3 +406,30 @@ pub struct CreateLinkBatchResult {
     pub batch_id: String,
     pub card_ids: Vec<String>,
 }
+
+/// A Quick Board reference: a stable, ordered, workspace-scoped pointer to a
+/// (non-Home) Board. Not a tab, portal, copy, or move.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickBoardDto {
+    pub board_id: String,
+    pub title: String,
+    pub color_token: String,
+    pub sort_order: i64,
+}
+
+/// Input for adding a Quick Board reference. Idempotent: adding an already-pinned
+/// board updates nothing and succeeds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddQuickBoardInput {
+    pub board_id: String,
+}
+
+/// Input for reordering Quick Board references. `board_ids` is the full new
+/// order (all currently-pinned boards), applied transactionally.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderQuickBoardsInput {
+    pub board_ids: Vec<String>,
+}
