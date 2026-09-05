@@ -98,8 +98,11 @@ architecture pass before sizing; `blocked` = depends on another item.
    survives rapid dev restarts, and one rehearsed restore path.
 3. ✅ Add a concrete Rust `WorkspaceService` + direct Link creation (batch) +
    ✅ MCP read-Board / list-boards / batch-add-Links vertical slice over stdio.
-   Next within this step: cross-process refresh (data_version polling) + durable
-   batch undo + asynchronous Link enrichment after agent writes.
+   ✅ cross-process refresh (get_data_version + frontend polling).
+   ✅ durable batch undo (trash_links).
+   ✅ asynchronous Link enrichment (enrich_links).
+   Remaining refinement: durable batch identity is a receipt table; agent write
+   confirmation UX is the UI's concern, not the protocol slice.
 4. Browser-like board tabs + Quick Boards, then clipboard copy of images.
 5. Filesystem shortcuts after the external addressing/access model is proven; do
    not add a speculative card kind to the schema now.
