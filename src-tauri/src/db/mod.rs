@@ -4,6 +4,7 @@
 //! pragmas from Section C of the plan: foreign keys on, WAL journaling, FULL
 //! synchronous, and a bounded busy timeout.
 
+pub mod backup;
 pub mod bootstrap;
 pub mod migrations;
 

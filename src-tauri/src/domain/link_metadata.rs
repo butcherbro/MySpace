@@ -492,8 +492,7 @@ fn is_public_ip(ip: IpAddr) -> bool {
             !(ip.is_loopback()
                 || ip.is_unspecified()
                 || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-                || (ip.segments()[0] & 0xffc0) == 0x2001)
+                || ip.is_unicast_link_local())
         }
     }
 }

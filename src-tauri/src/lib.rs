@@ -69,6 +69,13 @@ pub fn run() {
                 .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&data_dir).expect("failed to create app data dir");
             let db_path = data_dir.join("workspace.sqlite3");
+            let assets_dir = data_dir.join("assets");
+            let backup_dir = data_dir.join("backups");
+
+            // Take a recoverable snapshot BEFORE migrations/mutations run, so the
+            // pre-upgrade state is always inspectable even if a future migration
+            // misbehaves. Best-effort: it never blocks startup.
+            db::backup::snapshot_on_startup(&db_path, &assets_dir, &backup_dir);
 
             let conn = db::open_and_bootstrap(&db_path)
                 .expect("failed to open and bootstrap workspace database");
