@@ -74,6 +74,21 @@ architecture pass before sizing; `blocked` = depends on another item.
   (`docs/plans/2026-09-04-spatial-workspace-interface.md`). Not started; the current
   fix just places drops at a free slot below existing cards.
 
+### 6. Board icon/color/cover editing
+
+- `later` — Let the user change a Board Portal's color token and/or set a cover image
+  (from clipboard). Currently color is auto-assigned by id at creation
+  (`board_service::deterministic_color_token`). Lives in the portal-context rail of
+  `.interface-design/system.md`; cover-from-clipboard is part of the clipboard slice
+  (see `docs/specs/link-card-and-clipboard.md`). Not started.
+
+### 7. Copy MySpace Link / Copy File Path
+
+- `next` — Board is addressed as `myspace://board/<id>`, not a filesystem path
+  (ADR-0005). UI action `Copy MySpace Link` on a Board/Card, and `Copy File Path`
+  (real `assets/<id>.*` path) on an image. Ships with the `WorkspaceService` + MCP
+  slice because that is where stable entity addressing lands.
+
 ## Ordering decision
 
 1. Finish the current block: breadcrumb order (✅), breadcrumb navigation (✅),
@@ -81,9 +96,10 @@ architecture pass before sizing; `blocked` = depends on another item.
    `docs/plans/2026-09-05-board-hierarchy-breadcrumb-dnd.md`).
 2. Safety gate for the live workspace: validated/atomic snapshots, retention that
    survives rapid dev restarts, and one rehearsed restore path.
-3. Add a concrete Rust `WorkspaceService` + direct Link
-   creation → MCP read-Board/batch-add-Links vertical slice → cross-process refresh
-   and durable batch undo.
+3. ✅ Add a concrete Rust `WorkspaceService` + direct Link creation (batch) +
+   ✅ MCP read-Board / list-boards / batch-add-Links vertical slice over stdio.
+   Next within this step: cross-process refresh (data_version polling) + durable
+   batch undo + asynchronous Link enrichment after agent writes.
 4. Browser-like board tabs + Quick Boards, then clipboard copy of images.
 5. Filesystem shortcuts after the external addressing/access model is proven; do
    not add a speculative card kind to the schema now.
