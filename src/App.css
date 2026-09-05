@@ -55,13 +55,15 @@
 }
 
 /* The Quick Boards drop zone is a flex-grow sibling after breadcrumbs so it is
-   always present (hit-testable) but occupies no width when empty. */
+   always present (hit-testable) but occupies no width when empty. A visible
+   left inset separates pinned chips from the breadcrumb trail. */
 .quick-boards-dropzone {
   flex: 1 1 auto;
   min-width: 48px;
   min-height: 36px;
   display: flex;
   align-items: center;
+  padding-left: var(--space-5);
 }
 
 .workspace__error {
