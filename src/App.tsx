@@ -14,6 +14,7 @@ import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardHistory } from "./navigation/board-history";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
+import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickImageFile } from "./services/asset-picker";
 import { subscribeToImageDrops } from "./services/drag-drop";
@@ -76,7 +77,7 @@ function App() {
           dispatch({ type: "cardReplaced", id: embed.id, card: enriched });
         })
         .catch((cause) => {
-          dispatch({ type: "failed", message: cause instanceof Error ? cause.message : String(cause) });
+          dispatch({ type: "failed", message: errorMessage(cause) });
         })
         .finally(() => {
           metadataInFlightRef.current.delete(embed.id);
@@ -138,7 +139,7 @@ function App() {
         });
       } catch (e) {
         if (!cancelled) {
-          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+          dispatch({ type: "failed", message: errorMessage(e) });
         }
       }
     }
@@ -179,7 +180,7 @@ function App() {
         );
         dispatch({ type: "cardAdded", card });
       } catch (e) {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
     [board, dispatcher, idGenerator, notes.length],
@@ -218,7 +219,7 @@ function App() {
       );
       dispatch({ type: "cardAdded", card: portal });
     } catch (e) {
-      dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+      dispatch({ type: "failed", message: errorMessage(e) });
     }
   }, [board, dispatcher, idGenerator, state.cards.length]);
 
@@ -263,7 +264,7 @@ function App() {
         });
         dispatch({ type: "cardAdded", card });
       } catch (e) {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
     [gateway, idGenerator],
@@ -325,7 +326,7 @@ function App() {
           plainText,
         });
       }).catch((e) => {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        dispatch({ type: "failed", message: errorMessage(e) });
         throw e;
       });
     },
@@ -373,7 +374,7 @@ function App() {
           plainText,
         });
       }).catch((e) => {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        dispatch({ type: "failed", message: errorMessage(e) });
         throw e;
       });
     },
@@ -405,7 +406,7 @@ function App() {
           captionPlainText,
         });
       }).catch((e) => {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        dispatch({ type: "failed", message: errorMessage(e) });
         throw e;
       });
     },
@@ -437,7 +438,7 @@ function App() {
           descriptionPlainText,
         });
       }).catch((e) => {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        dispatch({ type: "failed", message: errorMessage(e) });
         throw e;
       });
     },
@@ -493,7 +494,7 @@ function App() {
           }
         })
         .catch((err) => {
-          dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
+          dispatch({ type: "failed", message: errorMessage(err) });
         });
     },
     [idGenerator, dispatcher],
@@ -530,7 +531,7 @@ function App() {
             dispatch({ type: "cardsRemoved", ids: [cardId] });
           })
           .catch((err) => {
-            dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
+            dispatch({ type: "failed", message: errorMessage(err) });
           });
         return;
       }
@@ -547,7 +548,7 @@ function App() {
           dispatch({ type: "cardsRemoved", ids: [cardId] });
         })
         .catch((err) => {
-          dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
+          dispatch({ type: "failed", message: errorMessage(err) });
         });
     },
     [gateway, dispatcher, idGenerator],
@@ -594,7 +595,7 @@ function App() {
       await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
       dispatch({ type: "cardsRemoved", ids: state.selection });
     } catch (e) {
-      dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+      dispatch({ type: "failed", message: errorMessage(e) });
     }
   }, [state.selection, state.cards, dispatcher, idGenerator]);
 
@@ -624,7 +625,7 @@ function App() {
             dispatch({ type: "viewportSaved", revision: viewportRevisionRef.current + 1 });
           })
           .catch((err) => {
-            dispatch({ type: "failed", message: err instanceof Error ? err.message : String(err) });
+            dispatch({ type: "failed", message: errorMessage(err) });
           });
       }, 400);
     },
@@ -676,7 +677,7 @@ function App() {
           dispatch({ type: "cardMoved", id, revision: current.revision + 1, frame });
         })
         .catch((e) => {
-          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+          dispatch({ type: "failed", message: errorMessage(e) });
         });
     },
     [gateway],
@@ -705,7 +706,7 @@ function App() {
       .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
       .then(() => dispatch({ type: "cardsRemoved", ids }))
       .catch((e) => {
-        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        dispatch({ type: "failed", message: errorMessage(e) });
       });
   }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator]);
 
@@ -754,7 +755,7 @@ function App() {
           reloadCurrentBoard();
         })
         .catch((e) => {
-          dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+          dispatch({ type: "failed", message: errorMessage(e) });
         });
     },
     [state.cards, dispatcher, idGenerator, reloadCurrentBoard],

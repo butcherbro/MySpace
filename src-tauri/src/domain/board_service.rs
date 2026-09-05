@@ -222,6 +222,11 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
         });
     }
 
+    // Place the relocated portal at a free slot on the target board rather than
+    // a fixed origin, so a freshly dropped Board never stacks invisibly on top of
+    // an existing card. A simple downward cascade below the lowest card.
+    let (dest_x, dest_y) = next_free_position(conn, &input.target_parent_board_id);
+
     let tx = conn.transaction()?;
 
     let board_changed = tx.execute(
@@ -244,8 +249,8 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
         "UPDATE cards SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4 WHERE id = ?5 AND revision = ?6",
         params![
             input.target_parent_board_id,
-            input.frame.x,
-            input.frame.y,
+            dest_x,
+            dest_y,
             now,
             portal_card_id,
             input.expected_portal_revision
@@ -260,4 +265,25 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
 
     tx.commit()?;
     Ok(())
+}
+
+/// Returns a free placement slot on a board: the left column x, cascaded below
+/// the lowest existing active card. Simple and deterministic so repeatedly
+/// dropping Boards never stacks them invisibly at the same origin.
+fn next_free_position(conn: &Connection, board_id: &str) -> (f64, f64) {
+    const X: f64 = 40.0;
+    const GAP: f64 = 24.0;
+
+    let max_bottom: f64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(y + height), 0.0) FROM cards WHERE board_id = ?1 AND deleted_at IS NULL",
+            [board_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+
+    if max_bottom <= 0.0 {
+        return (X, 40.0);
+    }
+    (X, max_bottom + GAP)
 }
