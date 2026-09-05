@@ -54,3 +54,34 @@ pub fn resolve_asset_path(
         .to_string_lossy()
         .to_string())
 }
+
+/// Copies the image files backing the given image card ids to the system
+/// clipboard (as file references). Used by "Copy" on a selection of images.
+#[tauri::command]
+pub fn copy_image_cards(
+    app: AppHandle,
+    db: DbState<'_>,
+    card_ids: Vec<String>,
+) -> Result<(), WorkspaceError> {
+    let conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    let dir = asset_dir(&app);
+
+    let mut paths = Vec::new();
+    for card_id in &card_ids {
+        let asset_id: String = conn.query_row(
+            "SELECT i.asset_id
+             FROM image_cards i
+             JOIN cards c ON c.id = i.card_id
+             WHERE c.id = ?1 AND c.deleted_at IS NULL",
+            [card_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let asset = asset_service::load_asset(&conn, &asset_id)?
+            .ok_or(WorkspaceError::NotFound(asset_id))?;
+        paths.push(asset_service::asset_abs_path(&dir, &asset.file_path));
+    }
+
+    crate::commands::clipboard::copy_image_files(&paths).map_err(WorkspaceError::Database)
+}

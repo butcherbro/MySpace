@@ -87,6 +87,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::assets::import_asset,
             commands::assets::resolve_asset_path,
+            commands::assets::copy_image_cards,
             commands::boards::load_board_snapshot,
             commands::boards::get_home_board,
             commands::boards::save_viewport,

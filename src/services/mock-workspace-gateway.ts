@@ -4,6 +4,7 @@ import type {
   BoardSnapshot,
   BoardSummary,
   ConvertNoteToEmbedInput,
+  CopyImageCardsInput,
   CreateChildBoardInput,
   CreateImageCardInput,
   CreateNoteInput,
@@ -444,6 +445,13 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       next.push({ ...q, sortOrder: next.length });
     }
     this.quickBoards = next;
+    return Promise.resolve();
+  }
+
+  copyImageCards(input: CopyImageCardsInput): Promise<void> {
+    void input;
+    // Browser/tests have no pasteboard; succeed as a no-op (no-op parity with
+    // the real command path, which only fails on missing assets/macOS).
     return Promise.resolve();
   }
 

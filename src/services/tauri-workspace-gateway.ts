@@ -5,6 +5,7 @@ import type {
   BoardSnapshot,
   BoardSummary,
   ConvertNoteToEmbedInput,
+  CopyImageCardsInput,
   CreateChildBoardInput,
   CreateImageCardInput,
   CreateNoteInput,
@@ -141,5 +142,9 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   reorderQuickBoards(input: ReorderQuickBoardsInput): Promise<void> {
     return invoke<void>("reorder_quick_boards", { input });
+  }
+
+  copyImageCards(input: CopyImageCardsInput): Promise<void> {
+    return invoke<void>("copy_image_cards", { cardIds: input.cardIds });
   }
 }

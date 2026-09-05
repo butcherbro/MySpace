@@ -253,6 +253,10 @@ export interface ReorderQuickBoardsInput {
   boardIds: string[];
 }
 
+export interface CopyImageCardsInput {
+  cardIds: string[];
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -285,4 +289,5 @@ export interface WorkspaceGateway {
   addQuickBoard(input: AddQuickBoardInput): Promise<void>;
   removeQuickBoard(boardId: string): Promise<void>;
   reorderQuickBoards(input: ReorderQuickBoardsInput): Promise<void>;
+  copyImageCards(input: CopyImageCardsInput): Promise<void>;
 }

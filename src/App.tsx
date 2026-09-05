@@ -857,6 +857,20 @@ function App() {
     }
   }, [contextMenu, state.cards, gateway]);
 
+  // Copy the images of the current selection to the system clipboard.
+  const handleCopySelectionImages = useCallback(() => {
+    const imageIds = state.selection.filter((id) => {
+      const card = state.cards.find((c) => c.id === id);
+      return card?.kind === "image";
+    });
+    if (imageIds.length === 0) return;
+    void gateway
+      .copyImageCards({ cardIds: imageIds })
+      .catch((e) => {
+        dispatch({ type: "failed", message: errorMessage(e) });
+      });
+  }, [state.selection, state.cards, gateway]);
+
   // Load a board's snapshot into the store.
   const navigateTo = useCallback(
     async (
@@ -1042,6 +1056,9 @@ function App() {
         } else {
           void dispatcher.undo().then(() => reloadCurrentBoard());
         }
+      } else if (e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        handleCopySelectionImages();
       } else if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         void handleDeleteSelection();
@@ -1049,7 +1066,7 @@ function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, dispatcher, handleDeleteSelection, reloadCurrentBoard]);
+  }, [handleNavigateBack, handleNavigateForward, dispatcher, handleDeleteSelection, handleCopySelectionImages, reloadCurrentBoard]);
 
   return (
     <AppShell>
@@ -1123,6 +1140,18 @@ function App() {
                 }}
               >
                 Copy File Path
+              </button>
+            )}
+            {state.cards.find((c) => c.kind === "image" && c.id === contextMenu.cardId) && (
+              <button
+                type="button"
+                className="context-menu__item"
+                onClick={() => {
+                  setContextMenu(null);
+                  handleCopySelectionImages();
+                }}
+              >
+                Copy Image
               </button>
             )}
             <button type="button" className="context-menu__item" onClick={handleContextDelete}>
