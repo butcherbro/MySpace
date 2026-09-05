@@ -89,6 +89,7 @@ pub fn run() {
             commands::boards::load_board_snapshot,
             commands::boards::get_home_board,
             commands::boards::save_viewport,
+            commands::boards::get_data_version,
             commands::boards::create_child_board,
             commands::boards::rename_board,
             commands::boards::move_board,

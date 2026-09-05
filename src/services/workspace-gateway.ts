@@ -241,6 +241,7 @@ export interface TrashSelectionInput {
 export interface WorkspaceGateway {
   getHomeBoard(): Promise<BoardSummary>;
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot>;
+  getDataVersion(): Promise<number>;
   createNote(input: CreateNoteInput): Promise<void>;
   updateNote(input: UpdateNoteInput): Promise<void>;
   moveCard(input: MoveCardInput): Promise<void>;

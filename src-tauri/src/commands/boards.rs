@@ -62,6 +62,17 @@ pub fn save_viewport(db: DbState<'_>, input: UpdateViewportInput) -> Result<(), 
     workspace_repository::update_viewport(&mut conn, &input)
 }
 
+/// Returns SQLite's `PRAGMA data_version`, which changes whenever another
+/// connection commits. The frontend polls it to detect external (agent) writes.
+#[tauri::command]
+pub fn get_data_version(db: DbState<'_>) -> Result<i64, WorkspaceError> {
+    let conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    conn.query_row("PRAGMA data_version", [], |r| r.get(0))
+        .map_err(WorkspaceError::from)
+}
+
 /// Creates a child board and its primary portal card atomically.
 #[tauri::command]
 pub fn create_child_board(

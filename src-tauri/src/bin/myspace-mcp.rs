@@ -14,6 +14,7 @@ use std::io::{BufRead, Write};
 
 use myspace_lib::db;
 use myspace_lib::domain::errors::WorkspaceError;
+use myspace_lib::domain::link_metadata::{enrich_embed_with_metadata, ReqwestMetadataFetcher};
 use myspace_lib::domain::models::{CreateLinkBatchInput, LinkBatchItem};
 use myspace_lib::services::workspace_service::{parse_address, WorkspaceService};
 
@@ -22,18 +23,27 @@ const SERVER_NAME: &str = "myspace-mcp";
 const SERVER_VERSION: &str = "0.1.0";
 
 /// Reads a DB path from `--db <path>` or falls back to the default macOS
-/// Application Support location.
-fn resolve_db_path() -> String {
+/// Application Support location. Returns (db_path, asset_dir).
+fn resolve_paths() -> (String, String) {
+    let mut db_path = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--db" {
             if let Some(path) = args.next() {
-                return path;
+                db_path = Some(path);
             }
         }
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    format!("{home}/Library/Application Support/com.bro.myspace/workspace.sqlite3")
+    let db_path = db_path.unwrap_or_else(|| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/Library/Application Support/com.bro.myspace/workspace.sqlite3")
+    });
+    // Assets live next to the DB in `<data_dir>/assets`.
+    let asset_dir = std::path::Path::new(&db_path)
+        .parent()
+        .map(|p| p.join("assets").to_string_lossy().to_string())
+        .unwrap_or_default();
+    (db_path, asset_dir)
 }
 
 fn send_response(w: &mut impl Write, id: &serde_json::Value, result: serde_json::Value) {
@@ -91,6 +101,24 @@ fn tools_list() -> serde_json::Value {
                     &["board", "idempotencyKey", "links"]
                 ),
                 "annotations": { "readOnlyHint": false, "destructiveHint": false }
+            },
+            {
+                "name": "enrich_links",
+                "description": "Fetch and apply preview metadata for a batch of Link Cards (by id).",
+                "inputSchema": tool_schema(
+                    serde_json::json!({ "cardIds": { "type": "array", "items": { "type": "string" } } }),
+                    &["cardIds"]
+                ),
+                "annotations": { "readOnlyHint": false, "destructiveHint": false }
+            },
+            {
+                "name": "trash_links",
+                "description": "Remove all Link Cards created by an agent batch (one undo unit).",
+                "inputSchema": tool_schema(
+                    serde_json::json!({ "batchId": { "type": "string" } }),
+                    &["batchId"]
+                ),
+                "annotations": { "readOnlyHint": false, "destructiveHint": true }
             }
         ]
     })
@@ -110,7 +138,7 @@ fn resolve_board_id(board_arg: &str) -> Result<String, WorkspaceError> {
 }
 
 fn main() {
-    let db_path = resolve_db_path();
+    let (db_path, asset_dir) = resolve_paths();
     let mut conn = db::open(std::path::Path::new(&db_path)).expect("failed to open workspace db");
 
     let stdin = std::io::stdin();
@@ -161,7 +189,7 @@ fn main() {
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
 
-                match handle_tool_call(&mut conn, name, &arguments) {
+                match handle_tool_call(&mut conn, &asset_dir, name, &arguments) {
                     Ok(result) => {
                         send_response(
                             &mut out,
@@ -190,6 +218,7 @@ fn main() {
 
 fn handle_tool_call(
     conn: &mut rusqlite::Connection,
+    asset_dir: &str,
     name: &str,
     arguments: &serde_json::Value,
 ) -> Result<String, String> {
@@ -282,6 +311,57 @@ fn handle_tool_call(
                 "cardIds": result.card_ids,
             }))
             .map_err(|e| e.to_string())?)
+        }
+        "enrich_links" => {
+            let card_ids: Vec<String> = arguments
+                .get("cardIds")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| "missing 'cardIds' argument".to_string())?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(|s| s.to_string())
+                        .ok_or_else(|| "cardIds must be strings".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let fetcher = ReqwestMetadataFetcher::new().map_err(|e| e.to_string())?;
+            let mut results = Vec::new();
+            for id in &card_ids {
+                // Fresh agent-created cards have revision 1.
+                match enrich_embed_with_metadata(
+                    conn,
+                    std::path::Path::new(asset_dir),
+                    &fetcher,
+                    id,
+                    1,
+                ) {
+                    Ok(embed) => results.push(
+                        serde_json::json!({ "id": id, "status": "ready", "title": embed.title }),
+                    ),
+                    Err(e) => results.push(
+                        serde_json::json!({ "id": id, "status": "failed", "error": e.to_string() }),
+                    ),
+                }
+            }
+            Ok(
+                serde_json::to_string_pretty(&serde_json::json!({ "results": results }))
+                    .map_err(|e| e.to_string())?,
+            )
+        }
+        "trash_links" => {
+            let batch_id = arguments
+                .get("batchId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing 'batchId' argument".to_string())?;
+            let trash_batch_id =
+                WorkspaceService::trash_link_batch(conn, batch_id).map_err(|e| e.to_string())?;
+            Ok(
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "trashBatchId": trash_batch_id }),
+                )
+                .map_err(|e| e.to_string())?,
+            )
         }
         _ => Err(format!("unknown tool: {name}")),
     }

@@ -41,8 +41,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     cards: [],
   };
 
+  private dataVersion = 0;
+
   getHomeBoard(): Promise<BoardSummary> {
     return Promise.resolve({ ...this.board });
+  }
+
+  getDataVersion(): Promise<number> {
+    return Promise.resolve(this.dataVersion);
   }
 
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot> {

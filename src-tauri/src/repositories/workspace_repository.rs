@@ -1134,6 +1134,24 @@ pub fn create_link_batch(
     Ok(CreateLinkBatchResult { batch_id, card_ids })
 }
 
+/// Returns the card ids recorded for an agent batch id, if it exists.
+pub fn load_batch_card_ids(
+    conn: &Connection,
+    agent_batch_id: &str,
+) -> Result<Option<Vec<String>>, WorkspaceError> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT card_ids FROM mutation_receipts WHERE batch_id = ?1",
+            [agent_batch_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match json {
+        Some(j) => Ok(Some(serde_json::from_str(&j).unwrap_or_default())),
+        None => Ok(None),
+    }
+}
+
 /// Returns the y coordinate for the next card on a board (cascade below the
 /// lowest existing card).
 fn next_card_y(conn: &Connection, board_id: &str) -> f64 {

@@ -36,6 +36,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<BoardSnapshot>("load_board_snapshot", { boardId });
   }
 
+  getDataVersion(): Promise<number> {
+    return invoke<number>("get_data_version", {});
+  }
+
   createNote(input: CreateNoteInput): Promise<void> {
     return invoke<void>("create_note", { input });
   }

@@ -742,6 +742,30 @@ function App() {
     if (board) void navigateTo(board.id);
   }, [board, navigateTo]);
 
+  // Detect external (agent) writes by polling SQLite's PRAGMA data_version. Any
+  // commit from another connection changes it; then reload the open Board so the
+  // UI reflects the external change without a manual refresh.
+  const dataVersionRef = useRef<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    // Prime the baseline once.
+    void gateway.getDataVersion().then((v) => {
+      if (!cancelled) dataVersionRef.current = v;
+    });
+    const id = setInterval(() => {
+      void gateway.getDataVersion().then((v) => {
+        if (!cancelled && v !== dataVersionRef.current && board) {
+          dataVersionRef.current = v;
+          void navigateTo(board.id);
+        }
+      });
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [gateway, board, navigateTo]);
+
   const handleRenameBoard = useCallback(
     (boardId: string, title: string) => {
       const card = state.cards.find(

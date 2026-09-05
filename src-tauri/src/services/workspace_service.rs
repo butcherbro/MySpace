@@ -10,8 +10,10 @@ use rusqlite::Connection;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    BoardSnapshot, BoardSummary, CreateLinkBatchInput, CreateLinkBatchResult,
+    BoardSnapshot, BoardSummary, CreateLinkBatchInput, CreateLinkBatchResult, TrashItem,
+    TrashSelectionInput,
 };
+use crate::domain::trash_service;
 use crate::repositories::workspace_repository;
 
 /// A resolved entity address of the form `myspace://<kind>/<id>`.
@@ -95,5 +97,26 @@ impl WorkspaceService {
         input: &CreateLinkBatchInput,
     ) -> Result<CreateLinkBatchResult, WorkspaceError> {
         workspace_repository::create_link_batch(conn, input)
+    }
+
+    /// Trashes all cards of an agent batch as one undo unit. Returns the trash
+    /// batch id used, or NotFound if the agent batch id is unknown.
+    pub fn trash_link_batch(
+        conn: &mut Connection,
+        agent_batch_id: &str,
+    ) -> Result<String, WorkspaceError> {
+        let card_ids = workspace_repository::load_batch_card_ids(conn, agent_batch_id)?
+            .ok_or_else(|| WorkspaceError::NotFound(agent_batch_id.to_string()))?;
+        if card_ids.is_empty() {
+            return Err(WorkspaceError::NotFound(agent_batch_id.to_string()));
+        }
+        let items = card_ids
+            .into_iter()
+            .map(|id| TrashItem {
+                id,
+                kind: "embed".to_string(),
+            })
+            .collect();
+        trash_service::trash_selection(conn, &TrashSelectionInput { items })
     }
 }
