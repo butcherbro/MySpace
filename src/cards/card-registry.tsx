@@ -9,6 +9,7 @@ import type { CardDto } from "../services/workspace-gateway";
 import { BoardPortalCard } from "./board/BoardPortalCard";
 import { NoteCard } from "./note/NoteCard";
 import { ImageCard } from "./image/ImageCard";
+import { EmbedCard } from "./link/EmbedCard";
 
 export interface CardRenderContext {
   /** Whether the card (if a note) is currently being edited. */
@@ -17,8 +18,14 @@ export interface CardRenderContext {
   onDeactivate: () => void;
   /** Persist note content as an authoritative document. */
   onUpdateNote: (id: string, document: unknown) => Promise<void>;
+  /** Finalize note editing and optionally convert the note into a Link Card. */
+  onFinalizeNote: (id: string, document: unknown) => Promise<void>;
   /** Persist an image card's caption. */
   onUpdateImageCaption: (id: string, document: unknown) => Promise<void>;
+  /** Persist an embed (Link) card's description body. */
+  onUpdateEmbedDescription: (id: string, document: unknown) => Promise<void>;
+  /** Retry metadata enrichment for a failed Link Card. */
+  onRetryEmbedMetadata: (id: string) => void;
   /** Open a board portal. */
   onOpenBoard: (boardId: string) => void;
   /** Rename a board. */
@@ -29,6 +36,8 @@ export interface CardRenderContext {
   onResizeNote: (id: string, width: number, height: number) => void;
   /** Persist a manual resize for image cards. */
   onResizeImage: (id: string, width: number, height: number) => void;
+  /** Persist a manual resize for embed (Link) cards. */
+  onResizeEmbed: (id: string, width: number, height: number) => void;
   /** The portal currently being hovered during a card drag, if any. */
   highlightedPortalId: string | null;
 }
@@ -42,6 +51,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         editing={ctx.editing}
         onDeactivate={ctx.onDeactivate}
         onUpdate={ctx.onUpdateNote}
+        onFinalize={ctx.onFinalizeNote}
         onContextMenu={ctx.onContextMenu}
         onResize={ctx.onResizeNote}
       />
@@ -55,6 +65,18 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         onUpdate={ctx.onUpdateImageCaption}
         onResize={ctx.onResizeImage}
         onContextMenu={ctx.onContextMenu}
+      />
+    );
+  }
+
+  if (card.kind === "embed") {
+    return (
+      <EmbedCard
+        embed={card}
+        onUpdate={ctx.onUpdateEmbedDescription}
+        onResize={ctx.onResizeEmbed}
+        onContextMenu={ctx.onContextMenu}
+        onRetryMetadata={ctx.onRetryEmbedMetadata}
       />
     );
   }

@@ -9,6 +9,7 @@ import { CommandDispatcher } from "./commands/command-dispatcher";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
+import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardHistory } from "./navigation/board-history";
 import { MutationQueue } from "./persistence/entity-write-queue";
@@ -16,7 +17,13 @@ import { createGateway } from "./services/create-gateway";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickImageFile } from "./services/asset-picker";
 import { subscribeToImageDrops } from "./services/drag-drop";
-import type { BoardPortalDto, ImageCardDto, NoteCardDto, WorkspaceGateway } from "./services/workspace-gateway";
+import type {
+  BoardPortalDto,
+  EmbedCardDto,
+  ImageCardDto,
+  NoteCardDto,
+  WorkspaceGateway,
+} from "./services/workspace-gateway";
 import {
   initialState,
   reducer,
@@ -29,12 +36,11 @@ function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
   const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
-  const { board, breadcrumbs, viewport, viewportRevision, error } = state;
+  const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
   // Browser-style navigation history. Initialized lazily once Home is known.
   const historyRef = useRef<BoardHistory | null>(null);
-  const homeIdRef = useRef<string | null>(null);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -46,6 +52,55 @@ function App() {
   useEffect(() => {
     cardsRef.current = state.cards;
   }, [state.cards]);
+
+  const metadataInFlightRef = useRef(new Set<string>());
+  const metadataAttemptedRef = useRef(new Set<string>());
+
+  const requestEmbedMetadata = useCallback(
+    (embed: EmbedCardDto, force = false) => {
+      const attemptKey = `${embed.id}:${embed.revision}`;
+      if (metadataInFlightRef.current.has(embed.id)) return;
+      if (!force && metadataAttemptedRef.current.has(attemptKey)) return;
+
+      metadataInFlightRef.current.add(embed.id);
+      metadataAttemptedRef.current.add(attemptKey);
+      void gateway
+        .enrichEmbedMetadata({ id: embed.id, expectedRevision: embed.revision })
+        .then((enriched) => {
+          // Keep the mutation ref authoritative before the enriched card mounts:
+          // Link Card may immediately persist a larger content-driven height.
+          cardsRef.current = cardsRef.current.map((card) =>
+            card.id === embed.id ? enriched : card,
+          );
+          dispatch({ type: "cardReplaced", id: embed.id, card: enriched });
+        })
+        .catch((cause) => {
+          dispatch({ type: "failed", message: cause instanceof Error ? cause.message : String(cause) });
+        })
+        .finally(() => {
+          metadataInFlightRef.current.delete(embed.id);
+        });
+    },
+    [gateway],
+  );
+
+  useEffect(() => {
+    for (const card of state.cards) {
+      if (card.kind === "embed" && card.metadataStatus === "pending") {
+        requestEmbedMetadata(card);
+      }
+    }
+  }, [requestEmbedMetadata, state.cards]);
+
+  const handleRetryEmbedMetadata = useCallback(
+    (id: string) => {
+      const embed = cardsRef.current.find(
+        (card): card is EmbedCardDto => card.kind === "embed" && card.id === id,
+      );
+      if (embed) requestEmbedMetadata(embed, true);
+    },
+    [requestEmbedMetadata],
+  );
 
   // Screen->board coordinate converter, populated by CanvasAdapter on init.
   const screenToFlowRef = useRef<((x: number, y: number) => { x: number; y: number }) | null>(null);
@@ -68,7 +123,6 @@ function App() {
         const snapshot = await gateway.loadBoardSnapshot(home.id);
         if (cancelled) return;
         historyRef.current = new BoardHistory(home.id);
-        homeIdRef.current = home.id;
         dispatch({
           type: "snapshotLoaded",
           board: snapshot.board,
@@ -93,35 +147,42 @@ function App() {
     };
   }, [gateway]);
 
-  const handleCreateNote = useCallback(async () => {
-    if (!board) return;
-    const id = idGenerator.nextId();
-    const card: NoteCardDto = {
-      kind: "note",
-      id,
-      boardId: board.id,
-      frame: { x: 40, y: 40 + notes.length * 24, width: 240, height: 120 },
-      zIndex: notes.length,
-      revision: 1,
-      documentJson: plainTextToDocument(""),
-      plainText: "",
-    };
-    try {
-      await dispatcher.execute(
-        new CreateNoteCommand(id, {
-          id,
-          boardId: board.id,
-          frame: card.frame,
-          zIndex: card.zIndex,
-          documentJson: card.documentJson,
-          plainText: "",
-        }),
-      );
-      dispatch({ type: "cardAdded", card });
-    } catch (e) {
-      dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
-    }
-  }, [board, dispatcher, idGenerator, notes.length]);
+  const handleCreateNote = useCallback(
+    async (position?: { x: number; y: number }) => {
+      if (!board) return;
+      const id = idGenerator.nextId();
+      // An explicit position (double-click on the empty pane) places the note
+      // exactly there; the rail/button path falls back to a cascading default.
+      const x = position ? position.x : 40;
+      const y = position ? position.y : 40 + notes.length * 24;
+      const card: NoteCardDto = {
+        kind: "note",
+        id,
+        boardId: board.id,
+        frame: { x, y, width: 240, height: 120 },
+        zIndex: notes.length,
+        revision: 1,
+        documentJson: plainTextToDocument(""),
+        plainText: "",
+      };
+      try {
+        await dispatcher.execute(
+          new CreateNoteCommand(id, {
+            id,
+            boardId: board.id,
+            frame: card.frame,
+            zIndex: card.zIndex,
+            documentJson: card.documentJson,
+            plainText: "",
+          }),
+        );
+        dispatch({ type: "cardAdded", card });
+      } catch (e) {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [board, dispatcher, idGenerator, notes.length],
+  );
 
   const handleCreateChildBoard = useCallback(async () => {
     if (!board) return;
@@ -234,9 +295,6 @@ function App() {
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {
-      // The returned promise *rejects* on failure so the note card can keep its
-      // editor open and its draft visible. We surface the error to the banner
-      // here but do NOT swallow it.
       return queueRef.current.run(async () => {
         const note = cardsRef.current.find(
           (n): n is NoteCardDto => n.kind === "note" && n.id === id,
@@ -249,6 +307,55 @@ function App() {
         if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
           throw new Error("Note content is not a valid document");
         }
+
+        const plainText = documentToPlainText(document);
+        await gateway.updateNote({
+          id,
+          expectedRevision: note.revision,
+          documentJson: document,
+          plainText,
+        });
+        dispatch({
+          type: "cardContentUpdated",
+          id,
+          revision: note.revision + 1,
+          documentJson: document,
+          plainText,
+        });
+      }).catch((e) => {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        throw e;
+      });
+    },
+    [gateway],
+  );
+
+  const handleFinalizeNote = useCallback(
+    (id: string, document: unknown): Promise<void> => {
+      return queueRef.current.run(async () => {
+        const note = cardsRef.current.find(
+          (n): n is NoteCardDto => n.kind === "note" && n.id === id,
+        );
+        if (!note) return;
+        if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
+          throw new Error("Note content is not a valid document");
+        }
+
+        const classification = classifyLinkConversion(document);
+        if (classification.qualifies) {
+          const embed = await gateway.convertNoteToEmbed({
+            id,
+            expectedRevision: note.revision,
+            sourceUrl: classification.url,
+            displayUrl: displayUrl(classification.url),
+            title: classification.url,
+            descriptionJson: plainTextToDocument(""),
+            descriptionPlainText: "",
+          });
+          dispatch({ type: "cardReplaced", id, card: embed });
+          return;
+        }
+
         const plainText = documentToPlainText(document);
         await gateway.updateNote({
           id,
@@ -294,6 +401,38 @@ function App() {
           revision: image.revision + 1,
           captionJson: document,
           captionPlainText,
+        });
+      }).catch((e) => {
+        dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
+        throw e;
+      });
+    },
+    [gateway],
+  );
+
+  const handleUpdateEmbedDescription = useCallback(
+    (id: string, document: unknown): Promise<void> => {
+      return queueRef.current.run(async () => {
+        const embed = cardsRef.current.find(
+          (c): c is EmbedCardDto => c.kind === "embed" && c.id === id,
+        );
+        if (!embed) return;
+        if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
+          throw new Error("Link description is not a valid document");
+        }
+        const descriptionPlainText = documentToPlainText(document);
+        await gateway.updateEmbedDescription({
+          id,
+          expectedRevision: embed.revision,
+          descriptionJson: document,
+          descriptionPlainText,
+        });
+        dispatch({
+          type: "embedDescriptionUpdated",
+          id,
+          revision: embed.revision + 1,
+          descriptionJson: document,
+          descriptionPlainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: e instanceof Error ? e.message : String(e) });
@@ -409,15 +548,14 @@ function App() {
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleViewportChanged = useCallback(
     (e: { viewport: CanvasViewport }) => {
-      // The board's origin is its top-left corner; content grows only right and
-      // down. Clamp the viewport to non-negative x/y so a pan-up/left can never
-      // persist a state that hides content beyond the origin on the next open.
-      const clamped: CanvasViewport = {
-        x: Math.max(0, e.viewport.x),
-        y: Math.max(0, e.viewport.y),
+      // The board is pinned to its top-left origin; position is never persisted
+      // (see the reducer's snapshotLoaded reset), only zoom is remembered.
+      const settled: CanvasViewport = {
+        x: 0,
+        y: 0,
         zoom: e.viewport.zoom,
       };
-      dispatch({ type: "viewportChanged", viewport: clamped });
+      dispatch({ type: "viewportChanged", viewport: settled });
       if (viewportTimer.current) clearTimeout(viewportTimer.current);
       viewportTimer.current = setTimeout(() => {
         if (!board) return;
@@ -425,9 +563,9 @@ function App() {
           .saveViewport({
             boardId: board.id,
             expectedRevision: viewportRevisionRef.current,
-            x: clamped.x,
-            y: clamped.y,
-            zoom: clamped.zoom,
+            x: settled.x,
+            y: settled.y,
+            zoom: settled.zoom,
           })
           .then(() => {
             dispatch({ type: "viewportSaved", revision: viewportRevisionRef.current + 1 });
@@ -642,9 +780,6 @@ function App() {
     <AppShell>
       <div className="workspace">
         <div className="workspace__toolbar">
-          <button type="button" className="workspace__home" onClick={() => { if (homeIdRef.current) void navigateTo(homeIdRef.current, { push: true }); }}>
-            Home
-          </button>
           <span className="workspace__board-title">
             {board ? board.title : "Loading…"}
           </span>
@@ -684,6 +819,7 @@ function App() {
           <CanvasAdapter
             cards={canvasCards}
             viewport={viewport}
+            viewportResetToken={boardOpenRevision}
             editingCardId={state.editingCardId}
             onScreenToFlowReady={(fn) => {
               screenToFlowRef.current = fn;
@@ -697,6 +833,9 @@ function App() {
               onCardContextMenu: handleRequestContextMenu,
               onCardDroppedOnPortal: handleMoveCardToBoard,
               onPortalHighlight: setHighlightedPortalId,
+              onPaneDoubleClick: (point) => {
+                void handleCreateNote(point);
+              },
             }}
             renderCard={(card) => {
               const full = state.cards.find((c) => c.id === card.id);
@@ -705,12 +844,16 @@ function App() {
                 editing: state.editingCardId === full.id,
                 onDeactivate: handleEditDeactivate,
                 onUpdateNote: handleUpdateNote,
+                onFinalizeNote: handleFinalizeNote,
                 onUpdateImageCaption: handleUpdateImageCaption,
+                onUpdateEmbedDescription: handleUpdateEmbedDescription,
+                onRetryEmbedMetadata: handleRetryEmbedMetadata,
                 onOpenBoard: handleOpenBoard,
                 onRenameBoard: handleRenameBoard,
                 onContextMenu: handleRequestContextMenu,
                 onResizeNote: handleResizeNote,
                 onResizeImage: handleResizeNote,
+                onResizeEmbed: handleResizeNote,
                 highlightedPortalId,
               });
             }}
@@ -727,3 +870,15 @@ function App() {
 }
 
 export default App;
+
+/** A short, human-friendly URL for display (strips scheme and trailing slash). */
+function displayUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const host = u.host.replace(/^www\./, "");
+    const path = u.pathname.replace(/\/+$/, "");
+    return path ? `${host}${path}` : host;
+  } catch {
+    return raw;
+  }
+}

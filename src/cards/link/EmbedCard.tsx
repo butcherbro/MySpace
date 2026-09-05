@@ -1,0 +1,194 @@
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import type { EmbedCardDto } from "../../services/workspace-gateway";
+import { NoteEditor } from "../../editor/NoteEditor";
+import { useDocumentDraft } from "../../editor/use-document-draft";
+import { openExternalUrl } from "../../services/url-opener";
+import "./link-card.css";
+
+interface EmbedCardProps {
+  embed: EmbedCardDto;
+  /** Persist the description body as an authoritative document. Rejects on failure. */
+  onUpdate: (id: string, document: unknown) => Promise<void>;
+  /** Persist a manual resize. */
+  onResize: (id: string, width: number, height: number) => void;
+  /** Request a context menu (right-click). */
+  onContextMenu: (cardId: string, x: number, y: number) => void;
+  /** Retry a failed metadata fetch without changing the source URL. */
+  onRetryMetadata: (cardId: string) => void;
+}
+
+/**
+ * The Link Card (link preview) rendered from the domain `embed` kind. Slice A:
+ * a clickable title (falls back to the URL until metadata loads), a muted
+ * source line, and an editable rich-text description body. The preview image
+ * and favicon render when present (Slice B populates them).
+ */
+export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMetadata }: EmbedCardProps) {
+  const [editing, setEditing] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const lastAutoSizeRequest = useRef<string | null>(null);
+
+  const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
+    id: embed.id,
+    persistedDocument: embed.descriptionJson,
+    onUpdate,
+    onSaved: () => setEditing(false),
+  });
+
+  const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
+  const draftSizeRef = useRef<{ width: number; height: number } | null>(null);
+
+  const appliedWidth = draftSize?.width ?? embed.frame.width;
+  const appliedHeight = draftSize?.height ?? embed.frame.height;
+
+  const fitEnrichedContent = useCallback(() => {
+    if (embed.metadataStatus !== "ready" || draftSizeRef.current) return;
+
+    const measuredHeight = Math.ceil(cardRef.current?.scrollHeight ?? 0);
+    if (measuredHeight <= embed.frame.height + 1) return;
+
+    const requestKey = `${embed.revision}:${embed.frame.width}:${measuredHeight}`;
+    if (lastAutoSizeRequest.current === requestKey) return;
+    lastAutoSizeRequest.current = requestKey;
+    onResize(embed.id, embed.frame.width, measuredHeight);
+  }, [embed.frame.height, embed.frame.width, embed.id, embed.metadataStatus, embed.revision, onResize]);
+
+  useLayoutEffect(() => {
+    fitEnrichedContent();
+  }, [embed.descriptionPlainText, embed.previewAsset?.id, embed.title, fitEnrichedContent]);
+
+  function onResizePointerDown(e: React.PointerEvent) {
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    resizeStart.current = {
+      x: e.clientX,
+      y: e.clientY,
+      w: embed.frame.width,
+      h: embed.frame.height,
+    };
+    window.addEventListener("pointermove", onResizeMove);
+    window.addEventListener("pointerup", onResizeUp);
+  }
+
+  function onResizeMove(e: PointerEvent) {
+    if (!resizeStart.current) return;
+    const dx = e.clientX - resizeStart.current.x;
+    const dy = e.clientY - resizeStart.current.y;
+    const next = {
+      width: Math.max(240, resizeStart.current.w + dx),
+      height: Math.max(48, resizeStart.current.h + dy),
+    };
+    draftSizeRef.current = next;
+    setDraftSize(next);
+  }
+
+  function onResizeUp() {
+    resizeStart.current = null;
+    window.removeEventListener("pointermove", onResizeMove);
+    window.removeEventListener("pointerup", onResizeUp);
+    const final = draftSizeRef.current;
+    if (final) {
+      onResize(embed.id, final.width, final.height);
+      draftSizeRef.current = null;
+      setDraftSize(null);
+    }
+  }
+
+  return (
+    <div
+      ref={cardRef}
+      className="link-card"
+      data-testid="link-card"
+      style={{ width: appliedWidth, height: appliedHeight }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu(embed.id, e.clientX, e.clientY);
+      }}
+    >
+      {embed.previewAsset && embed.metadataStatus !== "pending" && (
+        <img
+          className="link-card__preview"
+          src={`myspace-asset://localhost/${embed.previewAsset.filePath}`}
+          alt={embed.title}
+          onLoad={fitEnrichedContent}
+        />
+      )}
+
+      <div className="link-card__body">
+        {embed.metadataStatus === "pending" && (
+          <div className="link-card__loading" role="status">Loading preview…</div>
+        )}
+        <div className="link-card__source">
+          {embed.faviconAsset && (
+            <img
+              className="link-card__favicon"
+              src={`myspace-asset://localhost/${embed.faviconAsset.filePath}`}
+              alt=""
+            />
+          )}
+          <span className="link-card__url" title={embed.sourceUrl}>
+            {embed.displayUrl}
+          </span>
+        </div>
+
+        <a
+          className="link-card__title"
+          href={embed.sourceUrl}
+          onClick={(e) => {
+            // Open in the OS browser, not inside the WebView, and do not let the
+            // click bubble into React Flow (drag/edit).
+            e.preventDefault();
+            e.stopPropagation();
+            void openExternalUrl(embed.sourceUrl);
+          }}
+        >
+          {embed.title}
+        </a>
+
+        {embed.metadataStatus === "failed" && (
+          <div className="link-card__unavailable">
+            <span>Preview unavailable</span>
+            <button
+              type="button"
+              className="link-card__retry nodrag nopan"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onRetryMetadata(embed.id);
+              }}
+            >
+              Retry preview
+            </button>
+          </div>
+        )}
+
+        <div
+          className="link-card__description"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setEditing(true);
+          }}
+        >
+          {editing ? (
+            <NoteEditor document={draft} editable onChange={handleChange} onBlur={handleBlur} />
+          ) : (
+            <div className="link-card__description-display">
+              {embed.descriptionPlainText || "Add notes…"}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {saving && <div className="link-card__status">Saving…</div>}
+      {error && <div className="link-card__status link-card__status--error">{error}</div>}
+
+      <div
+        className="link-card__resize nodrag nopan"
+        data-testid="link-resize"
+        onPointerDown={onResizePointerDown}
+      />
+    </div>
+  );
+}

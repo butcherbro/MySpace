@@ -30,6 +30,23 @@ describe("isNoteDocument", () => {
     ).toBe(true);
   });
 
+  it("accepts the link mark (inline clickable URLs)", () => {
+    expect(
+      isNoteDocument({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "Read ", marks: [{ type: "link", attrs: { href: "https://a.com" } }] },
+              { type: "text", text: " here" },
+            ],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it("rejects documents with nodes/marks outside V1", () => {
     // codeBlock is disabled in V1.
     expect(
@@ -39,14 +56,14 @@ describe("isNoteDocument", () => {
       }),
     ).toBe(false);
 
-    // link mark is disabled in V1.
+    // strike is disabled in V1.
     expect(
       isNoteDocument({
         type: "doc",
         content: [
           {
             type: "paragraph",
-            content: [{ type: "text", text: "x", marks: [{ type: "link", attrs: { href: "http://a" } }] }],
+            content: [{ type: "text", text: "x", marks: [{ type: "strike" }] }],
           },
         ],
       }),

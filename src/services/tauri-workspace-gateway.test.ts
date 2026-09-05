@@ -94,4 +94,70 @@ describe("TauriWorkspaceGateway", () => {
     await gw.moveCards(input);
     expect(invokeMock).toHaveBeenCalledWith("move_cards", { input });
   });
+
+  it("adds the embed discriminator to a converted note response", async () => {
+    invokeMock.mockResolvedValue({
+      id: "note-1",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 240, height: 120 },
+      zIndex: 0,
+      revision: 2,
+      sourceUrl: "https://example.com",
+      displayUrl: "example.com",
+      siteName: null,
+      title: "https://example.com",
+      provider: null,
+      descriptionJson: { type: "doc", content: [{ type: "paragraph" }] },
+      descriptionPlainText: "",
+      faviconAsset: null,
+      previewAsset: null,
+      previewOrigin: null,
+      metadataStatus: "pending",
+      metadataError: null,
+    });
+    const gw = new TauriWorkspaceGateway();
+
+    const result = await gw.convertNoteToEmbed({
+      id: "note-1",
+      expectedRevision: 1,
+      sourceUrl: "https://example.com",
+      displayUrl: "example.com",
+      title: "https://example.com",
+      descriptionJson: { type: "doc", content: [{ type: "paragraph" }] },
+      descriptionPlainText: "",
+    });
+
+    expect(result.kind).toBe("embed");
+  });
+
+  it("calls enrich_embed_metadata and restores the embed discriminator", async () => {
+    invokeMock.mockResolvedValue({
+      id: "note-1",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 320, height: 240 },
+      zIndex: 0,
+      revision: 3,
+      sourceUrl: "https://example.com",
+      displayUrl: "example.com",
+      siteName: "Example",
+      title: "Example Domain",
+      provider: null,
+      descriptionJson: { type: "doc", content: [{ type: "paragraph" }] },
+      descriptionPlainText: "Example description",
+      faviconAsset: null,
+      previewAsset: null,
+      previewOrigin: null,
+      metadataStatus: "ready",
+      metadataError: null,
+    });
+    const gw = new TauriWorkspaceGateway();
+
+    const result = await gw.enrichEmbedMetadata({ id: "note-1", expectedRevision: 2 });
+
+    expect(invokeMock).toHaveBeenCalledWith("enrich_embed_metadata", {
+      input: { id: "note-1", expectedRevision: 2 },
+    });
+    expect(result.kind).toBe("embed");
+    expect(result.title).toBe("Example Domain");
+  });
 });

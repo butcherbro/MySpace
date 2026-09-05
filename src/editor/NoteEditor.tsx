@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import { createEditorExtensions } from "./editor-extensions";
+import { openExternalUrl } from "../services/url-opener";
+import { classifyLinkConversion } from "../cards/link/link-conversion";
 import "./note-editor.css";
 
 interface NoteEditorProps {
@@ -12,6 +14,8 @@ interface NoteEditorProps {
   onChange: (document: unknown) => void;
   /** Called when the editor loses focus. */
   onBlur?: () => void;
+  /** Called when Enter should finalize a bare-URL note instead of inserting a line. */
+  onFinalize?: () => void;
 }
 
 /**
@@ -19,7 +23,7 @@ interface NoteEditorProps {
  * (and future cards) talk to `NoteEditor` via a `document` + `onChange`
  * contract, so Tiptap types never leak outside this file.
  */
-export function NoteEditor({ document, editable, onChange, onBlur }: NoteEditorProps) {
+export function NoteEditor({ document, editable, onChange, onBlur, onFinalize }: NoteEditorProps) {
   const editor = useEditor({
     extensions: createEditorExtensions(),
     content: document as JSONContent,
@@ -59,6 +63,30 @@ export function NoteEditor({ document, editable, onChange, onBlur }: NoteEditorP
     }
   }, [editor, editable]);
 
+  // In display mode (not editing), a click on an inline link should open it in
+  // the OS browser and must NOT bubble up into React Flow as a drag or an
+  // edit-entry. We attach a capture listener on the editor root: it only acts on
+  // `a[href]` clicks while `!editable`, opening the URL and stopping propagation.
+  // (Tiptap's Link `openOnClick` only fires while editable and uses `window.open`,
+  // which is wrong for a spatial card and the Tauri WebView, so we handle it here.)
+  useEffect(() => {
+    if (!editor || editable) return;
+    const root = editor.view.dom;
+
+    function onClick(e: MouseEvent) {
+      const target = e.target as HTMLElement | null;
+      const anchor = target?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!anchor || !root.contains(anchor)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      void openExternalUrl(anchor.href);
+    }
+
+    root.addEventListener("click", onClick, true);
+    return () => root.removeEventListener("click", onClick, true);
+  }, [editor, editable]);
+
   if (!editor) return null;
 
   // `nodrag`/`nopan` are only applied while editing so text selection never
@@ -71,6 +99,20 @@ export function NoteEditor({ document, editable, onChange, onBlur }: NoteEditorP
     <EditorContent
       editor={editor}
       className={`note-editor${interactiveClass}`}
+      onKeyDownCapture={(event) => {
+        if (!editable || !onFinalize) return;
+        if (event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) {
+          return;
+        }
+        if (event.nativeEvent.isComposing) return;
+
+        const classification = classifyLinkConversion(editor.getJSON());
+        if (!classification.qualifies) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        onFinalize();
+      }}
     />
   );
 }

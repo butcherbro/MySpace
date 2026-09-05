@@ -150,3 +150,69 @@ fn migration_widens_cards_kind_without_fk_violation() {
     let violations = stmt.query_map([], |_| Ok(())).unwrap().count();
     assert_eq!(violations, 0);
 }
+
+/// Existing V1 boards could contain negative coordinates because the canvas
+/// used to be unbounded. The top-left boundary must rebase each board as one
+/// rigid layout so no card becomes unreachable and relative spacing survives.
+#[test]
+fn migration_rebases_existing_board_layouts_to_non_negative_coordinates() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    conn.execute_batch(include_str!("../migrations/0001_workspace.sql"))
+        .unwrap();
+    conn.execute_batch(include_str!("../migrations/0002_assets.sql"))
+        .unwrap();
+    conn.execute_batch(include_str!("../migrations/0003_embed_links.sql"))
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);
+         INSERT INTO schema_migrations (version, name, applied_at) VALUES
+             (1, 'workspace', 0), (2, 'assets', 0), (3, 'embed_links', 0);
+         INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at)
+             VALUES ('ws1', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at)
+             VALUES
+             ('home', 'ws1', NULL, 'Home', 'default', NULL, 1, 0, 0),
+             ('child', 'ws1', 'home', 'Child', 'default', NULL, 1, 0, 0);
+         INSERT INTO board_view_states (board_id, viewport_x, viewport_y, zoom, revision, updated_at)
+             VALUES ('home', 250, -80, 1.5, 7, 0);
+         INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at, deleted_at)
+             VALUES
+             ('a', 'home', 'note', -10, 20, 200, 80, 0, 1, 0, 0, NULL),
+             ('b', 'home', 'note', 30, -5, 200, 80, 1, 1, 0, 0, NULL),
+             ('trash', 'home', 'note', -100, -40, 200, 80, 2, 1, 0, 0, 1),
+             ('c', 'child', 'note', 12, 13, 200, 80, 0, 1, 0, 0, NULL);",
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let frames: Vec<(String, f64, f64)> = {
+        let mut stmt = conn
+            .prepare("SELECT id, x, y FROM cards ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(
+        frames,
+        vec![
+            ("a".to_string(), 90.0, 60.0),
+            ("b".to_string(), 130.0, 35.0),
+            ("c".to_string(), 12.0, 13.0),
+            ("trash".to_string(), 0.0, 0.0),
+        ]
+    );
+
+    let viewport: (f64, f64, f64, i64) = conn
+        .query_row(
+            "SELECT viewport_x, viewport_y, zoom, revision FROM board_view_states WHERE board_id = 'home'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(viewport, (0.0, 0.0, 1.5, 7));
+}

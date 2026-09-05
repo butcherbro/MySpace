@@ -5,7 +5,7 @@
 // canvas emits. No React Flow `Node` or viewport type may appear here or leak
 // into domain, persistence, or repository modules.
 
-export type CanvasCardKind = "note" | "board_portal" | "image";
+export type CanvasCardKind = "note" | "board_portal" | "image" | "embed";
 
 /** A card's placement rectangle in board-space coordinates. */
 export interface CanvasFrame {
@@ -96,6 +96,8 @@ export interface CanvasEvents {
   onCardActivated?(id: string): void;
   /** A card was double-clicked (open board portals). */
   onCardOpened?(id: string): void;
+  /** The empty canvas pane was double-clicked (create a note at that point). */
+  onPaneDoubleClick?(point: Point): void;
   /** A card was right-clicked (request a context menu). Coordinates are screen-space. */
   onCardContextMenu?(id: string, x: number, y: number): void;
   /** A card was dropped onto a board portal (move to that board). */

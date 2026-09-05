@@ -24,8 +24,8 @@ export interface NoteDocument {
 /** Inline node types allowed in V1. */
 const ALLOWED_INLINE_TYPES = new Set(["text", "hardBreak"]);
 
-/** Mark types allowed in V1 (bold/italic only). */
-const ALLOWED_MARK_TYPES = new Set(["bold", "italic"]);
+/** Mark types allowed in V1. `link` is enabled for inline clickable URLs. */
+const ALLOWED_MARK_TYPES = new Set(["bold", "italic", "link"]);
 
 function isNode(value: unknown): value is NoteNode {
   if (typeof value !== "object" || value === null) return false;

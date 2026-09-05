@@ -15,6 +15,7 @@ export interface CurrentBoardState {
   breadcrumbs: Breadcrumb[];
   viewport: CanvasViewport;
   viewportRevision: number;
+  boardOpenRevision: number;
   cards: CardDto[];
   selection: string[];
   editingCardId: string | null;
@@ -35,6 +36,8 @@ export type CurrentBoardAction =
   | { type: "cardAdded"; card: CardDto }
   | { type: "cardContentUpdated"; id: string; revision: number; documentJson: unknown; plainText: string }
   | { type: "imageCaptionUpdated"; id: string; revision: number; captionJson: unknown; captionPlainText: string }
+  | { type: "embedDescriptionUpdated"; id: string; revision: number; descriptionJson: unknown; descriptionPlainText: string }
+  | { type: "cardReplaced"; id: string; card: CardDto }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardsRemoved"; ids: string[] }
   | { type: "boardRenamed"; boardId: string; title: string }
@@ -51,6 +54,7 @@ export const initialState: CurrentBoardState = {
   breadcrumbs: [],
   viewport: { x: 0, y: 0, zoom: 1 },
   viewportRevision: 1,
+  boardOpenRevision: 0,
   cards: [],
   selection: [],
   editingCardId: null,
@@ -67,12 +71,13 @@ export function reducer(
       return { ...state, loading: true, error: null };
 
     case "snapshotLoaded": {
-      // Clamp the loaded viewport to the board origin (top-left). A previously
-      // persisted pan-up/left must never reopen the board scrolled away from its
-      // content; the board grows right/down only.
+      // The board always reopens pinned to its top-left origin: one fixed
+      // visible surface, growing right/down only. Ignore any persisted viewport
+      // position so a prior pan never reopens the board scrolled away from the
+      // user's primary content.
       const viewport: CanvasViewport = {
-        x: Math.max(0, action.viewport.x),
-        y: Math.max(0, action.viewport.y),
+        x: 0,
+        y: 0,
         zoom: action.viewport.zoom,
       };
       return {
@@ -81,6 +86,7 @@ export function reducer(
         breadcrumbs: action.breadcrumbs,
         viewport,
         viewportRevision: action.viewportRevision,
+        boardOpenRevision: state.boardOpenRevision + 1,
         cards: action.cards,
         selection: [],
         editingCardId: null,
@@ -120,6 +126,28 @@ export function reducer(
               }
             : c,
         ),
+      };
+
+    case "embedDescriptionUpdated":
+      return {
+        ...state,
+        cards: state.cards.map((c) =>
+          c.id === action.id && c.kind === "embed"
+            ? {
+                ...c,
+                revision: action.revision,
+                descriptionJson: action.descriptionJson,
+                descriptionPlainText: action.descriptionPlainText,
+              }
+            : c,
+        ),
+      };
+
+    case "cardReplaced":
+      return {
+        ...state,
+        cards: state.cards.map((c) => (c.id === action.id ? action.card : c)),
+        editingCardId: state.editingCardId === action.id ? null : state.editingCardId,
       };
 
     case "cardMoved":

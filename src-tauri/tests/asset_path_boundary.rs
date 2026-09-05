@@ -32,6 +32,7 @@ fn mime_is_mapped_from_extension() {
     assert_eq!(mime_for_asset_name("a.jpg"), "image/jpeg");
     assert_eq!(mime_for_asset_name("a.gif"), "image/gif");
     assert_eq!(mime_for_asset_name("a.webp"), "image/webp");
+    assert_eq!(mime_for_asset_name("favicon.ico"), "image/x-icon");
     assert_eq!(
         mime_for_asset_name("a.unknownext"),
         "application/octet-stream"

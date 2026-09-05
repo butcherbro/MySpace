@@ -15,9 +15,10 @@ function setup(persisted = emptyDoc, onUpdate = vi.fn().mockResolvedValue(undefi
         id: "card-1",
         persistedDocument: props.persisted,
         onUpdate,
+        onFinalize: props.onFinalize,
         onSaved,
       }),
-    { initialProps: { persisted } },
+    { initialProps: { persisted, onFinalize: vi.fn() } },
   );
 }
 
@@ -51,12 +52,82 @@ describe("useDocumentDraft", () => {
     const hook = setup(emptyDoc, onUpdate);
 
     // Rerender with a new persisted document while clean -> adopted.
-    hook.rerender({ persisted: changedDoc });
+    hook.rerender({ persisted: changedDoc, onFinalize: vi.fn() });
     expect(hook.result.current.draft).toEqual(changedDoc);
 
     // Now make it dirty, then push another incoming value -> must NOT adopt.
     act(() => hook.result.current.handleChange(emptyDoc));
-    hook.rerender({ persisted: { type: "doc", content: [] } });
+    hook.rerender({ persisted: { type: "doc", content: [] }, onFinalize: vi.fn() });
     expect(hook.result.current.draft).toEqual(emptyDoc); // dirty draft wins
+  });
+
+  it("does not finalize during debounced autosave", () => {
+    vi.useFakeTimers();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockResolvedValue(undefined);
+    const hook = renderHook(() =>
+      useDocumentDraft({
+        id: "card-1",
+        persistedDocument: emptyDoc,
+        onUpdate,
+        onFinalize,
+      }),
+    );
+
+    act(() => hook.result.current.handleChange(changedDoc));
+    act(() => vi.advanceTimersByTime(250));
+
+    expect(onUpdate).toHaveBeenCalledWith("card-1", changedDoc);
+    expect(onFinalize).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("finalizes the latest dirty draft on demand", async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockResolvedValue(undefined);
+    const hook = renderHook(() =>
+      useDocumentDraft({
+        id: "card-1",
+        persistedDocument: emptyDoc,
+        onUpdate,
+        onFinalize,
+      }),
+    );
+
+    act(() => hook.result.current.handleChange(changedDoc));
+    await act(async () => hook.result.current.handleFinalize());
+
+    expect(onFinalize).toHaveBeenCalledWith("card-1", changedDoc);
+  });
+
+  it("does not finalize twice when blur follows Enter before persistence completes", async () => {
+    let resolveFinalize!: () => void;
+    const pendingFinalize = new Promise<void>((resolve) => {
+      resolveFinalize = resolve;
+    });
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockReturnValue(pendingFinalize);
+    const hook = renderHook(() =>
+      useDocumentDraft({
+        id: "card-1",
+        persistedDocument: emptyDoc,
+        onUpdate,
+        onFinalize,
+      }),
+    );
+
+    act(() => hook.result.current.handleChange(changedDoc));
+    let enterFinalize!: Promise<void>;
+    act(() => {
+      enterFinalize = hook.result.current.handleFinalize();
+      hook.result.current.handleBlur();
+    });
+
+    expect(onFinalize).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFinalize();
+      await enterFinalize;
+    });
   });
 });

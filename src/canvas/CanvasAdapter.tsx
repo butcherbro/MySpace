@@ -22,6 +22,7 @@ import type {
 interface CanvasAdapterProps {
   cards: CanvasCard[];
   viewport: CanvasViewport;
+  viewportResetToken?: number;
   events: CanvasEvents;
   /** Renders the interior of a card given its domain card. */
   renderCard: (card: CanvasCard) => ReactNode;
@@ -60,14 +61,24 @@ function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode):
 export function CanvasAdapter({
   cards,
   viewport,
+  viewportResetToken = 0,
   events,
   renderCard,
   editingCardId = null,
   onScreenToFlowReady,
 }: CanvasAdapterProps) {
+  const flowRef = useRef<{
+    setViewport: (viewport: CanvasViewport) => void;
+    screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number };
+  } | null>(null);
+  const viewportRef = useRef(viewport);
   const [nodes, setNodes] = useState<Node<CardNodeData>[]>(() =>
     cards.map((c) => cardToNode(c, renderCard)),
   );
+
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
 
   // Rebuild nodes when the projection (frames OR revision OR editing focus)
   // changes, using React's "adjust state during render" pattern. Preserve each
@@ -94,10 +105,48 @@ export function CanvasAdapter({
   const nodesRef = useRef(nodes);
   const selectedIdsRef = useRef<Set<string>>(new Set());
   const highlightedPortalRef = useRef<string | null>(null);
+  const lastPaneClickRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const paneClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Double-click window for the empty pane. React Flow v12 exposes only
+  // `onPaneClick`; we fold two rapid clicks into a single `onPaneDoubleClick`.
+  const DOUBLE_CLICK_MS = 300;
+
+  const handlePaneClick = (event: React.MouseEvent) => {
+    const flow = flowRef.current;
+    if (!flow) return;
+    const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const now = Date.now();
+    const last = lastPaneClickRef.current;
+
+    if (last && now - last.t <= DOUBLE_CLICK_MS) {
+      if (paneClickTimerRef.current) {
+        clearTimeout(paneClickTimerRef.current);
+        paneClickTimerRef.current = null;
+      }
+      lastPaneClickRef.current = null;
+      events.onPaneDoubleClick?.({ x: point.x, y: point.y });
+      return;
+    }
+
+    lastPaneClickRef.current = { x: point.x, y: point.y, t: now };
+    if (paneClickTimerRef.current) clearTimeout(paneClickTimerRef.current);
+    // If the second click never comes, let the first expire by forgetting it.
+    paneClickTimerRef.current = setTimeout(() => {
+      lastPaneClickRef.current = null;
+    }, DOUBLE_CLICK_MS);
+  };
 
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
+
+  useEffect(() => {
+    // Доска всегда открывается от (0,0). `defaultViewport` работает только на
+    // первом mount, поэтому при каждом открытии/перезаходе в доску viewport
+    // нужно переустанавливать императивно.
+    flowRef.current?.setViewport(viewportRef.current);
+  }, [viewportResetToken]);
 
   // Returns the portal card whose bounds contain the given card's center, or null.
   const portalAtPoint = (node: Node<CardNodeData>): CanvasCard | null => {
@@ -252,6 +301,8 @@ export function CanvasAdapter({
         nodeTypes={nodeTypes}
         onNodesChange={handleNodesChange}
         defaultViewport={viewport}
+        translateExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
+        nodeExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
         panOnScroll
         selectionOnDrag
         panOnDrag={[1, 2]}
@@ -266,6 +317,7 @@ export function CanvasAdapter({
         selectionMode={SelectionMode.Partial}
         selectNodesOnDrag={false}
         onSelectionChange={handleSelectionChange}
+        onPaneClick={handlePaneClick}
         onNodeClick={handleNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
         onNodeContextMenu={handleNodeContextMenu}
@@ -274,6 +326,8 @@ export function CanvasAdapter({
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={handleMoveEnd}
         onInit={(instance) => {
+          flowRef.current = instance;
+          instance.setViewport(viewportRef.current);
           onScreenToFlowReady?.((x, y) => instance.screenToFlowPosition({ x, y }));
         }}
         minZoom={0.1}

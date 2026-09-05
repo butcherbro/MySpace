@@ -48,3 +48,7 @@ lerna-debug.log*
 # Playwright artifacts
 test-results/
 playwright-report/
+
+# Agent/process handoff artifacts (transient, not product)
+.continue-here.md
+docs/review-brief*.md

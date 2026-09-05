@@ -578,6 +578,12 @@ These choices are sync-ready, not sync architecture. Conflict resolution, CRDTs,
 
 ## Visual Interface Contract
 
+> Detailed visual rules and the follow-up implementation sequence are now maintained in
+> `.interface-design/system.md` and `docs/plans/2026-09-04-spatial-workspace-interface.md`.
+> This section remains the high-level product contract.
+> Link conversion, editable previews, and clipboard cover replacement are specified in
+> `docs/specs/link-card-and-clipboard.md`.
+
 ### Intent
 
 One person opens this between unrelated tasks and needs to recognize their own spatial memory immediately. The interface should feel like a large quiet desk covered with index cards and portals, not like project-management software.

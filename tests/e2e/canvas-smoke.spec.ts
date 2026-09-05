@@ -140,3 +140,138 @@ test("typing into a note persists and survives blur", async ({ page }) => {
   // The persisted text must still be on the note in display mode.
   await expect(page.locator(".note-card")).toContainText("persisted text");
 });
+
+test("a URL-only note waits for blur before converting to a link card", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New note" }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+
+  await page.waitForFunction(() => {
+    const el = document.querySelector(".note-card");
+    return el && el.getBoundingClientRect().width > 0;
+  });
+
+  const rect = await page.evaluate(() => {
+    const el = document.querySelector(".note-card")!;
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await page.mouse.click(rect.x, rect.y);
+  const editor = page.locator('.note-card [contenteditable="true"]');
+  await expect(editor).toHaveCount(1);
+
+  await page.keyboard.type("https://example.com");
+  await page.waitForTimeout(350);
+
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+  await expect(page.getByTestId("link-card")).toHaveCount(0);
+
+  await page.getByTestId("canvas").click({ position: { x: 5, y: 5 } });
+  await expect(page.getByTestId("link-card")).toHaveCount(1);
+});
+
+test("Enter finalizes a URL-only note immediately", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New note" }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+
+  const note = page.getByTestId("note-card");
+  await note.click();
+  await expect(page.locator('.note-card [contenteditable="true"]')).toHaveCount(1);
+
+  await page.keyboard.type("https://example.com");
+  await page.keyboard.press("Enter");
+
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+  await expect(page.getByTestId("link-card")).toHaveCount(1);
+  await expect(page.getByTestId("link-card")).toContainText("Preview for example.com");
+});
+
+test("returning to a board resets the viewport to the top-left origin", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New board" }).click();
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+
+  const pane = await page.evaluate(() => {
+    const el = document.querySelector(".react-flow__pane")!;
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+
+  await page.mouse.move(pane.x + 200, pane.y + 200);
+  await page.mouse.down({ button: "middle" });
+  await page.mouse.move(pane.x + 80, pane.y + 120, { steps: 6 });
+  await page.mouse.up({ button: "middle" });
+
+  await page.waitForFunction(() => {
+    const viewport = document.querySelector(".react-flow__viewport");
+    return viewport?.getAttribute("style")?.includes("translate(");
+  });
+
+  const beforeOpen = await page.locator(".react-flow__viewport").getAttribute("style");
+  expect(beforeOpen).not.toContain("translate(0px, 0px)");
+
+  const tile = page.locator(".board-portal-card__tile").first();
+  await tile.dblclick();
+  await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
+
+  await page.getByTestId("breadcrumbs").getByRole("button", { name: "Home" }).click();
+  await expect(page.getByTestId("breadcrumbs")).toContainText("Home");
+
+  await expect
+    .poll(async () => page.locator(".react-flow__viewport").getAttribute("style"))
+    .toContain("translate(0px, 0px)");
+});
+
+test("the canvas cannot pan above or left of its origin", async ({ page }) => {
+  await page.goto("/");
+  const pane = page.locator(".react-flow__pane");
+  const box = await pane.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  // Dragging the camera down/right would expose negative board coordinates.
+  // The top-left extent must keep the transform pinned at the origin.
+  await page.mouse.move(box.x + 200, box.y + 200);
+  await page.mouse.down({ button: "middle" });
+  await page.mouse.move(box.x + 340, box.y + 320, { steps: 6 });
+  await page.mouse.up({ button: "middle" });
+  await expect
+    .poll(async () => page.locator(".react-flow__viewport").getAttribute("style"))
+    .toContain("translate(0px, 0px)");
+
+  // Dragging up/left reveals valid positive board coordinates and remains allowed.
+  await page.mouse.move(box.x + 340, box.y + 320);
+  await page.mouse.down({ button: "middle" });
+  await page.mouse.move(box.x + 180, box.y + 170, { steps: 6 });
+  await page.mouse.up({ button: "middle" });
+  await expect
+    .poll(async () => page.locator(".react-flow__viewport").getAttribute("style"))
+    .not.toContain("translate(0px, 0px)");
+});
+
+test("double-clicking empty canvas creates a note near the click point", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+
+  const pane = page.locator(".react-flow__pane");
+  const box = await pane.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  const clickX = box.x + 220;
+  const clickY = box.y + 160;
+
+  await page.mouse.dblclick(clickX, clickY);
+
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+  // The note's frame origin should be near the click point (board-space ==
+  // screen-space at the default viewport of 0,0).
+  const frame = await page.evaluate(() => {
+    const el = document.querySelector(".note-card")!;
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  expect(Math.abs(frame.x - clickX)).toBeLessThan(40);
+  expect(Math.abs(frame.y - clickY)).toBeLessThan(40);
+});

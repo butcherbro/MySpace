@@ -1,6 +1,6 @@
 # ADR-0001: Visual Workspace V1 Scope
 
-- **Status:** Accepted
+- **Status:** Accepted, partially superseded by ADR-0003 and ADR-0004
 - **Date:** 2026-08-28
 - **Source:** `docs/plans/2026-08-28-visual-workspace-v1.md`
 

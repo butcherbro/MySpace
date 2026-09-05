@@ -81,6 +81,45 @@ pub fn import_asset(
     })
 }
 
+/// Stores already-validated downloaded bytes as a managed asset. Metadata
+/// enrichment uses this instead of temporary source files, but the persistence
+/// model remains identical to user-imported assets: bytes are copied under the
+/// app data dir and SQLite stores only metadata.
+pub fn store_asset_bytes(
+    conn: &mut Connection,
+    asset_dir: &Path,
+    file_name: &str,
+    mime_type: &str,
+    bytes: &[u8],
+) -> Result<AssetDto, WorkspaceError> {
+    let id = uuid::Uuid::now_v7().to_string();
+    let ext = extension_for_mime(mime_type);
+    let relative = format!("{id}.{ext}");
+    let dest = asset_dir.join(&relative);
+
+    fs::create_dir_all(asset_dir)
+        .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
+    fs::write(&dest, bytes)
+        .map_err(|e| WorkspaceError::Database(format!("cannot store asset bytes: {e}")))?;
+
+    let now = db::migrations::now_millis();
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6)",
+        params![id, relative, mime_type, file_name, bytes.len() as i64, now],
+    )?;
+
+    Ok(AssetDto {
+        id,
+        file_name: file_name.to_string(),
+        mime_type: mime_type.to_string(),
+        width: None,
+        height: None,
+        size_bytes: bytes.len() as i64,
+        file_path: relative,
+    })
+}
+
 /// Loads an asset's metadata by id, if it exists.
 pub fn load_asset(conn: &Connection, id: &str) -> Result<Option<AssetDto>, WorkspaceError> {
     let mut stmt = conn.prepare(
@@ -115,6 +154,7 @@ fn extension_for_mime(mime_type: &str) -> &'static str {
         "image/png" => "png",
         "image/gif" => "gif",
         "image/webp" => "webp",
+        "image/x-icon" | "image/vnd.microsoft.icon" => "ico",
         "image/svg+xml" => "svg",
         "image/heic" => "heic",
         _ => "bin",

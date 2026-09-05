@@ -22,9 +22,10 @@ export function useDocumentDraft(opts: {
   id: string;
   persistedDocument: unknown;
   onUpdate: (id: string, document: unknown) => Promise<void>;
+  onFinalize?: (id: string, document: unknown) => Promise<void>;
   onSaved?: () => void;
 }) {
-  const { id, persistedDocument, onUpdate, onSaved } = opts;
+  const { id, persistedDocument, onUpdate, onFinalize, onSaved } = opts;
 
   const [draft, setDraft] = useState<unknown>(persistedDocument);
   const [saving, setSaving] = useState(false);
@@ -35,6 +36,7 @@ export function useDocumentDraft(opts: {
   const persistedRef = useRef<unknown>(persistedDocument);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savingRef = useRef(false);
+  const needsFinalizeRef = useRef(false);
 
   // Adopt an externally-changed document only while clean.
   useEffect(() => {
@@ -46,15 +48,20 @@ export function useDocumentDraft(opts: {
     }
   }, [persistedDocument]);
 
-  const commit = useCallback(
+  const finalize = useCallback(
     async (doc: unknown) => {
+      // Enter снимает фокус с редактора, поэтому blur может прийти до ответа
+      // backend. Одна пользовательская финализация должна дать ровно одну
+      // транзакцию смены типа карточки.
+      if (savingRef.current) return;
       setSaving(true);
       savingRef.current = true;
       setError(null);
       try {
-        await onUpdate(id, doc);
+        await (onFinalize ? onFinalize(id, doc) : onUpdate(id, doc));
         dirtyRef.current = false;
         persistedRef.current = doc;
+        needsFinalizeRef.current = false;
         onSaved?.();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -63,12 +70,13 @@ export function useDocumentDraft(opts: {
         savingRef.current = false;
       }
     },
-    [id, onUpdate, onSaved],
+    [id, onFinalize, onSaved, onUpdate],
   );
 
   const handleChange = useCallback(
     (doc: unknown) => {
       dirtyRef.current = true;
+      needsFinalizeRef.current = true;
       draftRef.current = doc;
       setDraft(doc);
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
@@ -93,12 +101,24 @@ export function useDocumentDraft(opts: {
       clearTimeout(debounceTimer.current);
       debounceTimer.current = null;
     }
-    if (dirtyRef.current) {
-      void commit(draftRef.current);
+    if (dirtyRef.current || needsFinalizeRef.current) {
+      void finalize(draftRef.current);
     } else {
       onSaved?.();
     }
-  }, [commit, onSaved]);
+  }, [finalize, onSaved]);
+
+  const handleFinalize = useCallback(() => {
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+    if (dirtyRef.current || needsFinalizeRef.current) {
+      return finalize(draftRef.current);
+    }
+    onSaved?.();
+    return Promise.resolve();
+  }, [finalize, onSaved]);
 
   // Flush any dirty draft on unmount (navigation/trash/snapshot swap) so a
   // pending debounce is never abandoned. Fire-and-forget: the parent owns
@@ -116,5 +136,5 @@ export function useDocumentDraft(opts: {
     };
   }, [id, onUpdate]);
 
-  return { draft, saving, error, handleChange, handleBlur };
+  return { draft, saving, error, handleChange, handleBlur, handleFinalize };
 }

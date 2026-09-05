@@ -96,7 +96,8 @@ pub struct ImageCardDto {
     pub caption_plain_text: String,
 }
 
-/// An embed card: a URL with an optional preview image.
+/// The Link Card (link preview) surface. The user-facing "Link Card" is the
+/// existing domain `embed` kind. Fields mirror docs/specs/link-card-and-clipboard.md.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbedCardDto {
@@ -105,10 +106,18 @@ pub struct EmbedCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
-    pub url: String,
-    pub title: Option<String>,
+    pub source_url: String,
+    pub display_url: String,
+    pub site_name: Option<String>,
+    pub title: String,
     pub provider: Option<String>,
-    pub asset: Option<AssetDto>,
+    pub description_json: Value,
+    pub description_plain_text: String,
+    pub favicon_asset: Option<AssetDto>,
+    pub preview_asset: Option<AssetDto>,
+    pub preview_origin: Option<String>,
+    pub metadata_status: String,
+    pub metadata_error: Option<String>,
 }
 
 /// Metadata for a stored file asset (image / preview thumbnail).
@@ -263,6 +272,68 @@ pub struct UpdateImageCaptionInput {
     pub expected_revision: i64,
     pub caption_json: Value,
     pub caption_plain_text: String,
+}
+
+/// Input for converting a Note into an Embed (Link) Card transactionally. The
+/// source URL is authoritative; title/description start as a network-free
+/// fallback and are enriched later by metadata acquisition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertNoteToEmbedInput {
+    pub id: String,
+    pub expected_revision: i64,
+    pub source_url: String,
+    pub display_url: String,
+    pub title: String,
+    pub description_json: Value,
+    pub description_plain_text: String,
+}
+
+/// Input for updating an embed (Link) card's description body, bumping its
+/// revision with an optimistic guard (mirrors `UpdateNoteInput`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateEmbedDescriptionInput {
+    pub id: String,
+    pub expected_revision: i64,
+    pub description_json: Value,
+    pub description_plain_text: String,
+}
+
+/// Input for asynchronously enriching a pending embed (Link) card.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnrichEmbedMetadataInput {
+    pub id: String,
+    pub expected_revision: i64,
+}
+
+/// Minimal embed projection read before metadata network I/O.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedForMetadata {
+    pub id: String,
+    pub revision: i64,
+    pub source_url: String,
+    pub display_url: String,
+    pub title: String,
+    pub preview_origin: Option<String>,
+}
+
+/// Transactional metadata update for an embed (Link) card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApplyEmbedMetadataInput {
+    pub id: String,
+    pub expected_revision: i64,
+    pub display_url: String,
+    pub site_name: Option<String>,
+    pub title: String,
+    pub provider: Option<String>,
+    pub description_json: Value,
+    pub description_plain_text: String,
+    pub preview_asset_id: Option<String>,
+    pub favicon_asset_id: Option<String>,
+    pub metadata_status: String,
+    pub metadata_error: Option<String>,
 }
 
 /// Input for moving a card to a different board (e.g. dropping a note onto a

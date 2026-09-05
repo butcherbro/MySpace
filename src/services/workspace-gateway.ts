@@ -80,7 +80,34 @@ export interface ImageCardDto {
   captionPlainText: string;
 }
 
-export type CardDto = NoteCardDto | BoardPortalDto | ImageCardDto;
+export type LinkMetadataStatus = "pending" | "ready" | "failed";
+
+/**
+ * The Link Card (link preview) surface. The user-facing "Link Card" is the
+ * domain `embed` kind. Fields mirror docs/specs/link-card-and-clipboard.md.
+ */
+export interface EmbedCardDto {
+  kind: "embed";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  revision: number;
+  sourceUrl: string;
+  displayUrl: string;
+  siteName: string | null;
+  title: string;
+  provider: string | null;
+  descriptionJson: unknown;
+  descriptionPlainText: string;
+  faviconAsset: AssetDto | null;
+  previewAsset: AssetDto | null;
+  previewOrigin: "fetched" | "custom" | null;
+  metadataStatus: LinkMetadataStatus;
+  metadataError: string | null;
+}
+
+export type CardDto = NoteCardDto | BoardPortalDto | ImageCardDto | EmbedCardDto;
 
 export interface BoardSnapshot {
   board: BoardSummary;
@@ -172,6 +199,28 @@ export interface TrashItemInput {
   kind: "note" | "image" | "embed" | "board_portal";
 }
 
+export interface ConvertNoteToEmbedInput {
+  id: string;
+  expectedRevision: number;
+  sourceUrl: string;
+  displayUrl: string;
+  title: string;
+  descriptionJson: unknown;
+  descriptionPlainText: string;
+}
+
+export interface UpdateEmbedDescriptionInput {
+  id: string;
+  expectedRevision: number;
+  descriptionJson: unknown;
+  descriptionPlainText: string;
+}
+
+export interface EnrichEmbedMetadataInput {
+  id: string;
+  expectedRevision: number;
+}
+
 export interface TrashSelectionInput {
   items: TrashItemInput[];
 }
@@ -197,5 +246,8 @@ export interface WorkspaceGateway {
   importAsset(input: ImportAssetInput): Promise<AssetDto>;
   createImageCard(input: CreateImageCardInput): Promise<void>;
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
+  convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto>;
+  enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto>;
+  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void>;
   trashSelection(input: TrashSelectionInput): Promise<string>;
 }

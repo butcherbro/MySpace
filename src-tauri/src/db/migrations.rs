@@ -25,6 +25,16 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "assets",
         sql: include_str!("../../migrations/0002_assets.sql"),
     },
+    Migration {
+        version: 3,
+        name: "embed_links",
+        sql: include_str!("../../migrations/0003_embed_links.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "top_left_board_origin",
+        sql: include_str!("../../migrations/0004_top_left_board_origin.sql"),
+    },
 ];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.

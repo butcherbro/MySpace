@@ -51,3 +51,17 @@
   height: 0;
   pointer-events: none;
 }
+
+/* Inline links inside note text: read as clickable at a glance, but stay
+   quiet so they don't dominate the paper surface. The underline appears on
+   hover/focus to signal affordance without Permanent decoration. */
+.note-editor .ProseMirror a {
+  color: #3366cc;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.note-editor .ProseMirror a:hover,
+.note-editor .ProseMirror a:focus-visible {
+  text-decoration: underline;
+}

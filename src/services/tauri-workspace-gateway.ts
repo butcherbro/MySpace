@@ -3,15 +3,19 @@ import type {
   AssetDto,
   BoardSnapshot,
   BoardSummary,
+  ConvertNoteToEmbedInput,
   CreateChildBoardInput,
   CreateImageCardInput,
   CreateNoteInput,
+  EmbedCardDto,
+  EnrichEmbedMetadataInput,
   ImportAssetInput,
   MoveCardInput,
   MoveCardsInput,
   MoveCardToBoardInput,
   SaveViewportInput,
   TrashSelectionInput,
+  UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
   WorkspaceGateway,
@@ -85,6 +89,22 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
     return invoke<void>("update_image_caption", { input });
+  }
+
+  async convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto> {
+    // Команда Rust возвращает сам EmbedCardDto без enum-тега. На IPC-границе
+    // восстанавливаем дискриминатор, иначе registry принимает карточку за portal.
+    const embed = await invoke<Omit<EmbedCardDto, "kind">>("convert_note_to_embed", { input });
+    return { ...embed, kind: "embed" };
+  }
+
+  async enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto> {
+    const embed = await invoke<Omit<EmbedCardDto, "kind">>("enrich_embed_metadata", { input });
+    return { ...embed, kind: "embed" };
+  }
+
+  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void> {
+    return invoke<void>("update_embed_description", { input });
   }
 
   trashSelection(input: TrashSelectionInput): Promise<string> {

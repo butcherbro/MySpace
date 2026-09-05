@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { initialState, reducer, type CurrentBoardState } from "./current-board-store";
-import type { BoardSummary, NoteCardDto } from "../services/workspace-gateway";
+import type { BoardSummary, EmbedCardDto, NoteCardDto } from "../services/workspace-gateway";
 
 const home: BoardSummary = { id: "home", title: "Home", parentBoardId: null, revision: 1 };
 
@@ -14,6 +14,29 @@ function note(id: string, x = 0): NoteCardDto {
     revision: 1,
     documentJson: { type: "doc" },
     plainText: "",
+  };
+}
+
+function embed(id: string): EmbedCardDto {
+  return {
+    kind: "embed",
+    id,
+    boardId: "home",
+    frame: { x: 0, y: 0, width: 320, height: 180 },
+    zIndex: 0,
+    revision: 2,
+    sourceUrl: "https://example.com",
+    displayUrl: "example.com",
+    siteName: null,
+    title: "https://example.com",
+    provider: null,
+    descriptionJson: { type: "doc", content: [] },
+    descriptionPlainText: "",
+    faviconAsset: null,
+    previewAsset: null,
+    previewOrigin: null,
+    metadataStatus: "pending",
+    metadataError: null,
   };
 }
 
@@ -68,6 +91,16 @@ describe("current board reducer", () => {
     expect(card.revision).toBe(2);
   });
 
+  it("clears stale note editing when a note is replaced by a link card", () => {
+    const state = reducer(
+      { ...initialState, cards: [note("a")], editingCardId: "a", selection: ["a"] },
+      { type: "cardReplaced", id: "a", card: embed("a") },
+    );
+
+    expect(state.cards[0]).toEqual(embed("a"));
+    expect(state.editingCardId).toBeNull();
+  });
+
   it("updates selection and viewport", () => {
     let state = reducer(initialState, { type: "selectionChanged", ids: ["a", "b"] });
     expect(state.selection).toEqual(["a", "b"]);
@@ -98,19 +131,19 @@ describe("current board reducer", () => {
     expect(state.selection).toEqual([]);
   });
 
-  it("clamps a persisted negative viewport back to the board origin", () => {
+  it("resets the viewport to the board origin on load (ignores persisted position)", () => {
     const state = reducer(initialState, {
       type: "snapshotLoaded",
       board: home,
       breadcrumbs: [],
-      viewport: { x: -240, y: -80, zoom: 1 },
+      viewport: { x: -240, y: 300, zoom: 1 },
       viewportRevision: 1,
       cards: [note("a", 40)],
     });
     expect(state.viewport).toEqual({ x: 0, y: 0, zoom: 1 });
   });
 
-  it("keeps a positive viewport unchanged on load", () => {
+  it("resets a positive viewport to origin on load too", () => {
     const state = reducer(initialState, {
       type: "snapshotLoaded",
       board: home,
@@ -119,7 +152,7 @@ describe("current board reducer", () => {
       viewportRevision: 1,
       cards: [note("a", 40)],
     });
-    expect(state.viewport).toEqual({ x: 120, y: 300, zoom: 1.5 });
+    expect(state.viewport).toEqual({ x: 0, y: 0, zoom: 1.5 });
   });
 
   it("records errors and clears them", () => {

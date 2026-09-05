@@ -12,6 +12,8 @@ interface NoteCardProps {
   onDeactivate: () => void;
   /** Persist note content as an authoritative document. Rejects on failure. */
   onUpdate: (id: string, document: unknown) => Promise<void>;
+  /** Finalize note editing (blur/Enter) and optionally convert into a Link Card. */
+  onFinalize?: (id: string, document: unknown) => Promise<void>;
   /** Request a context menu (right-click) for this card. */
   onContextMenu: (cardId: string, x: number, y: number) => void;
   /** Persist a manual resize (width/height in CSS px). */
@@ -28,13 +30,15 @@ export function NoteCard({
   editing,
   onDeactivate,
   onUpdate,
+  onFinalize,
   onContextMenu,
   onResize,
 }: NoteCardProps) {
-  const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
+  const { draft, saving, error, handleChange, handleBlur, handleFinalize } = useDocumentDraft({
     id: note.id,
     persistedDocument: note.documentJson,
     onUpdate,
+    onFinalize,
     onSaved: onDeactivate,
   });
 
@@ -96,6 +100,9 @@ export function NoteCard({
         editable={editing}
         onChange={handleChange}
         onBlur={handleBlur}
+        onFinalize={() => {
+          void handleFinalize();
+        }}
       />
       {saving && <div className="note-card__status">Saving…</div>}
       {error && <div className="note-card__status note-card__status--error">{error}</div>}

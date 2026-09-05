@@ -834,3 +834,175 @@ fn move_card_to_board_rejects_unknown_target() {
         Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
     ));
 }
+
+fn create_test_note(conn: &mut rusqlite::Connection) -> String {
+    let board_id = root_board_id(conn);
+    workspace_repository::create_note(
+        conn,
+        &CreateNoteInput {
+            id: "note-to-embed".to_string(),
+            board_id: board_id.clone(),
+            frame: Frame {
+                x: 77.0,
+                y: 88.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 3,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "https://example.com".to_string(),
+        },
+    )
+    .unwrap();
+    board_id
+}
+
+#[test]
+fn convert_note_to_embed_preserves_identity_and_kind() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = create_test_note(&mut conn);
+
+    let embed = workspace_repository::convert_note_to_embed(
+        &mut conn,
+        &myspace_lib::domain::models::ConvertNoteToEmbedInput {
+            id: "note-to-embed".to_string(),
+            expected_revision: 1,
+            source_url: "https://example.com".to_string(),
+            display_url: "example.com".to_string(),
+            title: "https://example.com".to_string(),
+            description_json: serde_json::json!({ "type": "doc" }),
+            description_plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(embed.id, "note-to-embed");
+    assert_eq!(embed.board_id, board_id);
+    assert_eq!(embed.frame.x, 77.0);
+    assert_eq!(embed.frame.y, 88.0);
+    assert_eq!(embed.z_index, 3);
+    assert_eq!(embed.revision, 2); // bumped from 1
+    assert_eq!(embed.source_url, "https://example.com");
+    assert_eq!(embed.display_url, "example.com");
+    assert_eq!(embed.title, "https://example.com");
+    assert_eq!(embed.metadata_status, "pending");
+    assert_eq!(embed.preview_asset, None);
+    assert_eq!(embed.favicon_asset, None);
+    assert_eq!(embed.preview_origin, None);
+
+    // The note storage is gone and the card is now an embed.
+    assert_eq!(note_count(&conn), 0);
+    let kind: String = conn
+        .query_row(
+            "SELECT kind FROM cards WHERE id = 'note-to-embed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "embed");
+}
+
+#[test]
+fn convert_note_to_embed_roundtrips_through_snapshot() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = create_test_note(&mut conn);
+
+    workspace_repository::convert_note_to_embed(
+        &mut conn,
+        &myspace_lib::domain::models::ConvertNoteToEmbedInput {
+            id: "note-to-embed".to_string(),
+            expected_revision: 1,
+            source_url: "https://example.com".to_string(),
+            display_url: "example.com".to_string(),
+            title: "https://example.com".to_string(),
+            description_json: serde_json::json!({ "type": "doc" }),
+            description_plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    assert_eq!(snapshot.cards.len(), 1);
+    match &snapshot.cards[0] {
+        myspace_lib::domain::models::CardDto::Embed(e) => {
+            assert_eq!(e.id, "note-to-embed");
+            assert_eq!(e.source_url, "https://example.com");
+            assert_eq!(e.metadata_status, "pending");
+        }
+        other => panic!("expected embed card, got {other:?}"),
+    }
+}
+
+#[test]
+fn convert_note_to_embed_rejects_stale_revision() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    create_test_note(&mut conn);
+
+    let result = workspace_repository::convert_note_to_embed(
+        &mut conn,
+        &myspace_lib::domain::models::ConvertNoteToEmbedInput {
+            id: "note-to-embed".to_string(),
+            expected_revision: 99,
+            source_url: "https://example.com".to_string(),
+            display_url: "example.com".to_string(),
+            title: "https://example.com".to_string(),
+            description_json: serde_json::json!({ "type": "doc" }),
+            description_plain_text: "".to_string(),
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::StaleRevision { expected: 99, .. })
+    ));
+    // Still a note, untouched.
+    assert_eq!(note_count(&conn), 1);
+}
+
+#[test]
+fn convert_note_to_embed_errors_on_non_note() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    // Create a second note and convert it; then converting again must fail.
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "twice".to_string(),
+            board_id: board_id.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+    let input = myspace_lib::domain::models::ConvertNoteToEmbedInput {
+        id: "twice".to_string(),
+        expected_revision: 1,
+        source_url: "https://example.com".to_string(),
+        display_url: "example.com".to_string(),
+        title: "https://example.com".to_string(),
+        description_json: serde_json::json!({ "type": "doc" }),
+        description_plain_text: "".to_string(),
+    };
+    workspace_repository::convert_note_to_embed(&mut conn, &input).unwrap();
+
+    // Re-conversion uses a bumped revision and must be rejected (kind != note).
+    let again = myspace_lib::domain::models::ConvertNoteToEmbedInput {
+        expected_revision: 2,
+        ..input.clone()
+    };
+    assert!(matches!(
+        workspace_repository::convert_note_to_embed(&mut conn, &again),
+        Err(myspace_lib::domain::errors::WorkspaceError::ConstraintViolation(_))
+    ));
+}

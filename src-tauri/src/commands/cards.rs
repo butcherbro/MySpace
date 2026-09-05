@@ -7,8 +7,9 @@ use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    CreateImageCardInput, CreateNoteInput, MoveCardToBoardInput, MoveCardsInput,
-    UpdateCardFrameInput, UpdateImageCaptionInput, UpdateNoteInput,
+    ConvertNoteToEmbedInput, CreateImageCardInput, CreateNoteInput, EmbedCardDto,
+    MoveCardToBoardInput, MoveCardsInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
+    UpdateImageCaptionInput, UpdateNoteInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -85,4 +86,30 @@ pub fn move_card_to_board(
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::move_card_to_board(&mut conn, &input)
+}
+
+/// Transactionally converts a Note into an Embed (Link) Card, preserving the
+/// card identity/frame/z-index and bumping its revision. Returns the authoritative
+/// `EmbedCardDto` for the frontend to swap in.
+#[tauri::command]
+pub fn convert_note_to_embed(
+    db: DbState<'_>,
+    input: ConvertNoteToEmbedInput,
+) -> Result<EmbedCardDto, WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::convert_note_to_embed(&mut conn, &input)
+}
+
+/// Updates an embed (Link) card's description body, bumping its revision.
+#[tauri::command]
+pub fn update_embed_description(
+    db: DbState<'_>,
+    input: UpdateEmbedDescriptionInput,
+) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::update_embed_description(&mut conn, &input)
 }

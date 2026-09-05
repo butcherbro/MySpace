@@ -6,6 +6,7 @@
 // horizontal rules, task items, etc.) into persisted documents before the schema
 // and runtime validation catch up.
 
+import Link from "@tiptap/extension-link";
 import StarterKit from "@tiptap/starter-kit";
 
 export function createEditorExtensions() {
@@ -17,10 +18,20 @@ export function createEditorExtensions() {
       // (enabled).
       codeBlock: false,
       code: false,
+      // Link is added separately below (as the `Link` extension) so its
+      // autolink/paste options stay explicit; disabling it here avoids a
+      // duplicate extension.
       link: false,
       strike: false,
       underline: false,
       horizontalRule: false,
+    }),
+    Link.configure({
+      // Open links on click only while the editor is not editable, so a click
+      // during editing (or during card drag) never navigates away.
+      openOnClick: true,
+      autolink: true,
+      linkOnPaste: true,
     }),
   ];
 }

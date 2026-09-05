@@ -3,13 +3,14 @@
 //! SQLite is authoritative (ADR-003). These functions are the only place that
 //! maps database rows to domain DTOs and back.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    AssetDto, BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb, CardDto,
-    CreateImageCardInput, CreateNoteInput, Frame, ImageCardDto, MoveCardToBoardInput,
-    MoveCardsInput, NoteCardDto, PortalTarget, UpdateCardFrameInput, UpdateImageCaptionInput,
+    ApplyEmbedMetadataInput, AssetDto, BoardPortalDto, BoardSnapshot, BoardSummary, Breadcrumb,
+    CardDto, ConvertNoteToEmbedInput, CreateImageCardInput, CreateNoteInput, EmbedCardDto,
+    EmbedForMetadata, Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, NoteCardDto,
+    PortalTarget, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
     UpdateNoteInput, UpdateViewportInput, Viewport,
 };
 
@@ -230,6 +231,87 @@ fn load_cards(
                 },
                 caption_json,
                 caption_plain_text: row.get(16)?,
+            }))
+        })?;
+
+        for r in rows {
+            out.push(r?);
+        }
+    }
+
+    // Embed (Link) cards: URL surface with optional preview/favicon and a
+    // versioned rich-text body. Columns mirror `load_embed_card`.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                    e.source_url, e.display_url, e.site_name, e.title, e.provider,
+                    e.description_json, e.description_plain_text,
+                    e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
+                    pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
+                    fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
+             FROM cards c
+             JOIN embed_cards e ON e.card_id = c.id
+             LEFT JOIN assets pa ON pa.id = e.asset_id
+             LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL
+             ORDER BY c.z_index, c.id",
+        )?;
+        let rows = stmt.query_map([board_id], |row| {
+            let description_json: String = row.get(13)?;
+            let description_json: serde_json::Value =
+                serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
+
+            let preview_asset = if row.get::<_, Option<String>>(15)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(15)?,
+                    file_name: row.get(20)?,
+                    mime_type: row.get(21)?,
+                    width: row.get(22)?,
+                    height: row.get(23)?,
+                    size_bytes: row.get(24)?,
+                    file_path: row.get(25)?,
+                })
+            } else {
+                None
+            };
+
+            let favicon_asset = if row.get::<_, Option<String>>(16)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(16)?,
+                    file_name: row.get(26)?,
+                    mime_type: row.get(27)?,
+                    width: row.get(28)?,
+                    height: row.get(29)?,
+                    size_bytes: row.get(30)?,
+                    file_path: row.get(31)?,
+                })
+            } else {
+                None
+            };
+
+            Ok(CardDto::Embed(EmbedCardDto {
+                id: row.get(0)?,
+                board_id: row.get(1)?,
+                frame: Frame {
+                    x: row.get(2)?,
+                    y: row.get(3)?,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                },
+                z_index: row.get(6)?,
+                revision: row.get(7)?,
+                source_url: row.get(8)?,
+                display_url: row.get(9)?,
+                site_name: row.get(10)?,
+                title: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+                provider: row.get(12)?,
+                description_json,
+                description_plain_text: row.get(14)?,
+                favicon_asset,
+                preview_asset,
+                preview_origin: row.get(17)?,
+                metadata_status: row.get(18)?,
+                metadata_error: row.get(19)?,
             }))
         })?;
 
@@ -554,6 +636,346 @@ pub fn create_image_card(
     tx.commit()?;
 
     Ok(())
+}
+
+/// Transactionally converts a Note into an Embed (Link) Card. The card identity,
+/// frame, and z-index are preserved; `kind` changes from 'note' to 'embed', the
+/// `note_cards` row is removed, and an `embed_cards` row is created. The source
+/// URL is authoritative; metadata (title/description/preview) are network-free
+/// fallback values at this stage and are enriched later.
+///
+/// Returns the authoritative `EmbedCardDto` so the frontend can atomically swap
+/// the rendered card. Optimistic: rejects a stale `expected_revision`.
+pub fn convert_note_to_embed(
+    conn: &mut Connection,
+    input: &ConvertNoteToEmbedInput,
+) -> Result<EmbedCardDto, WorkspaceError> {
+    let now = db::migrations::now_millis();
+    let description_json = serde_json::to_string(&input.description_json)
+        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+
+    let tx = conn.transaction()?;
+
+    // Guard: the card must be a live note at the expected revision.
+    let kind_and_revision: Option<(String, i64)> = tx
+        .query_row(
+            "SELECT kind, revision FROM cards WHERE id = ?1 AND deleted_at IS NULL",
+            [input.id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+
+    match kind_and_revision {
+        None => return Err(WorkspaceError::NotFound(input.id.clone())),
+        Some((kind, _)) if kind != "note" => {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "card {} is not a note (kind = {})",
+                input.id, kind
+            )));
+        }
+        Some((_, revision)) if revision != input.expected_revision => {
+            return Err(WorkspaceError::StaleRevision {
+                expected: input.expected_revision,
+                actual: revision,
+            });
+        }
+        Some(_) => {}
+    }
+
+    // Change kind + bump revision.
+    tx.execute(
+        "UPDATE cards SET kind = 'embed', revision = revision + 1, updated_at = ?1 WHERE id = ?2",
+        params![now, input.id],
+    )?;
+
+    // Remove note storage.
+    tx.execute(
+        "DELETE FROM note_cards WHERE card_id = ?1",
+        [input.id.as_str()],
+    )?;
+
+    // Create embed storage.
+    tx.execute(
+        "INSERT INTO embed_cards (
+            card_id, source_url, display_url, site_name, title, provider,
+            description_json, description_plain_text,
+            asset_id, favicon_asset_id, preview_origin, metadata_status, metadata_error
+         ) VALUES (?1, ?2, ?3, NULL, ?4, NULL, ?5, ?6, NULL, NULL, NULL, 'pending', NULL)",
+        params![
+            input.id,
+            input.source_url,
+            input.display_url,
+            input.title,
+            description_json,
+            input.description_plain_text,
+        ],
+    )?;
+
+    tx.commit()?;
+
+    load_embed_card(conn, &input.id)
+}
+
+/// Loads a single embed card (with its optional asset joins) into a DTO.
+fn load_embed_card(conn: &Connection, card_id: &str) -> Result<EmbedCardDto, WorkspaceError> {
+    let row = conn.query_row(
+        "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                e.source_url, e.display_url, e.site_name, e.title, e.provider,
+                e.description_json, e.description_plain_text,
+                e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
+                pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
+                fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
+         FROM cards c
+         JOIN embed_cards e ON e.card_id = c.id
+         LEFT JOIN assets pa ON pa.id = e.asset_id
+         LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
+         WHERE c.id = ?1 AND c.deleted_at IS NULL",
+        [card_id],
+        |row| {
+            let description_json: String = row.get(13)?;
+            let description_json: serde_json::Value =
+                serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
+
+            let preview_asset = if row.get::<_, Option<String>>(15)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(15)?,
+                    file_name: row.get(20)?,
+                    mime_type: row.get(21)?,
+                    width: row.get(22)?,
+                    height: row.get(23)?,
+                    size_bytes: row.get(24)?,
+                    file_path: row.get(25)?,
+                })
+            } else {
+                None
+            };
+
+            let favicon_asset = if row.get::<_, Option<String>>(16)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(16)?,
+                    file_name: row.get(26)?,
+                    mime_type: row.get(27)?,
+                    width: row.get(28)?,
+                    height: row.get(29)?,
+                    size_bytes: row.get(30)?,
+                    file_path: row.get(31)?,
+                })
+            } else {
+                None
+            };
+
+            Ok(EmbedCardDto {
+                id: row.get(0)?,
+                board_id: row.get(1)?,
+                frame: Frame {
+                    x: row.get(2)?,
+                    y: row.get(3)?,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                },
+                z_index: row.get(6)?,
+                revision: row.get(7)?,
+                source_url: row.get(8)?,
+                display_url: row.get(9)?,
+                site_name: row.get(10)?,
+                title: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+                provider: row.get(12)?,
+                description_json,
+                description_plain_text: row.get(14)?,
+                favicon_asset,
+                preview_asset,
+                preview_origin: row.get(17)?,
+                metadata_status: row.get(18)?,
+                metadata_error: row.get(19)?,
+            })
+        },
+    );
+
+    Ok(row?)
+}
+
+/// Updates an embed (Link) card's description body, bumping its revision,
+/// guarded by an optimistic `expected_revision` (mirrors `update_note`).
+pub fn update_embed_description(
+    conn: &mut Connection,
+    input: &UpdateEmbedDescriptionInput,
+) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+    let description_json = serde_json::to_string(&input.description_json)
+        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+
+    let tx = conn.transaction()?;
+
+    let changed = tx.execute(
+        "UPDATE cards SET revision = revision + 1, updated_at = ?1
+         WHERE id = ?2 AND revision = ?3 AND kind = 'embed'",
+        params![now, input.id, input.expected_revision],
+    )?;
+
+    if changed == 0 {
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(WorkspaceError::NotFound(input.id.clone()));
+        }
+        let actual: i64 = tx.query_row(
+            "SELECT revision FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_revision,
+            actual,
+        });
+    }
+
+    tx.execute(
+        "UPDATE embed_cards SET description_json = ?1, description_plain_text = ?2 WHERE card_id = ?3",
+        params![description_json, input.description_plain_text, input.id],
+    )?;
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// Reads the minimal embed state needed before metadata fetching. Callers must
+/// drop the DB lock before doing network work, then apply the result with the
+/// same expected revision.
+pub fn load_embed_for_metadata(
+    conn: &Connection,
+    id: &str,
+    expected_revision: i64,
+) -> Result<EmbedForMetadata, WorkspaceError> {
+    let row = conn
+        .query_row(
+            "SELECT c.id, c.revision, e.source_url, e.display_url, COALESCE(e.title, ''), e.preview_origin
+             FROM cards c
+             JOIN embed_cards e ON e.card_id = c.id
+             WHERE c.id = ?1 AND c.kind = 'embed' AND c.deleted_at IS NULL",
+            [id],
+            |row| {
+                Ok(EmbedForMetadata {
+                    id: row.get(0)?,
+                    revision: row.get(1)?,
+                    source_url: row.get(2)?,
+                    display_url: row.get(3)?,
+                    title: row.get(4)?,
+                    preview_origin: row.get(5)?,
+                })
+            },
+        )
+        .optional()?;
+
+    let Some(embed) = row else {
+        return Err(WorkspaceError::NotFound(id.to_string()));
+    };
+
+    if embed.revision != expected_revision {
+        return Err(WorkspaceError::StaleRevision {
+            expected: expected_revision,
+            actual: embed.revision,
+        });
+    }
+
+    Ok(embed)
+}
+
+/// Applies fetched metadata in one transaction. A custom preview is never
+/// overwritten by a network refresh.
+pub fn apply_embed_metadata(
+    conn: &mut Connection,
+    input: &ApplyEmbedMetadataInput,
+) -> Result<EmbedCardDto, WorkspaceError> {
+    let now = db::migrations::now_millis();
+    let description_json = serde_json::to_string(&input.description_json)
+        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+
+    let tx = conn.transaction()?;
+
+    let current_preview_origin: Option<String> = tx
+        .query_row(
+            "SELECT e.preview_origin
+             FROM cards c
+             JOIN embed_cards e ON e.card_id = c.id
+             WHERE c.id = ?1 AND c.kind = 'embed' AND c.deleted_at IS NULL",
+            [input.id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| WorkspaceError::NotFound(input.id.clone()))?;
+
+    let changed = tx.execute(
+        "UPDATE cards SET revision = revision + 1, updated_at = ?1
+         WHERE id = ?2 AND revision = ?3 AND kind = 'embed' AND deleted_at IS NULL",
+        params![now, input.id, input.expected_revision],
+    )?;
+
+    if changed == 0 {
+        let actual: i64 = tx.query_row(
+            "SELECT revision FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_revision,
+            actual,
+        });
+    }
+
+    if current_preview_origin.as_deref() == Some("custom") {
+        tx.execute(
+            "UPDATE embed_cards
+             SET display_url = ?1, site_name = ?2, title = ?3, provider = ?4,
+                 description_json = ?5, description_plain_text = ?6,
+                 favicon_asset_id = ?7, metadata_status = ?8, metadata_error = ?9
+             WHERE card_id = ?10",
+            params![
+                input.display_url,
+                input.site_name,
+                input.title,
+                input.provider,
+                description_json,
+                input.description_plain_text,
+                input.favicon_asset_id,
+                input.metadata_status,
+                input.metadata_error,
+                input.id
+            ],
+        )?;
+    } else {
+        let next_preview_origin = input
+            .preview_asset_id
+            .as_ref()
+            .map(|_| "fetched".to_string());
+        tx.execute(
+            "UPDATE embed_cards
+             SET display_url = ?1, site_name = ?2, title = ?3, provider = ?4,
+                 description_json = ?5, description_plain_text = ?6,
+                 asset_id = ?7, favicon_asset_id = ?8, preview_origin = ?9,
+                 metadata_status = ?10, metadata_error = ?11
+             WHERE card_id = ?12",
+            params![
+                input.display_url,
+                input.site_name,
+                input.title,
+                input.provider,
+                description_json,
+                input.description_plain_text,
+                input.preview_asset_id,
+                input.favicon_asset_id,
+                next_preview_origin,
+                input.metadata_status,
+                input.metadata_error,
+                input.id
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    load_embed_card(conn, &input.id)
 }
 
 /// Moves a leaf card (note/image/embed) to a different board, resetting its
