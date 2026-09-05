@@ -11,6 +11,14 @@ import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
+import { BoardTabs } from "./navigation/BoardTabs";
+import {
+  activateBoardTab,
+  createBoardTabs,
+  openBoardTab,
+  closeBoardTab,
+  type BoardTabsState,
+} from "./navigation/board-tabs";
 import { BoardHistory } from "./navigation/board-history";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
@@ -49,6 +57,14 @@ function App() {
 
   // Browser-style navigation history. Initialized lazily once Home is known.
   const historyRef = useRef<BoardHistory | null>(null);
+
+  // Browser-like open-board tabs (session-only). Initialized lazily once Home is
+  // known; the active tab always mirrors the currently loaded board.
+  const [tabs, setTabs] = useState<BoardTabsState | null>(null);
+  const tabsRef = useRef<BoardTabsState | null>(null);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -131,6 +147,7 @@ function App() {
         const snapshot = await gateway.loadBoardSnapshot(home.id);
         if (cancelled) return;
         historyRef.current = new BoardHistory(home.id);
+        setTabs(createBoardTabs(snapshot.board.id, snapshot.board.title));
         dispatch({
           type: "snapshotLoaded",
           board: snapshot.board,
@@ -762,6 +779,19 @@ function App() {
       if (opts?.push && historyRef.current) {
         historyRef.current.push(boardId);
       }
+      // Track the board as an open tab: explicit navigation opens/activates a
+      // tab; a reload just re-syncs the active id to the loaded board.
+      setTabs((prev) => {
+        const base = prev ?? createBoardTabs(snapshot.board.id, snapshot.board.title);
+        const withHome =
+          base.tabs.length === 0
+            ? createBoardTabs(snapshot.board.id, snapshot.board.title)
+            : base;
+        if (opts?.push) {
+          return openBoardTab(withHome, snapshot.board.id, snapshot.board.title);
+        }
+        return activateBoardTab(withHome, snapshot.board.id);
+      });
       dispatch({
         type: "snapshotLoaded",
         board: snapshot.board,
@@ -857,6 +887,28 @@ function App() {
     if (next) void navigateTo(next);
   }, [navigateTo]);
 
+  // Tab interactions: switching loads the board (no history push); closing
+  // removes the tab and, if it was active, navigates to the neighbor.
+  const handleTabActivate = useCallback(
+    (boardId: string) => {
+      void navigateTo(boardId);
+    },
+    [navigateTo],
+  );
+
+  const handleTabClose = useCallback(
+    (boardId: string) => {
+      const prev = tabsRef.current;
+      if (!prev) return;
+      const next = closeBoardTab(prev, boardId);
+      setTabs(next);
+      if (next.activeBoardId !== prev.activeBoardId) {
+        void navigateTo(next.activeBoardId);
+      }
+    },
+    [navigateTo],
+  );
+
   const canvasRef = useRef<HTMLDivElement>(null);
 
   const handleEditDeactivate = useCallback(() => {
@@ -916,6 +968,14 @@ function App() {
             Add image
           </button>
         </div>
+        {tabs && (
+          <BoardTabs
+            tabs={tabs.tabs}
+            activeBoardId={tabs.activeBoardId}
+            onActivate={handleTabActivate}
+            onClose={handleTabClose}
+          />
+        )}
         <BoardBreadcrumbs
           breadcrumbs={breadcrumbs}
           currentBoardId={board?.id ?? ""}

@@ -411,3 +411,37 @@ test("right-click a board portal copies the target board link", async ({ page, c
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
   expect(clipboard).toMatch(/^myspace:\/\/board\/.+$/);
 });
+
+// --- Browser-like board tabs ---
+
+test("opening boards creates tabs; closing a tab does not delete the board", async ({ page }) => {
+  await page.goto("/");
+
+  // Only Home is open: no tab strip.
+  await expect(page.getByTestId("board-tabs")).toHaveCount(0);
+
+  // Create a child board and open it.
+  await page.getByRole("button", { name: "New board" }).click();
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+  await page.locator(".board-portal-card__tile").dblclick();
+  await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
+
+  // Two tabs now: Home + child.
+  await expect(page.getByTestId("board-tab")).toHaveCount(2);
+  await expect(
+    page.getByTestId("board-tab").filter({ hasText: "New Board" }),
+  ).toHaveAttribute("data-active", "true");
+
+  // Open Home via breadcrumb -> Home becomes active, both tabs remain.
+  await page.getByTestId("breadcrumbs").getByRole("button", { name: "Home" }).click();
+  await expect(page.getByTestId("board-tab")).toHaveCount(2);
+  await expect(
+    page.getByTestId("board-tab").filter({ hasText: "Home" }).first(),
+  ).toHaveAttribute("data-active", "true");
+
+  // Close the child tab; the strip returns to single-Home (hidden) and the
+  // child board still exists on Home as a portal.
+  await page.getByRole("button", { name: "Close tab New Board" }).click();
+  await expect(page.getByTestId("board-tabs")).toHaveCount(0);
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+});
