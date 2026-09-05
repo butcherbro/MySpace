@@ -38,6 +38,11 @@ function App() {
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
   const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
   const [dropTargetBoardId, setDropTargetBoardId] = useState<string | null>(null);
+  // The hovered breadcrumb board id, mirrored to a ref so the continuous drag
+  // gesture can read it synchronously. React batches `setDropTargetBoardId`,
+  // and React Flow fires `onNodeDragStop` right after the final `onNodeDrag` in
+  // the same pointer gesture, so state alone is too stale to resolve the drop.
+  const dropTargetBoardIdRef = useRef<string | null>(null);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
@@ -563,18 +568,20 @@ function App() {
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const crumbEl = el?.closest?.("[data-board-drop-id]") as HTMLElement | null;
     const boardId = crumbEl?.getAttribute("data-board-drop-id") ?? null;
+    dropTargetBoardIdRef.current = boardId;
     setDropTargetBoardId(boardId);
   }, []);
 
   const handleCardDragEnd = useCallback(() => {
     const cardId = lastDraggedCardIdRef.current;
-    const targetBoardId = dropTargetBoardId;
+    const targetBoardId = dropTargetBoardIdRef.current;
+    dropTargetBoardIdRef.current = null;
     setDropTargetBoardId(null);
     lastDraggedCardIdRef.current = null;
     if (cardId && targetBoardId) {
       handleCardDroppedOnPortal(cardId, targetBoardId);
     }
-  }, [dropTargetBoardId, handleCardDroppedOnPortal]);
+  }, [handleCardDroppedOnPortal]);
 
   const handleDeleteSelection = useCallback(async () => {
     if (state.selection.length === 0) return;

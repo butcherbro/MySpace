@@ -108,6 +108,28 @@ export function CanvasAdapter({
   const lastPaneClickRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const paneClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Dragging a node near the canvas top clamps the node at the board origin, so
+  // React Flow stops emitting `onNodeDrag` pointer coordinates before the pointer
+  // can reach the header breadcrumbs. To keep cross-surface drop targets
+  // (breadcrumbs) working, we track the raw pointer on `window` for the duration
+  // of the drag and report those screen coords instead.
+  const windowDragMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
+  const windowDragUpRef = useRef<(() => void) | null>(null);
+  const draggingCardIdRef = useRef<string | null>(null);
+
+  const cleanupWindowDragListeners = () => {
+    if (windowDragMoveRef.current) {
+      window.removeEventListener("pointermove", windowDragMoveRef.current);
+      windowDragMoveRef.current = null;
+    }
+    if (windowDragUpRef.current) {
+      window.removeEventListener("pointerup", windowDragUpRef.current);
+      windowDragUpRef.current = null;
+    }
+  };
+
+  useEffect(() => cleanupWindowDragListeners, []);
+
   // Double-click window for the empty pane. React Flow v12 exposes only
   // `onPaneClick`; we fold two rapid clicks into a single `onPaneDoubleClick`.
   const DOUBLE_CLICK_MS = 300;
@@ -184,12 +206,18 @@ export function CanvasAdapter({
     const selected = selectedIdsRef.current;
     const ids = selected.has(node.id) && selected.size > 1 ? [...selected] : [node.id];
 
+    // Stop the raw-pointer tracking opened at drag start.
+    cleanupWindowDragListeners();
+    draggingCardIdRef.current = null;
+
     // Clear any portal highlight.
     if (highlightedPortalRef.current !== null) {
       highlightedPortalRef.current = null;
       events.onPortalHighlight?.(null);
     }
-    // Clear any transient breadcrumb drop-target highlight.
+    // Clear any transient breadcrumb drop-target highlight. This resolves the
+    // drop from `dropTargetBoardIdRef` set by the last window pointermove, which
+    // already runs before React Flow's drag-stop callback.
     events.onCardDragEnd?.();
 
     // Drop onto a portal: if a single card's center lands inside a board portal,
@@ -254,6 +282,35 @@ export function CanvasAdapter({
         clientX: event.clientX,
         clientY: event.clientY,
       });
+    }
+  };
+
+  // Begin a node drag. Also start tracking the raw pointer on `window` so that
+  // drop targets OUTSIDE the pane (breadcrumbs in the header) keep receiving
+  // accurate screen coordinates throughout the gesture, even after the node is
+  // clamped at the board origin.
+  const handleNodeDragStart = (event: React.MouseEvent | MouseEvent | TouchEvent, node: Node<CardNodeData>) => {
+    draggingCardIdRef.current = node.id;
+
+    const report = (e: PointerEvent) => {
+      const cardId = draggingCardIdRef.current;
+      if (!cardId) return;
+      events.onCardDragMove?.({
+        cardId,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+    };
+    const stop = () => cleanupWindowDragListeners();
+
+    windowDragMoveRef.current = report;
+    windowDragUpRef.current = stop;
+    window.addEventListener("pointermove", report);
+    window.addEventListener("pointerup", stop);
+
+    // Seed the first position from the initiating event.
+    if ("clientX" in event) {
+      events.onCardDragMove?.({ cardId: node.id, clientX: event.clientX, clientY: event.clientY });
     }
   };
 
@@ -336,6 +393,7 @@ export function CanvasAdapter({
         onNodeContextMenu={handleNodeContextMenu}
         onSelectionContextMenu={handleSelectionContextMenu}
         onNodeDrag={handleNodeDrag}
+        onNodeDragStart={handleNodeDragStart}
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={handleMoveEnd}
         onInit={(instance) => {

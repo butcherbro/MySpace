@@ -10,8 +10,8 @@
 - [x] Add atomic, undoable Board reparenting (backend `move_board` + `MoveBoardCommand`).
 - [x] Wire Board reparenting to canvas DnD: drop Board Portals onto Board Portals.
 - [x] Wire breadcrumbs as drop targets for leaf cards and Board Portals.
-- [ ] Extend mock navigation for nested-board e2e and add hierarchy acceptance coverage.
-- [ ] Let Note, Image, and Link Cards move to breadcrumb ancestors through the existing leaf-card command.
+- [x] Extend mock navigation for nested-board e2e and add hierarchy acceptance coverage.
+- [x] Let Note, Image, and Link Cards move to breadcrumb ancestors through the existing leaf-card command.
 - [ ] Verify clean live Link Card auto-fit and YouTube channel Retry outside hot reload.
 - [x] Harden startup snapshots: validate DB/assets, publish atomically, and rate-limit normal dev-start backups.
 - [x] Add and rehearse a restore flow that preserves the damaged live database/assets before replacement.

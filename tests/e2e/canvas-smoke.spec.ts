@@ -275,3 +275,103 @@ test("double-clicking empty canvas creates a note near the click point", async (
   expect(Math.abs(frame.x - clickX)).toBeLessThan(40);
   expect(Math.abs(frame.y - clickY)).toBeLessThan(40);
 });
+
+// --- Board hierarchy and breadcrumb drag-and-drop acceptance ---
+
+// Helper: drag a card's center from one screen point to another via mouse
+// press/move/release. React Flow treats a press+move as a node drag (not an
+// edit click) when the pointer travels beyond the click threshold.
+async function dragCenter(page: import("@playwright/test").Page, from: { x: number; y: number }, to: { x: number; y: number }) {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+  await page.mouse.up();
+}
+
+// Helper: bounding-box center of a locator's first element.
+async function centerOf(page: import("@playwright/test").Page, selector: string): Promise<{ x: number; y: number }> {
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel)!;
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  }, selector);
+}
+
+test("breadcrumbs show a root-first Home / Child path", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("breadcrumbs")).toContainText("Home");
+
+  // Create a child board on Home, then open it.
+  await page.getByRole("button", { name: "New board" }).click();
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+  await page.locator(".board-portal-card__tile").dblclick();
+  await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
+
+  // Breadcrumbs are root-first: Home then the child.
+  const crumbs = await page.getByTestId("breadcrumbs").getByRole("button").allTextContents();
+  expect(crumbs).toEqual(["Home", "New Board"]);
+
+  // Home is always the first crumb and is itself navigable back to root.
+  await page.getByTestId("breadcrumbs").getByRole("button", { name: "Home" }).click();
+  await expect(page.getByTestId("breadcrumbs")).toContainText("Home");
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+});
+
+test("dropping a board portal onto another board portal reparents it", async ({ page }) => {
+  await page.goto("/");
+
+  // Create two sibling boards A and B on Home.
+  await page.getByRole("button", { name: "New board" }).click();
+  await page.getByRole("button", { name: "New board" }).click();
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(2);
+
+  // Drag the first portal's tile onto the second portal's tile.
+  const tiles = page.locator(".board-portal-card__tile");
+  const firstBox = await tiles.nth(0).boundingBox();
+  const secondBox = await tiles.nth(1).boundingBox();
+  expect(firstBox).not.toBeNull();
+  expect(secondBox).not.toBeNull();
+  if (!firstBox || !secondBox) return;
+
+  await dragCenter(
+    page,
+    { x: firstBox.x + firstBox.width / 2, y: firstBox.y + firstBox.height / 2 },
+    { x: secondBox.x + secondBox.width / 2, y: secondBox.y + secondBox.height / 2 },
+  );
+
+  // The moved board's portal disappears from Home (moved into B).
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+
+  // Open the remaining board; the moved portal now lives inside it.
+  await page.locator(".board-portal-card__tile").dblclick();
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+});
+
+test("dropping a leaf card onto the Home breadcrumb moves it to Home", async ({ page }) => {
+  await page.goto("/");
+
+  // Create a child board and open it.
+  await page.getByRole("button", { name: "New board" }).click();
+  await page.locator(".board-portal-card__tile").dblclick();
+  await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
+
+  // Create a note in this child board.
+  await page.getByRole("button", { name: "New note" }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+
+  // Drag the note's center onto the Home breadcrumb crumb.
+  const noteCenter = await centerOf(page, ".note-card");
+  const homeCrumb = page.getByTestId("breadcrumbs").getByRole("button", { name: "Home" });
+  const homeBox = await homeCrumb.boundingBox();
+  expect(homeBox).not.toBeNull();
+  if (!homeBox) return;
+
+  await dragCenter(page, noteCenter, { x: homeBox.x + homeBox.width / 2, y: homeBox.y + homeBox.height / 2 });
+
+  // The note leaves the child board.
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+
+  // Navigate Home and confirm the note landed there.
+  await homeCrumb.click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+});
