@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { NoteCard } from "./NoteCard";
 import type { NoteCardDto } from "../../services/workspace-gateway";
@@ -55,6 +55,18 @@ const changedDoc = {
 };
 
 describe("NoteCard", () => {
+  it("exposes the note semantic kind and lifecycle hooks on the root", () => {
+    render(
+      <NoteCard note={makeNote()} editing={false} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
+    );
+
+    const card = screen.getByTestId("note-card");
+    expect(card).toHaveAttribute("data-kind", "note");
+    expect(card).toHaveAttribute("data-editing", "false");
+    expect(card).toHaveAttribute("data-saving", "false");
+    expect(card).toHaveAttribute("data-error", "false");
+  });
+
   it("passes the authoritative document and editable flag to the editor", () => {
     render(
       <NoteCard note={makeNote()} editing={false} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
@@ -113,6 +125,7 @@ describe("NoteCard", () => {
 
     // Save failed: the editor must NOT close, and the draft must be retried later.
     expect(onDeactivate).not.toHaveBeenCalled();
+    expect(screen.getByTestId("note-card")).toHaveAttribute("data-error", "true");
 
     // A subsequent blur (still editing) retries the same save.
     await act(async () => lastEditorProps()?.onBlur?.());

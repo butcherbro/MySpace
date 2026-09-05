@@ -23,6 +23,7 @@ interface ImageCardProps {
 export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCardProps) {
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState(false);
+  const hasCaption = image.captionPlainText.trim().length > 0;
 
   const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
     id: image.id,
@@ -30,6 +31,16 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
     onUpdate,
     onSaved: () => setEditing(false),
   });
+
+  const cardClassName = [
+    "image-card",
+    hasCaption ? "image-card--has-caption" : "image-card--no-caption",
+    editing ? "image-card--editing" : "",
+    saving ? "image-card--saving" : "",
+    error ? "image-card--error" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
@@ -88,8 +99,14 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
 
   return (
     <div
-      className="image-card"
+      className={cardClassName}
       data-testid="image-card"
+      data-kind="image"
+      data-has-caption={hasCaption ? "true" : "false"}
+      data-editing={editing ? "true" : "false"}
+      data-saving={saving ? "true" : "false"}
+      data-error={error ? "true" : "false"}
+      data-preview-open={preview ? "true" : "false"}
       style={{ width: appliedWidth, height: appliedHeight }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -122,7 +139,7 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
           />
         ) : (
           <div className="image-card__caption-display">
-            {image.captionPlainText || "Add caption…"}
+            {hasCaption ? image.captionPlainText : "Add caption…"}
           </div>
         )}
       </div>

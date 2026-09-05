@@ -27,6 +27,8 @@ export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMet
   const [editing, setEditing] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const lastAutoSizeRequest = useRef<string | null>(null);
+  const previewAsset = embed.previewAsset;
+  const hasPreview = previewAsset !== null;
 
   const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
     id: embed.id,
@@ -41,6 +43,14 @@ export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMet
 
   const appliedWidth = draftSize?.width ?? embed.frame.width;
   const appliedHeight = draftSize?.height ?? embed.frame.height;
+  const cardClassName = [
+    "link-card",
+    `link-card--${embed.metadataStatus}`,
+    hasPreview ? "link-card--has-preview" : "",
+    editing ? "link-card--editing" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const fitEnrichedContent = useCallback(() => {
     if (embed.metadataStatus !== "ready" || draftSizeRef.current) return;
@@ -98,8 +108,12 @@ export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMet
   return (
     <div
       ref={cardRef}
-      className="link-card"
+      className={cardClassName}
       data-testid="link-card"
+      data-kind="link"
+      data-metadata-status={embed.metadataStatus}
+      data-has-preview={hasPreview ? "true" : "false"}
+      data-editing={editing ? "true" : "false"}
       style={{ width: appliedWidth, height: appliedHeight }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -107,10 +121,10 @@ export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMet
         onContextMenu(embed.id, e.clientX, e.clientY);
       }}
     >
-      {embed.previewAsset && embed.metadataStatus !== "pending" && (
+      {previewAsset && embed.metadataStatus !== "pending" && (
         <img
           className="link-card__preview"
-          src={`myspace-asset://localhost/${embed.previewAsset.filePath}`}
+          src={`myspace-asset://localhost/${previewAsset.filePath}`}
           alt={embed.title}
           onLoad={fitEnrichedContent}
         />

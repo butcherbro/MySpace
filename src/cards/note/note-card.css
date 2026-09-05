@@ -1,17 +1,59 @@
 .note-card {
   position: relative;
-  background: #ffffff;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-  padding: 12px;
+  background: var(--paper);
+  border: 1px solid transparent;
+  border-radius: var(--radius-note);
+  box-shadow: var(--shadow-paper);
+  padding: 12px 14px;
+  color: var(--ink);
+  font-family: var(--font-content);
+  font-size: 14px;
+  line-height: 1.48;
   cursor: text;
   min-width: 120px;
   overflow: hidden;
+  transition:
+    box-shadow 120ms ease,
+    transform 120ms ease;
 }
 
 .note-card--editing {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
+  box-shadow:
+    var(--shadow-hover),
+    0 0 0 1px var(--edge-focus),
+    0 0 0 4px var(--focus-halo);
+}
+
+.note-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow:
+    inset 0 0 0 1px var(--edge-focus),
+    0 0 0 4px var(--focus-halo);
+  transition: opacity 120ms ease;
+}
+
+.note-card:hover {
+  box-shadow: var(--shadow-hover);
+}
+
+.note-card:focus-within::after,
+.note-card--editing::after {
+  opacity: 1;
+}
+
+.note-card[data-error="true"]::after {
+  box-shadow:
+    inset 0 0 0 1px rgba(180, 35, 24, 0.65),
+    0 0 0 4px rgba(180, 35, 24, 0.14);
+}
+
+.note-card[data-saving="true"] {
+  cursor: progress;
 }
 
 .note-card .note-editor {
@@ -24,21 +66,29 @@
   top: -20px;
   right: 0;
   font-size: 11px;
-  color: #6b7280;
+  color: var(--ink-tertiary);
+  pointer-events: none;
+}
+
+.note-card__status--saving {
+  color: var(--ink-secondary);
 }
 
 .note-card__status--error {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .note-card__resize {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 16px;
-  height: 16px;
+  right: 2px;
+  bottom: 2px;
+  width: 18px;
+  height: 18px;
   cursor: nwse-resize;
-  border-radius: 0 0 8px 0;
+  border-radius: 0 0 var(--radius-note) 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
 }
 
 .note-card__resize::after {
@@ -46,8 +96,15 @@
   position: absolute;
   right: 4px;
   bottom: 4px;
-  width: 6px;
-  height: 6px;
-  border-right: 2px solid #b7bdb9;
-  border-bottom: 2px solid #b7bdb9;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--ink-muted);
+  border-bottom: 1.5px solid var(--ink-muted);
+}
+
+.note-card:hover .note-card__resize,
+.note-card:focus-within .note-card__resize,
+.note-card--editing .note-card__resize {
+  opacity: 1;
+  pointer-events: auto;
 }

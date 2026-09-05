@@ -1,7 +1,28 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbedCardDto } from "../../services/workspace-gateway";
+import { NoteEditor } from "../../editor/NoteEditor";
 import { EmbedCard } from "./EmbedCard";
+
+vi.mock("../../editor/NoteEditor", () => ({
+  NoteEditor: vi.fn(
+    (props: { document: unknown; editable: boolean; onChange: (doc: unknown) => void; onBlur?: () => void }) => (
+      <textarea data-testid="mock-editor" onBlur={() => props.onBlur?.()} />
+    ),
+  ),
+}));
+
+type MockEditorProps = {
+  document: unknown;
+  editable: boolean;
+  onChange: (doc: unknown) => void;
+  onBlur?: () => void;
+};
+
+function lastEditorProps(): MockEditorProps | undefined {
+  const mock = NoteEditor as unknown as ReturnType<typeof vi.fn>;
+  return mock.mock.calls[mock.mock.calls.length - 1]?.[0] as MockEditorProps | undefined;
+}
 
 function embed(overrides: Partial<EmbedCardDto> = {}): EmbedCardDto {
   return {
@@ -35,6 +56,33 @@ const common = {
 };
 
 describe("EmbedCard metadata states", () => {
+  it("exposes the link semantic kind and metadata state", () => {
+    render(
+      <EmbedCard
+        embed={embed({ metadataStatus: "ready", previewAsset: { id: "preview-1", fileName: "preview.png", mimeType: "image/png", width: 100, height: 80, sizeBytes: 1, filePath: "previews/preview.png" } })}
+        {...common}
+      />,
+    );
+
+    expect(screen.getByTestId("link-card")).toHaveAttribute("data-kind", "link");
+    expect(screen.getByTestId("link-card")).toHaveAttribute("data-metadata-status", "ready");
+    expect(screen.getByTestId("link-card")).toHaveAttribute("data-has-preview", "true");
+  });
+
+  it("marks editing and passes editable=true to the description editor", () => {
+    render(
+      <EmbedCard
+        embed={embed({ metadataStatus: "ready" })}
+        {...common}
+      />,
+    );
+
+    fireEvent.doubleClick(screen.getByText("Add notes…"));
+
+    expect(screen.getByTestId("link-card")).toHaveAttribute("data-editing", "true");
+    expect(lastEditorProps()?.editable).toBe(true);
+  });
+
   it("shows a quiet loading state while metadata is pending", () => {
     render(<EmbedCard embed={embed()} {...common} />);
 

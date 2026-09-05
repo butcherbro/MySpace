@@ -87,7 +87,10 @@ export function NoteCard({
     <div
       className={`note-card ${editing ? "note-card--editing" : ""}`}
       data-testid="note-card"
+      data-kind="note"
       data-editing={editing ? "true" : "false"}
+      data-saving={saving ? "true" : "false"}
+      data-error={error ? "true" : "false"}
       style={{ width: appliedWidth, height: appliedHeight }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -104,7 +107,7 @@ export function NoteCard({
           void handleFinalize();
         }}
       />
-      {saving && <div className="note-card__status">Saving…</div>}
+      {saving && <div className="note-card__status note-card__status--saving">Saving…</div>}
       {error && <div className="note-card__status note-card__status--error">{error}</div>}
       <div
         className="note-card__resize nodrag nopan"
