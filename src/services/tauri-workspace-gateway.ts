@@ -92,6 +92,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<AssetDto>("import_asset", { input });
   }
 
+  resolveAssetPath(assetId: string): Promise<string> {
+    return invoke<string>("resolve_asset_path", { assetId });
+  }
+
   createImageCard(input: CreateImageCardInput): Promise<void> {
     return invoke<void>("create_image_card", { input });
   }

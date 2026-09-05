@@ -86,6 +86,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::assets::import_asset,
+            commands::assets::resolve_asset_path,
             commands::boards::load_board_snapshot,
             commands::boards::get_home_board,
             commands::boards::save_viewport,
@@ -107,6 +108,7 @@ pub fn run() {
             commands::trash::trash_board,
             commands::trash::trash_selection,
             commands::trash::restore_trash_batch,
+            commands::clipboard::copy_text_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

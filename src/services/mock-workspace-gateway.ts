@@ -259,6 +259,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve(asset);
   }
 
+  resolveAssetPath(assetId: string): Promise<string> {
+    return Promise.resolve(`/tmp/mock-assets/${assetId}.bin`);
+  }
+
   createImageCard(input: CreateImageCardInput): Promise<void> {
     const card = {
       kind: "image" as const,

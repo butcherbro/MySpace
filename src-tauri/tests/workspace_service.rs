@@ -2,7 +2,8 @@
 //! `WorkspaceService`.
 
 use myspace_lib::db::{bootstrap, open_in_memory};
-use myspace_lib::domain::models::{CreateLinkBatchInput, LinkBatchItem};
+use myspace_lib::domain::models::{CreateLinkBatchInput, CreateNoteInput, Frame, LinkBatchItem};
+use myspace_lib::repositories::workspace_repository;
 use myspace_lib::services::workspace_service::{parse_address, WorkspaceService};
 
 fn root_board_id(conn: &rusqlite::Connection) -> String {
@@ -146,4 +147,51 @@ fn trash_link_batch_rejects_unknown_batch() {
         result,
         Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
     ));
+}
+
+#[test]
+fn read_card_resolves_card_address_back_to_content() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "note-1".to_string(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({"type": "doc", "content": []}),
+            plain_text: "hello".to_string(),
+        },
+    )
+    .unwrap();
+
+    // Resolve via a full myspace://card/<id> address.
+    let card = WorkspaceService::read_card(&conn, "myspace://card/note-1").unwrap();
+    match card {
+        myspace_lib::domain::models::CardDto::Note(note) => {
+            assert_eq!(note.id, "note-1");
+            assert_eq!(note.board_id, home);
+            assert_eq!(note.plain_text, "hello");
+        }
+        _ => panic!("expected a note card"),
+    }
+
+    // A bare card id works too.
+    let card = WorkspaceService::read_card(&conn, "note-1").unwrap();
+    assert!(matches!(
+        card,
+        myspace_lib::domain::models::CardDto::Note(_)
+    ));
+
+    // A board address must be rejected for a card read.
+    let wrong = WorkspaceService::read_card(&conn, &format!("myspace://board/{home}"));
+    assert!(wrong.is_err());
 }

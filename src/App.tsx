@@ -18,6 +18,7 @@ import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickImageFile } from "./services/asset-picker";
 import { subscribeToImageDrops } from "./services/drag-drop";
+import { copyText } from "./services/clipboard";
 import type {
   BoardPortalDto,
   EmbedCardDto,
@@ -717,6 +718,40 @@ function App() {
       });
   }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator]);
 
+  // Copy the stable MySpace address for the right-clicked card (or the current
+  // board when invoked from a portal/board context). "Copy MySpace Link" is the
+  // universal action; images additionally offer "Copy File Path".
+  const handleCopyLink = useCallback(async () => {
+    if (!contextMenu) return;
+    const card = state.cards.find((c) => c.id === contextMenu.cardId);
+    let address: string;
+    if (card?.kind === "board_portal") {
+      // A portal is a folder: copy the address of the board it leads to.
+      address = `myspace://board/${card.target.id}`;
+    } else if (card) {
+      address = `myspace://card/${card.id}`;
+    } else {
+      address = "";
+    }
+    try {
+      await copyText(address);
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [contextMenu, state.cards]);
+
+  const handleCopyFilePath = useCallback(async () => {
+    if (!contextMenu) return;
+    const card = state.cards.find((c): c is ImageCardDto => c.kind === "image" && c.id === contextMenu.cardId);
+    if (!card) return;
+    try {
+      const path = await gateway.resolveAssetPath(card.asset.id);
+      await copyText(path);
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [contextMenu, state.cards, gateway]);
+
   // Load a board's snapshot into the store.
   const navigateTo = useCallback(
     async (boardId: string, opts?: { push?: boolean }) => {
@@ -893,6 +928,28 @@ function App() {
             style={{ left: contextMenu.x, top: contextMenu.y }}
             data-testid="context-menu"
           >
+            <button
+              type="button"
+              className="context-menu__item"
+              onClick={() => {
+                setContextMenu(null);
+                void handleCopyLink();
+              }}
+            >
+              Copy MySpace Link
+            </button>
+            {state.cards.find((c) => c.kind === "image" && c.id === contextMenu.cardId) && (
+              <button
+                type="button"
+                className="context-menu__item"
+                onClick={() => {
+                  setContextMenu(null);
+                  void handleCopyFilePath();
+                }}
+              >
+                Copy File Path
+              </button>
+            )}
             <button type="button" className="context-menu__item" onClick={handleContextDelete}>
               Delete
             </button>

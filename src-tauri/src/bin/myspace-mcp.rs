@@ -5,6 +5,7 @@
 //! Tools:
 //!   - list_boards          (read)
 //!   - read_board           (read)  — resolves myspace://board/<id>
+//!   - read_card            (read)  — resolves myspace://card/<id>
 //!   - add_links            (write) — idempotent batch Link Card creation
 //!
 //! The server is a thin adapter over `WorkspaceService`, talking JSON-RPC 2.0
@@ -90,6 +91,15 @@ fn tools_list() -> serde_json::Value {
                 "annotations": { "readOnlyHint": true, "destructiveHint": false }
             },
             {
+                "name": "read_card",
+                "description": "Read a single card (note, image, link, board portal) by myspace://card/<id> or bare card id.",
+                "inputSchema": tool_schema(
+                    serde_json::json!({ "card": { "type": "string", "description": "myspace://card/<id> or bare card id" } }),
+                    &["card"]
+                ),
+                "annotations": { "readOnlyHint": true, "destructiveHint": false }
+            },
+            {
                 "name": "add_links",
                 "description": "Add a batch of Link Cards to a board. Idempotent under an idempotency key.",
                 "inputSchema": tool_schema(
@@ -151,7 +161,7 @@ fn main() {
         if line.is_empty() {
             continue;
         }
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
 
@@ -249,6 +259,22 @@ fn handle_tool_call(
             let id = resolve_board_id(board_arg).map_err(|e| e.to_string())?;
             let snapshot = WorkspaceService::read_board(conn, &id).map_err(|e| e.to_string())?;
             Ok(serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?)
+        }
+        "read_card" => {
+            let card_arg = arguments
+                .get("card")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing 'card' argument".to_string())?;
+            let id = if let Ok((kind, id)) = parse_address(card_arg) {
+                if kind != "card" {
+                    return Err(format!("expected card address, got {kind}"));
+                }
+                id
+            } else {
+                card_arg.to_string()
+            };
+            let card = WorkspaceService::read_card(conn, &id).map_err(|e| e.to_string())?;
+            Ok(serde_json::to_string_pretty(&card).map_err(|e| e.to_string())?)
         }
         "add_links" => {
             let board_arg = arguments

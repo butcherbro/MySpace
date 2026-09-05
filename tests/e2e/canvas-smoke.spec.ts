@@ -375,3 +375,39 @@ test("dropping a leaf card onto the Home breadcrumb moves it to Home", async ({ 
   await homeCrumb.click();
   await expect(page.getByTestId("note-card")).toHaveCount(1);
 });
+
+// --- Copy MySpace Link / Copy File Path ---
+
+test("right-click a note copies its MySpace card link", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "New note" }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+
+  const center = await centerOf(page, ".note-card");
+  await page.mouse.click(center.x, center.y, { button: "right" });
+  await expect(page.getByTestId("context-menu")).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy MySpace Link" }).click();
+
+  const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clipboard).toMatch(/^myspace:\/\/card\/.+$/);
+});
+
+test("right-click a board portal copies the target board link", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "New board" }).click();
+  await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
+
+  const center = await centerOf(page, ".board-portal-card");
+  await page.mouse.click(center.x, center.y, { button: "right" });
+  await expect(page.getByTestId("context-menu")).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy MySpace Link" }).click();
+
+  const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clipboard).toMatch(/^myspace:\/\/board\/.+$/);
+});

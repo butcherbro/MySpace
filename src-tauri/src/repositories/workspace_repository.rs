@@ -347,7 +347,216 @@ fn load_cards(
     Ok(out)
 }
 
-/// Creates a note card (and its `note_cards` row) in a single transaction.
+/// Loads a single active card by id, regardless of board. Used by the agent
+/// surface to resolve `myspace://card/<id>` addresses (ADR-0005).
+pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceError> {
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM cards WHERE id = ?1 AND deleted_at IS NULL",
+            [card_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let kind = kind.ok_or_else(|| WorkspaceError::NotFound(card_id.to_string()))?;
+
+    match kind.as_str() {
+        "note" => {
+            conn.query_row(
+                "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                        n.document_json, n.plain_text
+                 FROM cards c
+                 JOIN note_cards n ON n.card_id = c.id
+                 WHERE c.id = ?1 AND c.deleted_at IS NULL",
+                [card_id],
+                |row| {
+                    let document_json: String = row.get(8)?;
+                    let document_json: serde_json::Value =
+                        serde_json::from_str(&document_json).unwrap_or(serde_json::Value::Null);
+                    Ok(CardDto::Note(NoteCardDto {
+                        id: row.get(0)?,
+                        board_id: row.get(1)?,
+                        frame: Frame {
+                            x: row.get(2)?,
+                            y: row.get(3)?,
+                            width: row.get(4)?,
+                            height: row.get(5)?,
+                        },
+                        z_index: row.get(6)?,
+                        revision: row.get(7)?,
+                        document_json,
+                        plain_text: row.get(9)?,
+                    }))
+                },
+            )
+            .map_err(WorkspaceError::from)
+        }
+        "board_portal" => {
+            conn.query_row(
+                "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                        p.target_board_id, b.revision, b.title, b.color_token, b.symbol,
+                        COALESCE(child.child_board_count, 0),
+                        COALESCE(cardchild.child_card_count, 0)
+                 FROM cards c
+                 JOIN board_portal_cards p ON p.card_id = c.id
+                 JOIN boards b ON b.id = p.target_board_id
+                 LEFT JOIN (
+                     SELECT parent_board_id, COUNT(*) AS child_board_count
+                     FROM boards WHERE deleted_at IS NULL GROUP BY parent_board_id
+                 ) child ON child.parent_board_id = p.target_board_id
+                 LEFT JOIN (
+                     SELECT board_id, COUNT(*) AS child_card_count
+                     FROM cards WHERE deleted_at IS NULL GROUP BY board_id
+                 ) cardchild ON cardchild.board_id = p.target_board_id
+                 WHERE c.id = ?1 AND c.deleted_at IS NULL",
+                [card_id],
+                |row| {
+                    Ok(CardDto::BoardPortal(BoardPortalDto {
+                        id: row.get(0)?,
+                        board_id: row.get(1)?,
+                        frame: Frame {
+                            x: row.get(2)?,
+                            y: row.get(3)?,
+                            width: row.get(4)?,
+                            height: row.get(5)?,
+                        },
+                        z_index: row.get(6)?,
+                        revision: row.get(7)?,
+                        target: PortalTarget {
+                            id: row.get(8)?,
+                            board_revision: row.get(9)?,
+                            title: row.get(10)?,
+                            color_token: row.get(11)?,
+                            symbol: row.get(12)?,
+                            child_board_count: row.get(13)?,
+                            child_card_count: row.get(14)?,
+                        },
+                    }))
+                },
+            )
+            .map_err(WorkspaceError::from)
+        }
+        "image" => {
+            conn.query_row(
+                "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                        i.asset_id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
+                        i.caption_json, i.caption_plain_text
+                 FROM cards c
+                 JOIN image_cards i ON i.card_id = c.id
+                 JOIN assets a ON a.id = i.asset_id
+                 WHERE c.id = ?1 AND c.deleted_at IS NULL",
+                [card_id],
+                |row| {
+                    let caption_json: String = row.get(15)?;
+                    let caption_json: serde_json::Value =
+                        serde_json::from_str(&caption_json).unwrap_or(serde_json::Value::Null);
+                    Ok(CardDto::Image(ImageCardDto {
+                        id: row.get(0)?,
+                        board_id: row.get(1)?,
+                        frame: Frame {
+                            x: row.get(2)?,
+                            y: row.get(3)?,
+                            width: row.get(4)?,
+                            height: row.get(5)?,
+                        },
+                        z_index: row.get(6)?,
+                        revision: row.get(7)?,
+                        asset: AssetDto {
+                            id: row.get(8)?,
+                            file_name: row.get(9)?,
+                            mime_type: row.get(10)?,
+                            width: row.get(11)?,
+                            height: row.get(12)?,
+                            size_bytes: row.get(13)?,
+                            file_path: row.get(14)?,
+                        },
+                        caption_json,
+                        caption_plain_text: row.get(16)?,
+                    }))
+                },
+            )
+            .map_err(WorkspaceError::from)
+        }
+        "embed" => {
+            conn.query_row(
+                "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                        e.source_url, e.display_url, e.site_name, e.title, e.provider,
+                        e.description_json, e.description_plain_text,
+                        e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
+                        pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
+                        fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
+                 FROM cards c
+                 JOIN embed_cards e ON e.card_id = c.id
+                 LEFT JOIN assets pa ON pa.id = e.asset_id
+                 LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
+                 WHERE c.id = ?1 AND c.deleted_at IS NULL",
+                [card_id],
+                |row| {
+                    let description_json: String = row.get(13)?;
+                    let description_json: serde_json::Value =
+                        serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
+
+                    let preview_asset = if row.get::<_, Option<String>>(15)?.is_some() {
+                        Some(AssetDto {
+                            id: row.get(15)?,
+                            file_name: row.get(20)?,
+                            mime_type: row.get(21)?,
+                            width: row.get(22)?,
+                            height: row.get(23)?,
+                            size_bytes: row.get(24)?,
+                            file_path: row.get(25)?,
+                        })
+                    } else {
+                        None
+                    };
+
+                    let favicon_asset = if row.get::<_, Option<String>>(16)?.is_some() {
+                        Some(AssetDto {
+                            id: row.get(16)?,
+                            file_name: row.get(26)?,
+                            mime_type: row.get(27)?,
+                            width: row.get(28)?,
+                            height: row.get(29)?,
+                            size_bytes: row.get(30)?,
+                            file_path: row.get(31)?,
+                        })
+                    } else {
+                        None
+                    };
+
+                    Ok(CardDto::Embed(EmbedCardDto {
+                        id: row.get(0)?,
+                        board_id: row.get(1)?,
+                        frame: Frame {
+                            x: row.get(2)?,
+                            y: row.get(3)?,
+                            width: row.get(4)?,
+                            height: row.get(5)?,
+                        },
+                        z_index: row.get(6)?,
+                        revision: row.get(7)?,
+                        source_url: row.get(8)?,
+                        display_url: row.get(9)?,
+                        site_name: row.get(10)?,
+                        title: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+                        provider: row.get(12)?,
+                        description_json,
+                        description_plain_text: row.get(14)?,
+                        favicon_asset,
+                        preview_asset,
+                        preview_origin: row.get(17)?,
+                        metadata_status: row.get(18)?,
+                        metadata_error: row.get(19)?,
+                    }))
+                },
+            )
+            .map_err(WorkspaceError::from)
+        }
+        other => Err(WorkspaceError::ConstraintViolation(format!(
+            "unknown card kind: {other}"
+        ))),
+    }
+}
 ///
 /// A failed insert must leave no orphaned `cards` row: both inserts share one
 /// transaction, so any failure rolls both back.

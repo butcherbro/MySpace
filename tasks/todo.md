@@ -84,10 +84,16 @@ architecture pass before sizing; `blocked` = depends on another item.
 
 ### 7. Copy MySpace Link / Copy File Path
 
-- `next` — Board is addressed as `myspace://board/<id>`, not a filesystem path
-  (ADR-0005). UI action `Copy MySpace Link` on a Board/Card, and `Copy File Path`
-  (real `assets/<id>.*` path) on an image. Ships with the `WorkspaceService` + MCP
-  slice because that is where stable entity addressing lands.
+- `done` — Right-click a card: "Copy MySpace Link" copies `myspace://board/<id>`
+  for Board Portals (the board it leads to) and `myspace://card/<id>` for Note /
+  Image / Link cards. Image cards also offer "Copy File Path" (real
+  `assets/<id>.*` path via `resolve_asset_path`). Clipboard writes go to
+  `NSPasteboard` (macOS) through a backend `copy_text_command`, with a Web
+  Clipboard fallback in browser mode. MCP gained `read_card` so a copied
+  `myspace://card/<id>` is not a dead link.
+- `next` (follow-up) — a direct "Copy MySpace Link" affordance for the
+  *currently open* board (empty-canvas or breadcrumb right-click); the card-level
+  slice is done. Also: asset links in the UI (`myspace-asset://` vs real path).
 
 ## Ordering decision
 

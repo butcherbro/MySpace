@@ -10,7 +10,7 @@ use rusqlite::Connection;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    BoardSnapshot, BoardSummary, CreateLinkBatchInput, CreateLinkBatchResult, TrashItem,
+    BoardSnapshot, BoardSummary, CardDto, CreateLinkBatchInput, CreateLinkBatchResult, TrashItem,
     TrashSelectionInput,
 };
 use crate::domain::trash_service;
@@ -89,6 +89,26 @@ impl WorkspaceService {
             board_address_or_id.to_string()
         };
         workspace_repository::load_board_snapshot(conn, &id)
+    }
+
+    /// Reads a single card by its `myspace://card/<id>` address or a bare card
+    /// id. Resolves the card's kind, board, and payload so an agent can follow a
+    /// `myspace://card/...` link back to its content (and its `board_id`).
+    pub fn read_card(
+        conn: &Connection,
+        card_address_or_id: &str,
+    ) -> Result<CardDto, WorkspaceError> {
+        let id = if let Ok((kind, id)) = parse_address(card_address_or_id) {
+            if kind != "card" {
+                return Err(WorkspaceError::ConstraintViolation(format!(
+                    "expected a card address, got {kind}"
+                )));
+            }
+            id
+        } else {
+            card_address_or_id.to_string()
+        };
+        workspace_repository::load_card(conn, &id)
     }
 
     /// Creates a batch of Link Cards (idempotent, durable batch) in a board.

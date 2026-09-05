@@ -255,6 +255,7 @@ export interface WorkspaceGateway {
   trashBoard(boardId: string): Promise<string>;
   restoreTrashBatch(batchId: string): Promise<void>;
   importAsset(input: ImportAssetInput): Promise<AssetDto>;
+  resolveAssetPath(assetId: string): Promise<string>;
   createImageCard(input: CreateImageCardInput): Promise<void>;
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
   convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto>;
