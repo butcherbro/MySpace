@@ -162,6 +162,14 @@ export interface MoveCardToBoardInput {
   targetBoardId: string;
 }
 
+export interface MoveBoardInput {
+  boardId: string;
+  expectedBoardRevision: number;
+  expectedPortalRevision: number;
+  targetParentBoardId: string;
+  frame: Frame;
+}
+
 export interface CreateChildBoardInput {
   parentBoardId: string;
   boardId: string;
@@ -237,6 +245,7 @@ export interface WorkspaceGateway {
   moveCard(input: MoveCardInput): Promise<void>;
   moveCards(input: MoveCardsInput): Promise<void>;
   moveCardToBoard(input: MoveCardToBoardInput): Promise<void>;
+  moveBoard(input: MoveBoardInput): Promise<void>;
   saveViewport(input: SaveViewportInput): Promise<void>;
   createChildBoard(input: CreateChildBoardInput): Promise<void>;
   renameBoard(boardId: string, title: string): Promise<void>;

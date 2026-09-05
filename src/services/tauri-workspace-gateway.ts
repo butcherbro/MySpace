@@ -10,6 +10,7 @@ import type {
   EmbedCardDto,
   EnrichEmbedMetadataInput,
   ImportAssetInput,
+  MoveBoardInput,
   MoveCardInput,
   MoveCardsInput,
   MoveCardToBoardInput,
@@ -53,6 +54,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   moveCardToBoard(input: MoveCardToBoardInput): Promise<void> {
     return invoke<void>("move_card_to_board", { input });
+  }
+
+  moveBoard(input: MoveBoardInput): Promise<void> {
+    return invoke<void>("move_board", { input });
   }
 
   saveViewport(input: SaveViewportInput): Promise<void> {

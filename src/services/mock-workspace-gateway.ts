@@ -9,6 +9,7 @@ import type {
   EmbedCardDto,
   EnrichEmbedMetadataInput,
   ImportAssetInput,
+  MoveBoardInput,
   MoveCardInput,
   MoveCardsInput,
   MoveCardToBoardInput,
@@ -136,6 +137,25 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     card.revision += 1;
     card.boardId = input.targetBoardId;
     card.frame = { ...card.frame, x: 40, y: 40 };
+    return Promise.resolve();
+  }
+
+  moveBoard(input: MoveBoardInput): Promise<void> {
+    const board = this.boards.get(input.boardId);
+    if (!board) {
+      return Promise.reject(new Error(`board not found: ${input.boardId}`));
+    }
+    const portal = this.snapshot.cards.find(
+      (c) => c.kind === "board_portal" && c.target.id === input.boardId,
+    );
+    if (!portal || portal.kind !== "board_portal") {
+      return Promise.reject(new Error(`portal not found for board: ${input.boardId}`));
+    }
+    board.parentBoardId = input.targetParentBoardId;
+    board.revision += 1;
+    portal.boardId = input.targetParentBoardId;
+    portal.frame = { ...input.frame };
+    portal.revision += 1;
     return Promise.resolve();
   }
 
