@@ -238,6 +238,20 @@ pub struct CreateChildBoardInput {
     pub title: String,
 }
 
+/// Input for atomically reparenting a Board (and its unique portal card) to a
+/// new parent board. The backend discovers the portal via
+/// `board_portal_cards.target_board_id`; the frontend supplies only stable IDs
+/// and revisions plus the destination frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveBoardInput {
+    pub board_id: String,
+    pub expected_board_revision: i64,
+    pub expected_portal_revision: i64,
+    pub target_parent_board_id: String,
+    pub frame: Frame,
+}
+
 /// Input for importing a file into the asset store. The file bytes are read
 /// from `source_path` (a Tauri-provided absolute path from a picker/drop) and
 /// copied into the app's asset dir; metadata is returned.

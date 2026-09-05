@@ -8,7 +8,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::CreateChildBoardInput;
+use crate::domain::models::{CreateChildBoardInput, MoveBoardInput};
 
 use super::super::db;
 
@@ -130,5 +130,134 @@ pub fn rename_board(
     if changed == 0 {
         return Err(WorkspaceError::NotFound(board_id.to_string()));
     }
+    Ok(())
+}
+
+/// Reparents a Board (and its unique portal card) to a new parent in one
+/// transaction. Rejects Home moves, self-parenting, descendant cycles, missing or
+/// trashed targets, and stale board/portal revisions. The moved subtree is
+/// preserved (only `parent_board_id` changes); the portal card is relocated to
+/// the destination frame on the new parent board.
+pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+
+    // Source board must exist and be a non-root (movable) board.
+    let (src_parent, src_workspace, src_revision): (Option<String>, String, i64) = conn
+        .query_row(
+            "SELECT parent_board_id, workspace_id, revision FROM boards WHERE id = ?1 AND deleted_at IS NULL",
+            [input.board_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?
+        .ok_or_else(|| WorkspaceError::NotFound(input.board_id.clone()))?;
+
+    // Home (root) has no parent and cannot be moved.
+    if src_parent.is_none() {
+        return Err(WorkspaceError::RootBoardProtected);
+    }
+
+    if src_revision != input.expected_board_revision {
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_board_revision,
+            actual: src_revision,
+        });
+    }
+
+    // Target parent must be a live board in the same workspace.
+    let target_workspace: String = conn
+        .query_row(
+            "SELECT workspace_id FROM boards WHERE id = ?1 AND deleted_at IS NULL",
+            [input.target_parent_board_id.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| WorkspaceError::NotFound(input.target_parent_board_id.clone()))?;
+    if target_workspace != src_workspace {
+        return Err(WorkspaceError::ConstraintViolation(
+            "cannot move a board across workspaces".into(),
+        ));
+    }
+
+    // Cycle guard: reject if the target parent lies inside the source subtree.
+    let is_descendant: i64 = conn.query_row(
+        "WITH RECURSIVE subtree(id, parent_board_id) AS (
+            SELECT id, parent_board_id FROM boards WHERE id = ?1
+            UNION ALL
+            SELECT b.id, b.parent_board_id FROM boards b JOIN subtree s ON b.parent_board_id = s.id
+         )
+         SELECT COUNT(*) FROM subtree WHERE id = ?2",
+        params![input.board_id, input.target_parent_board_id],
+        |r| r.get(0),
+    )?;
+    // The source board itself satisfies `id = ?2` when target == board, so a
+    // self-parent also lands here.
+    if is_descendant > 0 {
+        return Err(WorkspaceError::ConstraintViolation(
+            "a board cannot become its own descendant".into(),
+        ));
+    }
+
+    // Resolve the unique portal card by its target board id (do not trust a
+    // frontend-supplied portal id).
+    let (portal_card_id, portal_revision): (String, i64) = conn
+        .query_row(
+            "SELECT c.id, c.revision
+             FROM board_portal_cards p JOIN cards c ON c.id = p.card_id
+             WHERE p.target_board_id = ?1 AND c.deleted_at IS NULL",
+            [input.board_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            WorkspaceError::ConstraintViolation(format!(
+                "board {} has no active portal card",
+                input.board_id
+            ))
+        })?;
+
+    if portal_revision != input.expected_portal_revision {
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_portal_revision,
+            actual: portal_revision,
+        });
+    }
+
+    let tx = conn.transaction()?;
+
+    let board_changed = tx.execute(
+        "UPDATE boards SET parent_board_id = ?1, revision = revision + 1, updated_at = ?2 WHERE id = ?3 AND revision = ?4",
+        params![
+            input.target_parent_board_id,
+            now,
+            input.board_id,
+            input.expected_board_revision
+        ],
+    )?;
+    if board_changed == 0 {
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_board_revision,
+            actual: src_revision,
+        });
+    }
+
+    let portal_changed = tx.execute(
+        "UPDATE cards SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4 WHERE id = ?5 AND revision = ?6",
+        params![
+            input.target_parent_board_id,
+            input.frame.x,
+            input.frame.y,
+            now,
+            portal_card_id,
+            input.expected_portal_revision
+        ],
+    )?;
+    if portal_changed == 0 {
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_portal_revision,
+            actual: portal_revision,
+        });
+    }
+
+    tx.commit()?;
     Ok(())
 }

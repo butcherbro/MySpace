@@ -90,6 +90,7 @@ pub fn run() {
             commands::boards::save_viewport,
             commands::boards::create_child_board,
             commands::boards::rename_board,
+            commands::boards::move_board,
             commands::cards::create_note,
             commands::cards::create_image_card,
             commands::cards::update_note,

@@ -8,7 +8,7 @@ use tauri::State;
 pub use crate::domain::board_service;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    BoardSnapshot, BoardSummary, CreateChildBoardInput, UpdateViewportInput,
+    BoardSnapshot, BoardSummary, CreateChildBoardInput, MoveBoardInput, UpdateViewportInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -85,4 +85,13 @@ pub fn rename_board(
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     board_service::rename_board(&mut conn, &board_id, &title)
+}
+
+/// Atomically reparents a Board and its portal card to a new parent board.
+#[tauri::command]
+pub fn move_board(db: DbState<'_>, input: MoveBoardInput) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    board_service::move_board(&mut conn, &input)
 }
