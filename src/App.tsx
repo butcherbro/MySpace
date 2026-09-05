@@ -626,6 +626,28 @@ function App() {
     [gateway, loadQuickBoards],
   );
 
+  const handleQuickBoardsReorder = useCallback(
+    (boardIds: string[]) => {
+      // Optimistically apply the new order, then persist transactionally.
+      setQuickBoards((prev) => {
+        const byId = new Map(prev.map((q) => [q.boardId, q]));
+        const next: QuickBoardDto[] = [];
+        for (const id of boardIds) {
+          const q = byId.get(id);
+          if (q) next.push({ ...q, sortOrder: next.length });
+        }
+        return next;
+      });
+      void gateway
+        .reorderQuickBoards({ boardIds })
+        .catch((e) => {
+          dispatch({ type: "failed", message: errorMessage(e) });
+          loadQuickBoards();
+        });
+    },
+    [gateway, loadQuickBoards],
+  );
+
   // During a card drag, resolve the board the pointer is over by hit-testing the
   // breadcrumb ancestor trail. Only the hovered board id is kept in state; the
   // actual drop is routed through handleCardDroppedOnPortal.
@@ -1070,6 +1092,7 @@ function App() {
               quickBoards={quickBoards}
               onOpen={handleQuickBoardOpen}
               onRemove={handleQuickBoardRemove}
+              onReorder={handleQuickBoardsReorder}
               dropActive={dropActiveQuickBoards}
             />
           </div>

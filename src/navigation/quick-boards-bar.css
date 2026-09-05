@@ -41,6 +41,14 @@
   background: var(--focus-halo);
 }
 
+.quick-boards__chip--dragging {
+  opacity: 0.45;
+}
+
+.quick-boards__chip--drop-before {
+  box-shadow: inset 2px 0 0 var(--edge-focus);
+}
+
 .quick-boards__open {
   display: inline-flex;
   align-items: center;
