@@ -100,6 +100,8 @@ export interface CanvasEvents {
   onPaneDoubleClick?(point: Point): void;
   /** A card was right-clicked (request a context menu). Coordinates are screen-space. */
   onCardContextMenu?(id: string, x: number, y: number): void;
+  /** The empty canvas pane was right-clicked (request a board context menu). */
+  onPaneContextMenu?(x: number, y: number): void;
   /** A card was dropped onto a board portal (move to that board). */
   onCardDroppedOnPortal?(cardId: string, targetBoardId: string): void;
   /** A card is being dragged over a portal (or null when it leaves). */

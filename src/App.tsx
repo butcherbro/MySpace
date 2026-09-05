@@ -47,6 +47,7 @@ function App() {
 
   const [state, dispatch] = useReducer(reducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
+  const [paneContextMenu, setPaneContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
   const [dropTargetBoardId, setDropTargetBoardId] = useState<string | null>(null);
   // The hovered breadcrumb board id, mirrored to a ref so the continuous drag
@@ -857,6 +858,21 @@ function App() {
     }
   }, [contextMenu, state.cards, gateway]);
 
+  // Copy the stable address of the currently-open board.
+  const handleCopyBoardLink = useCallback(async () => {
+    setPaneContextMenu(null);
+    if (!board) return;
+    try {
+      await copyText(`myspace://board/${board.id}`);
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [board]);
+
+  const handlePaneContextMenu = useCallback((x: number, y: number) => {
+    setPaneContextMenu({ x, y });
+  }, []);
+
   // Copy the images of the current selection to the system clipboard.
   const handleCopySelectionImages = useCallback(() => {
     const imageIds = state.selection.filter((id) => {
@@ -1160,6 +1176,24 @@ function App() {
           </div>
         )}
         {contextMenu && <div className="context-menu__backdrop" onClick={() => setContextMenu(null)} />}
+        {paneContextMenu && (
+          <div
+            className="context-menu"
+            style={{ left: paneContextMenu.x, top: paneContextMenu.y }}
+            data-testid="pane-context-menu"
+          >
+            <button
+              type="button"
+              className="context-menu__item"
+              onClick={() => void handleCopyBoardLink()}
+            >
+              Copy MySpace Link
+            </button>
+          </div>
+        )}
+        {paneContextMenu && (
+          <div className="context-menu__backdrop" onClick={() => setPaneContextMenu(null)} />
+        )}
         {error && (
           <CanvasErrorBanner
             message={error}
@@ -1182,6 +1216,7 @@ function App() {
               onCardActivated: handleCardActivated,
               onCardOpened: handleCardOpened,
               onCardContextMenu: handleRequestContextMenu,
+              onPaneContextMenu: handlePaneContextMenu,
               onCardDroppedOnPortal: handleCardDroppedOnPortal,
               onPortalHighlight: setHighlightedPortalId,
               onCardDragMove: handleCardDragMove,

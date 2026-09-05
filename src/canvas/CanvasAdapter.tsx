@@ -167,6 +167,11 @@ export function CanvasAdapter({
     }, DOUBLE_CLICK_MS);
   };
 
+  const handlePaneContextMenu = (event: React.MouseEvent | MouseEvent) => {
+    event.preventDefault();
+    events.onPaneContextMenu?.(event.clientX, event.clientY);
+  };
+
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
@@ -398,6 +403,7 @@ export function CanvasAdapter({
         selectNodesOnDrag={false}
         onSelectionChange={handleSelectionChange}
         onPaneClick={handlePaneClick}
+        onPaneContextMenu={handlePaneContextMenu}
         onNodeClick={handleNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
         onNodeContextMenu={handleNodeContextMenu}

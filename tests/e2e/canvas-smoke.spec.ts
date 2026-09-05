@@ -507,3 +507,21 @@ test("dropping a board portal pins a quick board; click opens; remove unpins", a
   await page.getByRole("button", { name: /Remove quick board New Board/ }).click();
   await expect(page.getByTestId("quick-boards")).toHaveCount(0);
 });
+
+test("right-click empty canvas copies the current board's MySpace link", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+
+  const pane = page.locator(".react-flow__pane");
+  const box = await pane.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  await page.mouse.click(box.x + 200, box.y + 200, { button: "right" });
+  await expect(page.getByTestId("pane-context-menu")).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy MySpace Link" }).click();
+
+  const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clipboard).toMatch(/^myspace:\/\/board\/.+$/);
+});
