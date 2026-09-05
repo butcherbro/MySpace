@@ -6,21 +6,42 @@ import type { CanvasCard } from "./canvas-types";
 
 const setViewport = vi.fn();
 const reactFlowProps: unknown[] = [];
+const backgroundProps: Array<{
+  variant?: string;
+  gap?: number;
+  size?: number;
+  color?: string;
+}> = [];
 
 vi.mock("@xyflow/react", async () => {
   await import("react");
   return {
-    Background: () => null,
+    Background: (props: {
+      variant?: string;
+      gap?: number;
+      size?: number;
+      color?: string;
+    }) => {
+      backgroundProps.push(props);
+      return null;
+    },
     BackgroundVariant: { Dots: "dots" },
     SelectionMode: { Partial: "partial" },
     applyNodeChanges: (_changes: unknown, nodes: unknown) => nodes,
     ReactFlow: ({
       nodes,
+      nodeTypes,
       children,
       onInit,
       ...props
     }: {
-      nodes: Array<{ id: string; data: { content: React.ReactNode } }>;
+      nodes: Array<{ id: string; data: { content: React.ReactNode; kind: string }; selected?: boolean }>;
+      nodeTypes?: {
+        card?: (props: {
+          data: { content: React.ReactNode; kind: string };
+          selected?: boolean;
+        }) => React.ReactNode;
+      };
       children?: React.ReactNode;
       onInit?: (instance: {
         setViewport: typeof setViewport;
@@ -38,7 +59,7 @@ vi.mock("@xyflow/react", async () => {
       return (
         <div data-testid="react-flow">
           {nodes.map((node) => (
-            <div key={node.id}>{node.data.content}</div>
+            <div key={node.id}>{nodeTypes?.card?.({ data: node.data, selected: node.selected }) ?? node.data.content}</div>
           ))}
           {children}
         </div>
@@ -236,5 +257,87 @@ describe("CanvasAdapter", () => {
 
     renderContent("hello", 2);
     expect(screen.getByTestId("card-a")).toHaveTextContent("hello");
+  });
+
+  it("renders a desk surface root and quiet dot background", () => {
+    reactFlowProps.length = 0;
+    backgroundProps.length = 0;
+
+    render(
+      <CanvasAdapter
+        cards={cards}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        viewportResetToken={1}
+        events={{}}
+        renderCard={(card) => <span data-testid={`card-${card.id}`} />}
+      />,
+    );
+
+    expect(screen.getByTestId("canvas-surface")).toHaveAttribute("data-kind", "desk");
+
+    const props = reactFlowProps[reactFlowProps.length - 1] as {
+      proOptions?: { hideAttribution?: boolean };
+    };
+    expect(props.proOptions?.hideAttribution).not.toBe(true);
+
+    expect(backgroundProps[backgroundProps.length - 1]).toMatchObject({
+      variant: "dots",
+      gap: 20,
+      size: 1,
+      color: "var(--desk-dot)",
+    });
+  });
+
+  it("renders each card through a dedicated frame class", () => {
+    render(
+      <CanvasAdapter
+        cards={cards}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        viewportResetToken={1}
+        events={{}}
+        renderCard={(card) => <span data-testid={`card-${card.id}`}>{card.id}</span>}
+      />,
+    );
+
+    const card = screen.getByTestId("card-a");
+    const frame = card.closest(".canvas-card-frame");
+    expect(frame).toHaveAttribute("data-card-kind", "note");
+    expect(frame).not.toHaveAttribute("data-kind");
+  });
+
+  it("rebuilds the card frame when kind changes without moving or revising the card", () => {
+    const { rerender } = render(
+      <CanvasAdapter
+        cards={cards}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        viewportResetToken={1}
+        events={{}}
+        renderCard={(card) => <span data-testid={`card-${card.id}`}>{card.id}</span>}
+      />,
+    );
+
+    expect(screen.getByTestId("card-a").closest(".canvas-card-frame")).toHaveAttribute(
+      "data-card-kind",
+      "note",
+    );
+
+    const next = cards.map((card) =>
+      card.id === "a" ? { ...card, kind: "image" as const } : card,
+    );
+
+    rerender(
+      <CanvasAdapter
+        cards={next}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        viewportResetToken={1}
+        events={{}}
+        renderCard={(card) => <span data-testid={`card-${card.id}`}>{card.id}</span>}
+      />,
+    );
+
+    expect(screen.getByTestId("card-a").closest(".canvas-card-frame")).toHaveAttribute(
+      "data-card-kind",
+      "image",
+    );
   });
 });

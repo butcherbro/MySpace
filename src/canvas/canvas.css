@@ -1,0 +1,95 @@
+.canvas-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--desk);
+  color: var(--ink);
+  outline: none;
+  box-shadow: none;
+}
+
+.canvas-surface:focus,
+.canvas-surface:focus-visible,
+.canvas-surface:focus-within {
+  outline: none;
+  box-shadow: none;
+}
+
+.canvas-surface .react-flow {
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-surface .react-flow__viewport,
+.canvas-surface .react-flow__renderer,
+.canvas-surface .react-flow__pane {
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-surface .react-flow__pane {
+  background: transparent;
+}
+
+.canvas-surface .react-flow__selectionpane {
+  background: transparent;
+}
+
+.canvas-surface .react-flow__selection,
+.canvas-surface .react-flow__nodesselection-rect {
+  background: color-mix(in srgb, var(--focus-halo) 18%, transparent);
+  border: 1px solid var(--edge-focus);
+  stroke: var(--edge-focus);
+  stroke-width: 1px;
+  box-shadow: 0 0 0 1px var(--focus-halo);
+}
+
+.canvas-surface .react-flow__node {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.canvas-surface .react-flow__node .canvas-card-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid transparent;
+  border-radius: inherit;
+  box-sizing: border-box;
+}
+
+.canvas-surface .react-flow__node.selected .canvas-card-frame,
+.canvas-surface .react-flow__node .canvas-card-frame[data-selected="true"] {
+  border-color: var(--edge-focus);
+  box-shadow:
+    0 0 0 1px var(--edge-focus),
+    0 0 0 3px var(--focus-halo);
+}
+
+.canvas-surface .react-flow__node.selected .canvas-card-frame:has(> .note-card--editing),
+.canvas-surface .react-flow__node .canvas-card-frame[data-selected="true"]:has(> .note-card--editing) {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.canvas-surface .react-flow__attribution {
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--paper-raised) 88%, transparent);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+  box-shadow: none;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.2;
+  opacity: 0.72;
+}
+
+.canvas-surface .react-flow__attribution a {
+  color: var(--ink-secondary);
+}
+
+.canvas-surface .react-flow__attribution a:hover {
+  color: var(--ink);
+}

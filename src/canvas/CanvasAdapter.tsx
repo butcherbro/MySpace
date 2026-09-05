@@ -11,6 +11,7 @@ import {
   type OnSelectionChangeParams,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "./canvas.css";
 
 import { cardToNodeLike, movedNodeToCard } from "./canvas-mapping";
 import type {
@@ -32,11 +33,18 @@ interface CanvasAdapterProps {
   onScreenToFlowReady?: (fn: (x: number, y: number) => { x: number; y: number }) => void;
 }
 
-type CardNodeData = { content: ReactNode };
+type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"] };
 
 const nodeTypes: NodeTypes = {
-  card: ({ data }: { data: CardNodeData }) => (
-    <div style={{ width: "100%", height: "100%" }}>{data.content}</div>
+  card: ({ data, selected }: { data: CardNodeData; selected?: boolean }) => (
+    <div
+      className="canvas-card-frame"
+      data-card-kind={data.kind}
+      data-selected={selected ? "true" : undefined}
+      style={{ width: "100%", height: "100%" }}
+    >
+      {data.content}
+    </div>
   ),
 };
 
@@ -49,7 +57,7 @@ function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode):
     width: like.width,
     height: like.height,
     zIndex: like.zIndex,
-    data: { content: renderCard(card) },
+    data: { content: renderCard(card), kind: card.kind },
     draggable: true,
   };
 }
@@ -86,7 +94,7 @@ export function CanvasAdapter({
   // a sibling save) does not silently drop the user's selection.
   const cardsKey =
     cards
-      .map((c) => `${c.id}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}`)
+      .map((c) => `${c.id}:${c.kind}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}`)
       .join("|") + `#edit:${editingCardId ?? ""}`;
   const [lastKey, setLastKey] = useState(cardsKey);
 
@@ -361,7 +369,9 @@ export function CanvasAdapter({
 
   return (
     <div
-      className="canvas-focusable"
+      className="canvas-surface"
+      data-testid="canvas-surface"
+      data-kind="desk"
       tabIndex={0}
       onKeyDown={handleCanvasKeyDown}
       style={{ width: "100%", height: "100%" }}
@@ -403,9 +413,8 @@ export function CanvasAdapter({
         }}
         minZoom={0.1}
         maxZoom={4}
-        proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--desk-dot)" />
       </ReactFlow>
     </div>
   );
