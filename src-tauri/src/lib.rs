@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod domain;
 pub mod repositories;
+pub mod services;
 
 use std::sync::Mutex;
 

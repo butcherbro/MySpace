@@ -35,6 +35,28 @@ pub fn load_board_snapshot(
     })
 }
 
+/// Lists all active (non-trashed) boards.
+pub fn list_boards(conn: &Connection) -> Result<Vec<BoardSummary>, WorkspaceError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, parent_board_id, revision
+         FROM boards WHERE deleted_at IS NULL
+         ORDER BY created_at, id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(BoardSummary {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            parent_board_id: row.get(2)?,
+            revision: row.get(3)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 fn load_board_summary(conn: &Connection, board_id: &str) -> Result<BoardSummary, WorkspaceError> {
     conn.query_row(
         "SELECT id, title, parent_board_id, revision FROM boards WHERE id = ?1 AND deleted_at IS NULL",
