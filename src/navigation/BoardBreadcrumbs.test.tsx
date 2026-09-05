@@ -21,15 +21,18 @@ describe("BoardBreadcrumbs", () => {
     expect(screen.getByText("Books")).toBeInTheDocument();
   });
 
-  it("collapses middle ancestors for deep trails", () => {
+  it("shows the full path for deep trails without collapsing", () => {
     const trail = [b("home", "Home"), b("a", "A"), b("b", "B"), b("c", "C"), b("d", "Deep")];
     render(
       <BoardBreadcrumbs breadcrumbs={trail} currentBoardId="d" onNavigate={vi.fn()} />,
     );
+    // Every crumb is visible; there is no collapsed ellipsis.
     expect(screen.getByText("Home")).toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
+    expect(screen.getByText("B")).toBeInTheDocument();
+    expect(screen.getByText("C")).toBeInTheDocument();
     expect(screen.getByText("Deep")).toBeInTheDocument();
-    expect(screen.queryByText("B")).not.toBeInTheDocument();
-    expect(screen.getByText("…")).toBeInTheDocument();
+    expect(screen.queryByText("…")).not.toBeInTheDocument();
   });
 
   it("marks the current board with aria-current and does not disable it", () => {
