@@ -104,4 +104,8 @@ export interface CanvasEvents {
   onCardDroppedOnPortal?(cardId: string, targetBoardId: string): void;
   /** A card is being dragged over a portal (or null when it leaves). */
   onPortalHighlight?(portalId: string | null): void;
+  /** A card is being dragged; report its screen-space pointer for drop targets. */
+  onCardDragMove?(e: { cardId: string; clientX: number; clientY: number }): void;
+  /** A card drag gesture finished (for clearing transient drop target state). */
+  onCardDragEnd?(): void;
 }

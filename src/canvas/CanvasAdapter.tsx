@@ -189,6 +189,8 @@ export function CanvasAdapter({
       highlightedPortalRef.current = null;
       events.onPortalHighlight?.(null);
     }
+    // Clear any transient breadcrumb drop-target highlight.
+    events.onCardDragEnd?.();
 
     // Drop onto a portal: if a single card's center lands inside a board portal,
     // move it to that board instead of repositioning on the current board.
@@ -237,13 +239,21 @@ export function CanvasAdapter({
   };
 
   // During drag, report which portal (if any) the card is over, so the parent
-  // can highlight it. Only emit on change to avoid redundant renders.
-  const handleNodeDrag = (_: unknown, node: Node<CardNodeData>) => {
+  // can highlight it. Only emit on change to avoid redundant renders. Also
+  // surface the screen-space pointer so the parent can hit-test breadcrumbs.
+  const handleNodeDrag = (event: React.MouseEvent | MouseEvent | TouchEvent, node: Node<CardNodeData>) => {
     const portal = portalAtPoint(node);
     const portalId = portal?.id ?? null;
     if (portalId !== highlightedPortalRef.current) {
       highlightedPortalRef.current = portalId;
       events.onPortalHighlight?.(portalId);
+    }
+    if ("clientX" in event) {
+      events.onCardDragMove?.({
+        cardId: node.id,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
     }
   };
 

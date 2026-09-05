@@ -29,7 +29,11 @@
   cursor: pointer;
 }
 
-.breadcrumbs__link[aria-current="page"] {
+.breadcrumbs__item--drop .breadcrumbs__link {
   color: #252927;
-  font-weight: 600;
+}
+
+.breadcrumbs__item--drop {
+  background: rgba(82, 122, 106, 0.12);
+  border-radius: 4px;
 }

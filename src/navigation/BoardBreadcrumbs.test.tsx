@@ -75,4 +75,21 @@ describe("BoardBreadcrumbs", () => {
     );
     expect(screen.getByText("Books").closest("button")).not.toHaveAttribute("aria-current");
   });
+
+  it("marks every crumb as a drop target and highlights the hovered one", () => {
+    render(
+      <BoardBreadcrumbs
+        breadcrumbs={[b("home", "Home"), b("a", "Books")]}
+        currentBoardId="a"
+        dropTargetBoardId="home"
+        onNavigate={vi.fn()}
+      />,
+    );
+    const home = screen.getByText("Home").closest('[data-board-drop-id]')!;
+    const books = screen.getByText("Books").closest('[data-board-drop-id]')!;
+    expect(home.getAttribute("data-board-drop-id")).toBe("home");
+    expect(books.getAttribute("data-board-drop-id")).toBe("a");
+    expect(home.className).toContain("breadcrumbs__item--drop");
+    expect(books.className).not.toContain("breadcrumbs__item--drop");
+  });
 });

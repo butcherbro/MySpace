@@ -36,6 +36,7 @@ function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
   const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
+  const [dropTargetBoardId, setDropTargetBoardId] = useState<string | null>(null);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
@@ -552,6 +553,28 @@ function App() {
     [gateway, dispatcher, idGenerator],
   );
 
+  // During a card drag, resolve the board the pointer is over by hit-testing the
+  // breadcrumb ancestor trail. Only the hovered board id is kept in state; the
+  // actual drop is routed through handleCardDroppedOnPortal.
+  const lastDraggedCardIdRef = useRef<string | null>(null);
+  const handleCardDragMove = useCallback((e: { cardId: string; clientX: number; clientY: number }) => {
+    lastDraggedCardIdRef.current = e.cardId;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const crumbEl = el?.closest?.("[data-board-drop-id]") as HTMLElement | null;
+    const boardId = crumbEl?.getAttribute("data-board-drop-id") ?? null;
+    setDropTargetBoardId(boardId);
+  }, []);
+
+  const handleCardDragEnd = useCallback(() => {
+    const cardId = lastDraggedCardIdRef.current;
+    const targetBoardId = dropTargetBoardId;
+    setDropTargetBoardId(null);
+    lastDraggedCardIdRef.current = null;
+    if (cardId && targetBoardId) {
+      handleCardDroppedOnPortal(cardId, targetBoardId);
+    }
+  }, [dropTargetBoardId, handleCardDroppedOnPortal]);
+
   const handleDeleteSelection = useCallback(async () => {
     if (state.selection.length === 0) return;
     const items = state.selection
@@ -829,6 +852,7 @@ function App() {
         <BoardBreadcrumbs
           breadcrumbs={breadcrumbs}
           currentBoardId={board?.id ?? ""}
+          dropTargetBoardId={dropTargetBoardId}
           onNavigate={(id) => void navigateTo(id, { push: true })}
         />
         {contextMenu && (
@@ -867,6 +891,8 @@ function App() {
               onCardContextMenu: handleRequestContextMenu,
               onCardDroppedOnPortal: handleCardDroppedOnPortal,
               onPortalHighlight: setHighlightedPortalId,
+              onCardDragMove: handleCardDragMove,
+              onCardDragEnd: handleCardDragEnd,
               onPaneDoubleClick: (point) => {
                 void handleCreateNote(point);
               },
