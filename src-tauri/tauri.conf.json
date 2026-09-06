@@ -13,6 +13,9 @@
     "windows": [
       {
         "title": "MySpace",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "decorations": true,
         "width": 1200,
         "height": 800,
         "minWidth": 600,

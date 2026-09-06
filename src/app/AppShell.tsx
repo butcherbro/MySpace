@@ -2,17 +2,33 @@ import type { ReactNode } from "react";
 import "./app-shell.css";
 
 interface AppShellProps {
+  /** Content of the macOS title-bar row (breadcrumbs). */
   topBar: ReactNode;
   toolRail: ReactNode;
+  rightRail?: ReactNode;
   children: ReactNode;
 }
 
 /** Fixed application chrome around the spatial workspace. */
-export function AppShell({ topBar, toolRail, children }: AppShellProps) {
+export function AppShell({ topBar, toolRail, rightRail, children }: AppShellProps) {
   return (
-    <div className="app-shell" data-testid="app-shell" data-theme="system">
-      <header className="app-shell__top-bar" data-testid="top-bar-region">
-        {topBar}
+    <div
+      className={`app-shell${rightRail ? " app-shell--with-right-rail" : ""}`}
+      data-testid="app-shell"
+      data-theme="system"
+    >
+      <header className="app-shell__title-bar" data-testid="title-bar-region">
+        {/* Empty drag spacer under the macOS traffic lights. The attribute is on
+            the spacer only, so breadcrumbs and their buttons never move the
+            window. */}
+        <div
+          className="app-shell__titlebar-drag"
+          data-testid="titlebar-drag-region"
+          data-tauri-drag-region
+        />
+        <div className="app-shell__titlebar-content" data-testid="top-bar-region">
+          {topBar}
+        </div>
       </header>
       <aside className="app-shell__tool-rail" data-testid="tool-rail-region">
         {toolRail}
@@ -20,6 +36,11 @@ export function AppShell({ topBar, toolRail, children }: AppShellProps) {
       <main className="app-shell__canvas" data-testid="canvas-region">
         {children}
       </main>
+      {rightRail && (
+        <aside className="app-shell__right-rail" data-testid="right-rail-region">
+          {rightRail}
+        </aside>
+      )}
     </div>
   );
 }

@@ -22,4 +22,30 @@ describe("AppShell", () => {
     expect(screen.getByTestId("canvas-region")).toHaveTextContent("Desk");
     expect(screen.queryByText("MySpace")).not.toBeInTheDocument();
   });
+
+  it("renders an optional right rail beside the canvas", () => {
+    render(
+      <AppShell topBar={null} toolRail={null} rightRail={<span>Quick boards</span>}>
+        <span>Desk</span>
+      </AppShell>,
+    );
+
+    expect(screen.getByTestId("right-rail-region")).toHaveTextContent("Quick boards");
+    expect(screen.getByTestId("canvas-region")).toHaveTextContent("Desk");
+  });
+
+  it("renders a title-bar drag spacer before the top bar content", () => {
+    render(
+      <AppShell topBar={<span>Trail</span>} toolRail={null}>
+        <span>Desk</span>
+      </AppShell>,
+    );
+
+    const spacer = screen.getByTestId("titlebar-drag-region");
+    expect(spacer).toHaveAttribute("data-tauri-drag-region");
+    // The spacer is a sibling before the interactive breadcrumb content.
+    expect(spacer.compareDocumentPosition(screen.getByTestId("top-bar-region"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
 });

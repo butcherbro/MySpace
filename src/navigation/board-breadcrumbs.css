@@ -3,11 +3,10 @@
   align-items: center;
   gap: 4px;
   font-size: 13px;
-  padding: 6px 16px;
+  padding: 0 16px;
   overflow-x: auto;
   white-space: nowrap;
-  border-bottom: 1px solid #e5e5e5;
-  background: #fff;
+  height: 100%;
 }
 
 .breadcrumbs__item {
