@@ -111,6 +111,34 @@ impl WorkspaceService {
         workspace_repository::load_card(conn, &id)
     }
 
+    /// Creates a child board under `parent_board_id` with the given title,
+    /// generating stable UUIDv7 ids for the board and its primary portal.
+    /// Returns the new board id.
+    pub fn create_board(
+        conn: &mut Connection,
+        parent_board_id: &str,
+        title: &str,
+    ) -> Result<String, WorkspaceError> {
+        let board_id = uuid::Uuid::now_v7().to_string();
+        let portal_card_id = uuid::Uuid::now_v7().to_string();
+        crate::domain::board_service::create_child_board(
+            conn,
+            &crate::domain::models::CreateChildBoardInput {
+                parent_board_id: parent_board_id.to_string(),
+                board_id: board_id.clone(),
+                portal_card_id,
+                frame: crate::domain::models::Frame {
+                    x: 100.0,
+                    y: 100.0,
+                    width: 120.0,
+                    height: 112.0,
+                },
+                title: title.to_string(),
+            },
+        )?;
+        Ok(board_id)
+    }
+
     /// Creates a batch of Link Cards (idempotent, durable batch) in a board.
     pub fn create_link_batch(
         conn: &mut Connection,

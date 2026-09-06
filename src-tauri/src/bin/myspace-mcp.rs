@@ -82,6 +82,15 @@ fn tools_list() -> serde_json::Value {
                 "annotations": { "readOnlyHint": true, "destructiveHint": false }
             },
             {
+                "name": "create_board",
+                "description": "Create a child board under a parent board (Home by default) and return its myspace://board/<id> address.",
+                "inputSchema": tool_schema(
+                    serde_json::json!({ "parentBoardId": { "type": "string", "description": "parent board id or myspace://board/<id> (optional; defaults to Home)" }, "title": { "type": "string" } }),
+                    &["title"]
+                ),
+                "annotations": { "readOnlyHint": false, "destructiveHint": false }
+            },
+            {
                 "name": "read_board",
                 "description": "Read a board (cards, notes, links, image assets) by myspace://board/<id> or board id.",
                 "inputSchema": tool_schema(
@@ -250,6 +259,29 @@ fn handle_tool_call(
                 serde_json::to_string_pretty(&serde_json::json!({ "boards": items }))
                     .map_err(|e| e.to_string())?,
             )
+        }
+        "create_board" => {
+            let title = arguments
+                .get("title")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing 'title' argument".to_string())?;
+            let parent_id = match arguments.get("parentBoardId").and_then(|v| v.as_str()) {
+                Some(p) => resolve_board_id(p).map_err(|e| e.to_string())?,
+                None => {
+                    let root: String = conn
+                        .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+                            r.get(0)
+                        })
+                        .map_err(|e| e.to_string())?;
+                    root
+                }
+            };
+            let board_id = WorkspaceService::create_board(conn, &parent_id, title)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::to_string_pretty(&serde_json::json!(
+                { "boardId": board_id, "address": format!("myspace://board/{}", board_id) }
+            ))
+            .map_err(|e| e.to_string())?)
         }
         "read_board" => {
             let board_arg = arguments
