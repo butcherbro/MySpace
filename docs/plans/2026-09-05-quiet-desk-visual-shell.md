@@ -17,7 +17,7 @@ small to read.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────┐
-│ Home / … / Current Board     Quick Boards later       Search later │
+│ Home / … / Current Board     Quick Boards       Search   Undo Redo │
 ├──────┬─────────────────────────────────────────────────────────────┤
 │ Note │                                                             │
 │ Link │                    quiet dotted Desk                        │
@@ -33,12 +33,17 @@ small to read.
 2. The web-content top bar is `44px`; the fixed rail is `56px`.
 3. The separate `MySpace` header, board-title row, note count, and creation toolbar disappear.
 4. Breadcrumbs are the navigation anchor. Do not repeat the current Board title.
-5. The top bar reserves component boundaries for Quick Boards and Search but renders no dead controls.
+5. The top bar contains Breadcrumbs and Quick Boards on the left; Search, Undo,
+   and Redo occupy the right command group. Never render a visible command before
+   its behavior and disabled state are wired.
 6. The default rail contains Note, Link, Board, and Image only.
 7. The Link tool creates a new editable Note at the normal placement; pasting one URL uses the existing Note-to-Link conversion. Do not build a second Link creation flow in this visual slice.
 8. Existing `Copy MySpace Link`, Image-only `Copy File Path`, and Delete behavior survive the context-menu refactor.
 9. A Board Portal context action targets the nested Board, not the portal Card.
 10. Preserve every existing click, drag, edit, DnD, clipboard, undo, and keyboard contract.
+11. Undo and Redo are right-aligned icon buttons. They use the same workspace
+    command history as `Command-Z` / `Command-Shift-Z`; they are never a second
+    independent history implementation.
 
 ## Relationship to the earlier interface plan
 
@@ -65,6 +70,8 @@ At `1512×982` CSS pixels:
 - the canvas begins directly below/right of that frame and never scrolls the chrome;
 - no creation controls remain above the canvas;
 - Home is the first clickable breadcrumb;
+- Undo and Redo are visible at the top-right, expose their keyboard hints, and
+  accurately reflect empty workspace history;
 - Notes look like paper, Images like unframed media, Links like previews, and Portals like doorways;
 - default React Flow blue selection chrome is absent;
 - a mixed dense fixture remains scannable at zoom 1 and 0.75;
@@ -327,14 +334,21 @@ git commit -m "feat: move creation tools to the left rail"
 - Create: `src/navigation/top-navigation-bar.css`
 - Create: `src/navigation/TopNavigationBar.test.tsx`
 - Create: `src/navigation/QuickBoardsSlot.tsx`
+- Create: `src/navigation/WorkspaceHistoryControls.tsx`
+- Create: `src/navigation/workspace-history-controls.css`
+- Create: `src/navigation/WorkspaceHistoryControls.test.tsx`
 - Modify: `src/navigation/BoardBreadcrumbs.tsx`
 - Modify: `src/navigation/board-breadcrumbs.css`
+- Modify: `src/commands/command-dispatcher.ts`
+- Modify: `src/commands/command-dispatcher.test.ts`
 - Modify: `src/App.tsx`
 
 **Step 1: Write failing composition tests**
 
 Verify that the full Home-to-current trail lives in the top bar, Home stays
 clickable, and an empty Quick Boards slot renders nothing and consumes no width.
+The right group must contain accessible Undo and Redo icon buttons with `Command-Z`
+and `Command-Shift-Z` hints. Both start disabled.
 
 **Step 2: Run and confirm failure**
 
@@ -345,28 +359,44 @@ Expected: FAIL because the top-bar component does not exist.
 **Step 3: Implement the top-bar layout**
 
 Use a `44px` flex row. Breadcrumbs take only their content width, Quick Boards
-may grow later, and future right-side commands have a dedicated empty boundary.
-Do not render the current Board title in the center.
+consume the flexible middle, and Search/Undo/Redo form a right-aligned command
+group. Do not render the current Board title in the center.
 
 Preserve `data-board-drop-id`, `dropTargetBoardId`, click navigation, and the full
 root-first path from the current `BoardBreadcrumbs` implementation.
 
-**Step 4: Tune breadcrumb typography**
+**Step 4: Wire one observable workspace history**
+
+Add a minimal subscription/snapshot boundary to `CommandDispatcher`; notify only
+after successful execute/undo/redo stack changes. `App.tsx` observes this boundary
+and passes `canUndo`, `canRedo`, `undoLabel`, and `redoLabel` to
+`WorkspaceHistoryControls`. Button activation and keyboard shortcuts reuse the same
+`handleUndo` / `handleRedo` callbacks, including error reporting and authoritative
+Board reload. Do not duplicate history in React state.
+
+While a rich-text editor owns focus, its native Tiptap `Command-Z` remains text
+undo. Until an explicit editor-history bridge exists, keep the top workspace-history
+buttons disabled during active editing rather than unexpectedly undoing a canvas
+command.
+
+**Step 5: Tune navigation and control styling**
 
 Use 13px text, medium current crumb, secondary ancestors, tertiary separators,
 32px minimum hit targets, no pill around every crumb, and one quiet focus ring.
+History buttons are icon-only, `32px` square, transparent at rest, and use existing
+outline icons. Disabled buttons remain visible but quiet and non-interactive.
 
-**Step 5: Verify**
+**Step 6: Verify**
 
 Run: `npm test -- src/navigation && npm run test:e2e`
 
 Expected: PASS, including breadcrumb navigation and breadcrumb DnD.
 
-**Step 6: Commit**
+**Step 7: Commit**
 
 ```bash
-git add src/navigation src/App.tsx
-git commit -m "feat: add navigation-only top bar"
+git add src/navigation src/commands/command-dispatcher.ts src/commands/command-dispatcher.test.ts src/App.tsx
+git commit -m "feat: add top-bar workspace history controls"
 ```
 
 ### Task 6: Theme the Desk and neutralize React Flow defaults
