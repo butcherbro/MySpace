@@ -49,3 +49,17 @@ export function movedNodeToCard(
     },
   };
 }
+
+/**
+ * The fraction of the smaller frame that is covered by the overlapping area of
+ * two frames. 0 = no overlap, 1 = the smaller frame is fully inside the larger.
+ * Used to decide a portal drop by surface overlap rather than by a single
+ * center point, so a wide note reliably "covers" a smaller portal.
+ */
+export function frameIntersectionRatio(a: CanvasFrame, b: CanvasFrame): number {
+  const xOverlap = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const yOverlap = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  const overlap = xOverlap * yOverlap;
+  const minArea = Math.min(a.width * a.height, b.width * b.height);
+  return minArea > 0 ? overlap / minArea : 0;
+}

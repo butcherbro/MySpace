@@ -13,7 +13,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
-import { cardToNodeLike, movedNodeToCard } from "./canvas-mapping";
+import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard } from "./canvas-mapping";
 import type {
   CanvasCard,
   CanvasEvents,
@@ -183,26 +183,33 @@ export function CanvasAdapter({
     flowRef.current?.setViewport(viewportRef.current);
   }, [viewportResetToken]);
 
-  // Returns the portal card whose bounds contain the given card's center, or null.
-  // A board_portal source may now target OTHER portals (Board-on-Board), but never
-  // itself.
+  // Returns the portal card whose frame is covered most by the dragged card, or
+  // null when no portal is overlapped enough. Using surface overlap (instead of
+  // a single center point) makes a wide note reliably "cover" a smaller portal.
+  // A board_portal source may target OTHER portals (Board-on-Board), never itself.
+  const PORTAL_DROP_THRESHOLD = 0.25;
   const portalAtPoint = (node: Node<CardNodeData>): CanvasCard | null => {
     const source = cards.find((c) => c.id === node.id);
     if (!source) return null;
-    const cx = node.position.x + (node.width ?? source.frame.width) / 2;
-    const cy = node.position.y + (node.height ?? source.frame.height) / 2;
-    return (
-      cards.find((c) => {
-        if (c.kind !== "board_portal" || !c.targetBoardId) return false;
-        if (c.id === source.id) return false; // never drop onto itself
-        return (
-          cx >= c.frame.x &&
-          cx <= c.frame.x + c.frame.width &&
-          cy >= c.frame.y &&
-          cy <= c.frame.y + c.frame.height
-        );
-      }) ?? null
-    );
+    const rect = {
+      x: node.position.x,
+      y: node.position.y,
+      width: node.width ?? source.frame.width,
+      height: node.height ?? source.frame.height,
+    };
+
+    let best: CanvasCard | null = null;
+    let bestRatio = 0;
+    for (const c of cards) {
+      if (c.kind !== "board_portal" || !c.targetBoardId) continue;
+      if (c.id === source.id) continue; // never drop onto itself
+      const ratio = frameIntersectionRatio(rect, c.frame);
+      if (ratio > bestRatio) {
+        bestRatio = ratio;
+        best = c;
+      }
+    }
+    return bestRatio >= PORTAL_DROP_THRESHOLD ? best : null;
   };
 
   const handleNodesChange = (changes: NodeChange<Node<CardNodeData>>[]) => {
