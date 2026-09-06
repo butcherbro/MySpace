@@ -82,3 +82,10 @@
 - User correction: the Board path is always root-first (`Home / … / Current Board`); Home is never the tail of the path and every Board name in the path must navigate to that Board.
 - User correction: Board Portals behave like Finder folders. Moving a portal onto another portal reparents the underlying Board, and dropping it on any breadcrumb ancestor moves it up the hierarchy without copying it.
 - Implementation consequence: deep paths must expose every ancestor during drag, even if middle crumbs are normally collapsed. Board moves require an atomic parent-plus-portal transaction and cycle protection; widening the leaf-card move query would corrupt the hierarchy invariant.
+
+## 2026-09-06 — The application command layer exclusively owns deletion
+
+- User-reported failure: a Note or Board could disappear after deletion and then return when the Board projection was loaded again.
+- Root cause: plain `Backspace`/`Delete` could not reach the durable Trash command because the application handler returned unless Cmd/Ctrl was pressed, while React Flow still retained its independent built-in deletion path.
+- Implementation consequence: disable React Flow's `deleteKeyCode` and route both plain keyboard deletion and context-menu deletion through `TrashSelectionCommand`. A canvas library may report selection and gestures, but it must never own persistence-visible removal.
+- Regression requirement: delete a mixed Note plus Board Portal selection, trigger a later projection rebuild, and prove the removed objects do not return.

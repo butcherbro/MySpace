@@ -136,6 +136,24 @@ describe("CanvasAdapter", () => {
     ]);
   });
 
+  it("leaves deletion to the durable workspace command layer", () => {
+    reactFlowProps.length = 0;
+
+    render(
+      <CanvasAdapter
+        cards={cards}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        events={{}}
+        renderCard={(card) => <span>{card.id}</span>}
+      />,
+    );
+
+    const props = reactFlowProps[reactFlowProps.length - 1] as {
+      deleteKeyCode?: string | null;
+    };
+    expect(props.deleteKeyCode).toBeNull();
+  });
+
   it("renders the interior of every card through renderCard", () => {
     render(
       <CanvasAdapter

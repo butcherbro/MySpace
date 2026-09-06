@@ -385,6 +385,7 @@ export function CanvasAdapter({
         nodes={nodes}
         nodeTypes={nodeTypes}
         onNodesChange={handleNodesChange}
+        deleteKeyCode={null}
         defaultViewport={viewport}
         translateExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
         nodeExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}

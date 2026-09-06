@@ -1066,10 +1066,15 @@ function App() {
   // unless an editor owns focus.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey)) return;
       const target = e.target as HTMLElement | null;
       const inEditor = target && (target.tagName === "TEXTAREA" || target.isContentEditable);
       if (inEditor) return;
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        void handleDeleteSelection();
+        return;
+      }
+      if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key === "[") {
         e.preventDefault();
         handleNavigateBack();
@@ -1086,9 +1091,6 @@ function App() {
       } else if (e.key.toLowerCase() === "c") {
         e.preventDefault();
         handleCopySelectionImages();
-      } else if (e.key === "Backspace" || e.key === "Delete") {
-        e.preventDefault();
-        void handleDeleteSelection();
       }
     }
     window.addEventListener("keydown", onKeyDown);

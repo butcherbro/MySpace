@@ -118,6 +118,27 @@ test("right-click deletes the whole selection", async ({ page }) => {
   await expect(page.getByTestId("note-card")).toHaveCount(0);
 });
 
+test("Backspace trashes the selection durably instead of only hiding canvas nodes", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New note" }).click();
+  await page.getByRole("button", { name: "New board" }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+  await expect(page.locator(".board-portal-card")).toHaveCount(1);
+
+  await page.getByTestId("canvas-surface").focus();
+  await page.keyboard.press("Control+A");
+  await expect(page.locator(".react-flow__node.selected")).toHaveCount(2);
+  await page.keyboard.press("Backspace");
+
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+  await expect(page.locator(".board-portal-card")).toHaveCount(0);
+
+  // Any later projection rebuild used to resurrect the locally hidden objects.
+  await page.getByRole("button", { name: "New board" }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+  await expect(page.locator(".board-portal-card")).toHaveCount(1);
+});
+
 test("typing into a note persists and survives blur", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "New note" }).click();
