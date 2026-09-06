@@ -429,6 +429,7 @@ pub struct QuickBoardDto {
     pub board_id: String,
     pub title: String,
     pub color_token: String,
+    pub symbol: Option<String>,
     pub sort_order: i64,
     /// Optional cover image, so a pinned chip mirrors the portal tile.
     pub cover_asset: Option<AssetDto>,

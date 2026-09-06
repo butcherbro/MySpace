@@ -1441,7 +1441,7 @@ fn next_card_y(conn: &Connection, board_id: &str) -> f64 {
 /// returned (a trashed/missing Board never renders as a live Quick Board).
 pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, WorkspaceError> {
     let mut stmt = conn.prepare(
-        "SELECT qb.board_id, b.title, b.color_token, qb.sort_order,
+        "SELECT qb.board_id, b.title, b.color_token, b.symbol, qb.sort_order,
                 ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
          FROM quick_boards qb
          JOIN boards b ON b.id = qb.board_id
@@ -1450,15 +1450,15 @@ pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, Worksp
          ORDER BY qb.sort_order ASC, qb.board_id ASC",
     )?;
     let rows = stmt.query_map([], |row| {
-        let cover_asset = if row.get::<_, Option<String>>(4)?.is_some() {
+        let cover_asset = if row.get::<_, Option<String>>(5)?.is_some() {
             Some(AssetDto {
-                id: row.get(4)?,
-                file_name: row.get(5)?,
-                mime_type: row.get(6)?,
-                width: row.get(7)?,
-                height: row.get(8)?,
-                size_bytes: row.get(9)?,
-                file_path: row.get(10)?,
+                id: row.get(5)?,
+                file_name: row.get(6)?,
+                mime_type: row.get(7)?,
+                width: row.get(8)?,
+                height: row.get(9)?,
+                size_bytes: row.get(10)?,
+                file_path: row.get(11)?,
             })
         } else {
             None
@@ -1467,7 +1467,8 @@ pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, Worksp
             board_id: row.get(0)?,
             title: row.get(1)?,
             color_token: row.get(2)?,
-            sort_order: row.get(3)?,
+            symbol: row.get(3)?,
+            sort_order: row.get(4)?,
             cover_asset,
         })
     })?;

@@ -508,33 +508,74 @@ test("Back recreates a board tab that was closed while inactive", async ({ page 
 test("dropping a board portal pins a quick board; click opens; remove unpins", async ({ page }) => {
   await page.goto("/");
 
-  // No quick boards yet.
-  await expect(page.getByTestId("quick-boards")).toHaveCount(0);
+  // The persistent rail is visible even before the first board is pinned.
+  await expect(page.getByTestId("quick-boards")).toHaveCount(1);
+  await expect(page.getByTestId("quick-board")).toHaveCount(0);
 
   // Create a child board portal.
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
 
-  // Drag the portal onto the Quick Boards region (the nav row). The region is
-  // empty, so it only appears as a drop target while a portal is being dragged.
+  // Drag the portal onto the persistent Quick Boards rail.
   const tileCenter = await centerOf(page, ".board-portal-card__tile");
-  const navRow = page.locator(".workspace__nav-row");
-  const navBox = await navRow.boundingBox();
-  expect(navBox).not.toBeNull();
-  if (!navBox) return;
+  const quickRail = page.getByTestId("right-rail-region");
+  const railBox = await quickRail.boundingBox();
+  expect(railBox).not.toBeNull();
+  if (!railBox) return;
 
-  await dragCenter(page, tileCenter, { x: navBox.x + navBox.width - 20, y: navBox.y + navBox.height / 2 });
+  await dragCenter(page, tileCenter, { x: railBox.x + railBox.width / 2, y: railBox.y + 80 });
 
   // A quick board chip now appears for the pinned board.
   await expect(page.getByTestId("quick-board")).toHaveCount(1);
 
+  // Changing the source Board cover updates its pinned identity immediately.
+  await page.getByTestId("board-portal-card").click({ button: "right" });
+  await page.getByRole("button", { name: "Set Cover from Clipboard" }).click();
+  await expect(page.locator(".quick-boards-rail__cover")).toHaveCount(1);
+
   // Click it to open/activate the board tab.
-  await page.getByTestId("quick-board").locator(".quick-boards__open").click();
+  await page.getByRole("button", { name: "Open quick board New Board" }).click();
   await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
 
   // Remove the pin; the chip disappears but the board still exists.
   await page.getByRole("button", { name: /Remove quick board New Board/ }).click();
-  await expect(page.getByTestId("quick-boards")).toHaveCount(0);
+  await expect(page.getByTestId("quick-boards")).toHaveCount(1);
+  await expect(page.getByTestId("quick-board")).toHaveCount(0);
+});
+
+test("dropping a note over Quick Boards still persists its canvas position", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New note" }).click();
+  await page.getByTestId("canvas").click({ position: { x: 5, y: 5 } });
+  await page.getByRole("button", { name: "New board", exact: true }).click();
+
+  const note = page.getByTestId("note-card");
+  await expect(note).toHaveCount(1);
+  const noteNode = page.locator(".react-flow__node").filter({ has: note });
+  const before = await note.boundingBox();
+  const beforeTransform = await noteNode.evaluate((element) => (element as HTMLElement).style.transform);
+  const rail = await page.getByTestId("right-rail-region").boundingBox();
+  expect(before).not.toBeNull();
+  expect(rail).not.toBeNull();
+  if (!before || !rail) return;
+
+  await dragCenter(
+    page,
+    { x: before.x + before.width / 2, y: before.y + before.height / 2 },
+    { x: rail.x + rail.width / 2, y: rail.y + 120 },
+  );
+  const afterDropTransform = await noteNode.evaluate(
+    (element) => (element as HTMLElement).style.transform,
+  );
+  expect(afterDropTransform).not.toBe(beforeTransform);
+
+  await page.locator(".board-portal-card__tile").dblclick();
+  await page.getByRole("button", { name: "Home" }).first().click();
+
+  const afterReloadTransform = await noteNode.evaluate(
+    (element) => (element as HTMLElement).style.transform,
+  );
+  expect(afterReloadTransform).toBe(afterDropTransform);
 });
 
 test("right-click empty canvas copies the current board's MySpace link", async ({ page, context }) => {

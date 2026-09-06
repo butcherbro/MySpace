@@ -36,6 +36,7 @@ export interface QuickBoardDto {
   boardId: string;
   title: string;
   colorToken: string;
+  symbol: string | null;
   sortOrder: number;
   /** Optional cover image, so a pinned chip mirrors the portal tile. */
   coverAsset: AssetDto | null;

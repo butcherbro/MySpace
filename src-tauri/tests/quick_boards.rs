@@ -56,6 +56,8 @@ fn add_then_list_ordered() {
     let home = root_board_id(&conn);
     board_service::create_child_board(&mut conn, &child(&home, "a", "pa", "A")).unwrap();
     board_service::create_child_board(&mut conn, &child(&home, "b", "pb", "B")).unwrap();
+    conn.execute("UPDATE boards SET symbol = 'B!' WHERE id = 'b'", [])
+        .unwrap();
 
     WorkspaceService::add_quick_board(
         &mut conn,
@@ -81,7 +83,40 @@ fn add_then_list_ordered() {
         vec!["b", "a"]
     );
     assert_eq!(quick[0].title, "B");
+    assert_eq!(quick[0].symbol.as_deref(), Some("B!"));
     assert_eq!(quick[1].title, "A");
+}
+
+#[test]
+fn list_projects_the_board_cover_asset() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    board_service::create_child_board(&mut conn, &child(&home, "a", "pa", "A")).unwrap();
+    conn.execute(
+        "INSERT INTO assets
+            (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+         VALUES
+            ('asset-a', 'asset-a.png', 'image/png', 'cover.png', 320, 180, 4096, 1)",
+        [],
+    )
+    .unwrap();
+    board_service::set_board_cover(&mut conn, "a", Some("asset-a")).unwrap();
+    WorkspaceService::add_quick_board(
+        &mut conn,
+        &AddQuickBoardInput {
+            board_id: "a".into(),
+        },
+    )
+    .unwrap();
+
+    let quick = WorkspaceService::list_quick_boards(&conn).unwrap();
+    let cover = quick[0].cover_asset.as_ref().expect("cover projection");
+    assert_eq!(cover.id, "asset-a");
+    assert_eq!(cover.file_path, "asset-a.png");
+    assert_eq!(cover.width, Some(320));
+    assert_eq!(cover.height, Some(180));
+    assert_eq!(cover.size_bytes, 4096);
 }
 
 #[test]

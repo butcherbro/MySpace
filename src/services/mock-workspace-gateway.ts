@@ -427,6 +427,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         boardId: input.boardId,
         title: board.title,
         colorToken,
+        symbol: null,
         sortOrder: this.quickBoards.length,
         coverAsset: null,
       });
