@@ -13,7 +13,7 @@ import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./e
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardTabs } from "./navigation/BoardTabs";
-import { QuickBoardsBar } from "./navigation/QuickBoardsBar";
+import { QuickBoardsRail } from "./navigation/QuickBoardsRail";
 import {
   activateBoardTab,
   createBoardTabs,
@@ -696,8 +696,10 @@ function App() {
       const card = cardsRef.current.find((c) => c.id === cardId);
       if (card?.kind === "board_portal") {
         handleQuickBoardPin(card.target.id);
+        return true; // consumed: do not also persist a plain reposition
       }
-      return true; // consumed: do not also persist a plain reposition
+      // Quick Boards only accepts Board Portals. A leaf card dragged across the
+      // rail must still follow the normal canvas-position persistence path.
     }
     if (cardId && targetBoardId) {
       handleCardDroppedOnPortal(cardId, targetBoardId);
@@ -972,6 +974,13 @@ function App() {
         id: portal.id,
         card: { ...portal, target: { ...portal.target, coverAsset: asset } },
       });
+      setQuickBoards((boards) =>
+        boards.map((quickBoard) =>
+          quickBoard.boardId === portal.target.id
+            ? { ...quickBoard, coverAsset: asset }
+            : quickBoard,
+        ),
+      );
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
@@ -998,6 +1007,13 @@ function App() {
         id: portal.id,
         card: { ...portal, target: { ...portal.target, coverAsset: asset } },
       });
+      setQuickBoards((boards) =>
+        boards.map((quickBoard) =>
+          quickBoard.boardId === portal.target.id
+            ? { ...quickBoard, coverAsset: asset }
+            : quickBoard,
+        ),
+      );
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
@@ -1016,6 +1032,13 @@ function App() {
         id: portal.id,
         card: { ...portal, target: { ...portal.target, coverAsset: null } },
       });
+      setQuickBoards((boards) =>
+        boards.map((quickBoard) =>
+          quickBoard.boardId === portal.target.id
+            ? { ...quickBoard, coverAsset: null }
+            : quickBoard,
+        ),
+      );
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
@@ -1171,23 +1194,12 @@ function App() {
   return (
     <AppShell
       topBar={
-        <div className="workspace__nav-row">
-          <BoardBreadcrumbs
-            breadcrumbs={breadcrumbs}
-            currentBoardId={board?.id ?? ""}
-            dropTargetBoardId={dropTargetBoardId}
-            onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
-          />
-          <div className="quick-boards-dropzone" data-quick-boards-drop="true">
-            <QuickBoardsBar
-              quickBoards={quickBoards}
-              onOpen={handleQuickBoardOpen}
-              onRemove={handleQuickBoardRemove}
-              onReorder={handleQuickBoardsReorder}
-              dropActive={dropActiveQuickBoards}
-            />
-          </div>
-        </div>
+        <BoardBreadcrumbs
+          breadcrumbs={breadcrumbs}
+          currentBoardId={board?.id ?? ""}
+          dropTargetBoardId={dropTargetBoardId}
+          onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
+        />
       }
       toolRail={
         <ToolRail
@@ -1195,6 +1207,15 @@ function App() {
           onNewLink={handleCreateLink}
           onNewBoard={() => void handleCreateChildBoard()}
           onAddImage={() => void handleCreateImage()}
+        />
+      }
+      rightRail={
+        <QuickBoardsRail
+          quickBoards={quickBoards}
+          onOpen={handleQuickBoardOpen}
+          onRemove={handleQuickBoardRemove}
+          onReorder={handleQuickBoardsReorder}
+          dropActive={dropActiveQuickBoards}
         />
       }
     >
