@@ -77,10 +77,15 @@ architecture pass before sizing; `blocked` = depends on another item.
 
 ### 6. Board icon/color/cover editing
 
-- `later` — Let the user change a Board Portal's color token and/or set a cover image
-  (from clipboard). Currently color is auto-assigned by id at creation
-  (`board_service::deterministic_color_token`). Lives in the portal-context rail of
-  `.interface-design/system.md`; cover-from-clipboard is part of the clipboard slice
+- `later` — Let the user change a Board Portal's icon/cover, with clipboard image
+  paste and file selection as the first two inputs. Currently the portal only has a
+  deterministic color token and a text symbol derived from the title; there is no
+  persisted cover image or icon asset yet (`src/cards/board/BoardPortalCard.tsx`,
+  `src-tauri/src/domain/models.rs`).
+- `later` — Keep this in the portal-context rail and tile context menu. The action
+  should support `Set Cover from Clipboard`, `Choose Cover…`, and `Remove Cover`,
+  falling back to the color/symbol tile when no image is set.
+- `later` — Clipboard support for cover replacement is part of the clipboard slice
   (see `docs/specs/link-card-and-clipboard.md`). Not started.
 
 ### 7. Copy MySpace Link / Copy File Path
@@ -98,20 +103,24 @@ architecture pass before sizing; `blocked` = depends on another item.
 
 ### 8. Empty Trash + asset garbage collection
 
-- `next` (scheduled, not urgent) — no Trash UI exists yet; soft-delete marks
+- `planned` — detailed TDD plan:
+  `docs/plans/2026-09-06-trash-view-and-empty-trash.md`. No Trash UI exists yet;
+  soft-delete marks
   `deleted_at`/`trash_batch_id` but never removes files from `assets/` (on purpose,
-  so Undo/restore keep working). This slice adds a permanent "Empty Trash" that
+  so Undo/restore keep working). The accepted UX is a fixed bottom-left Trash
+  button with a non-zero batch count and a full drawer for inspecting and restoring
+  deleted work. This reversible slice ships first. A separate later slice adds a
+  permanently confirmed "Empty Trash" that
   hard-deletes trashed cards/detail rows + boards, then runs **mark-and-sweep GC**
   over assets still referenced by no active `image_cards`/`embed_cards` (delete
   file first, then metadata row; a missing file counts as success), with a
   startup sweep to finish interrupted deletions. Reference: `tasks/todo.md` item
   "Implement asset garbage collection", ADR-006, and the architect's GC guidance
   (refcount not needed; mark-and-sweep is sufficient).
-- Open UX decisions (to confirm before coding — this is irreversible on real data):
-  - minimum UI (an "Empty Trash" button + count) vs. full Trash view with
-    per-item restore;
-  - explicit confirmation dialog required;
-  - whether GC ships in the same slice as Empty Trash or as the following step.
+- Confirmed safety decisions: restore operates on complete Trash batches (a mixed
+  selection or Board subtree is one atomic unit); permanent emptying requires a
+  fresh validated backup, explicit dialog, and typed `EMPTY`; asset GC follows
+  relational deletion and is retried on startup.
 
 ### 9. Quiet Desk visual shell (design slice)
 
