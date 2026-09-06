@@ -301,7 +301,14 @@ pub fn enrich_embed_with_metadata(
                 metadata.favicon_url.as_deref(),
                 "favicon",
             )?;
-            let description = metadata.description.unwrap_or_default();
+            // A user-authored description is authoritative and never overwritten
+            // by site metadata. Fall back to the site description only when empty.
+            let user_description = embed.description_plain_text.trim();
+            let description = if user_description.is_empty() {
+                metadata.description.unwrap_or_default()
+            } else {
+                user_description.to_string()
+            };
             ApplyEmbedMetadataInput {
                 id: id.to_string(),
                 expected_revision,
@@ -324,8 +331,8 @@ pub fn enrich_embed_with_metadata(
             site_name: None,
             title: embed.title,
             provider: None,
-            description_json: plain_text_document(""),
-            description_plain_text: String::new(),
+            description_json: plain_text_document(&embed.description_plain_text),
+            description_plain_text: embed.description_plain_text.clone(),
             preview_asset_id: None,
             favicon_asset_id: None,
             metadata_status: "failed".to_string(),

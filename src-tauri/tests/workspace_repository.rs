@@ -1084,11 +1084,13 @@ fn create_link_batch_creates_links_and_is_idempotent() {
                 id: "l1".to_string(),
                 source_url: "https://a.com".to_string(),
                 title: "A".to_string(),
+                description: "".to_string(),
             },
             LinkBatchItem {
                 id: "l2".to_string(),
                 source_url: "https://b.com".to_string(),
                 title: "B".to_string(),
+                description: "".to_string(),
             },
         ],
     };
@@ -1131,6 +1133,7 @@ fn create_link_batch_rejects_unknown_board() {
                 id: "l1".to_string(),
                 source_url: "https://a.com".to_string(),
                 title: "A".to_string(),
+                description: "".to_string(),
             }],
         },
     );

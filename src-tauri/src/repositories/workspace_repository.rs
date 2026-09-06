@@ -1084,7 +1084,7 @@ pub fn load_embed_for_metadata(
 ) -> Result<EmbedForMetadata, WorkspaceError> {
     let row = conn
         .query_row(
-            "SELECT c.id, c.revision, e.source_url, e.display_url, COALESCE(e.title, ''), e.preview_origin
+            "SELECT c.id, c.revision, e.source_url, e.display_url, COALESCE(e.title, ''), e.preview_origin, COALESCE(e.description_plain_text, '')
              FROM cards c
              JOIN embed_cards e ON e.card_id = c.id
              WHERE c.id = ?1 AND c.kind = 'embed' AND c.deleted_at IS NULL",
@@ -1097,6 +1097,7 @@ pub fn load_embed_for_metadata(
                     display_url: row.get(3)?,
                     title: row.get(4)?,
                     preview_origin: row.get(5)?,
+                    description_plain_text: row.get(6)?,
                 })
             },
         )
@@ -1308,7 +1309,20 @@ pub fn create_link_batch(
     let tx = conn.transaction()?;
     for link in &input.links {
         let display_url = link.source_url.clone(); // enriched later if needed
-        let description_json = "{\"type\":\"doc\",\"content\":[]}".to_string();
+                                                   // A user comment becomes the link's description body (authoritative).
+        let description = link.description.trim();
+        let description_json = if description.is_empty() {
+            "{\"type\":\"doc\",\"content\":[]}".to_string()
+        } else {
+            serde_json::to_string(&serde_json::json!({
+                "type": "doc",
+                "content": [{
+                    "type": "paragraph",
+                    "content": [{ "type": "text", "text": description }]
+                }]
+            }))
+            .map_err(|e| WorkspaceError::Database(e.to_string()))?
+        };
 
         tx.execute(
             "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
@@ -1323,8 +1337,8 @@ pub fn create_link_batch(
         )?;
         tx.execute(
             "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, metadata_status)
-             VALUES (?1, ?2, ?3, ?4, ?5, '', 'pending')",
-            params![link.id, link.source_url, display_url, link.title, description_json],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending')",
+            params![link.id, link.source_url, display_url, link.title, description_json, description],
         )?;
 
         card_ids.push(link.id.clone());

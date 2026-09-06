@@ -73,6 +73,14 @@
   cursor: text;
 }
 
+/* A user-authored comment is visually separated from the preview/description
+   block so it reads as its own note, not a continuation of the site text. */
+.link-card__description--has-content {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--edge-subtle);
+}
+
 .link-card__description-display {
   font-family: var(--font-content);
   font-size: 14px;

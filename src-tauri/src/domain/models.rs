@@ -332,6 +332,8 @@ pub struct EmbedForMetadata {
     pub display_url: String,
     pub title: String,
     pub preview_origin: Option<String>,
+    /// The current user-authored description, if any (guard against overwrite).
+    pub description_plain_text: String,
 }
 
 /// Transactional metadata update for an embed (Link) card.
@@ -387,6 +389,10 @@ pub struct LinkBatchItem {
     pub id: String,
     pub source_url: String,
     pub title: String,
+    /// Optional user comment shown under the preview. Authoritative: enrichment
+    /// never overwrites a non-empty user description.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// Input for creating a batch of Link Cards in one durable operation.

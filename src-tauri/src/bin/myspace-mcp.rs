@@ -110,12 +110,12 @@ fn tools_list() -> serde_json::Value {
             },
             {
                 "name": "add_links",
-                "description": "Add a batch of Link Cards to a board. Idempotent under an idempotency key.",
+                "description": "Add a batch of Link Cards to a board. Idempotent under an idempotency key. A link may carry an optional 'description' (user comment shown under the preview; never overwritten by enrichment).",
                 "inputSchema": tool_schema(
                     serde_json::json!({
                         "board": { "type": "string", "description": "myspace://board/<id> or bare board id" },
                         "idempotencyKey": { "type": "string" },
-                        "links": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "sourceUrl": { "type": "string" }, "title": { "type": "string" } } } }
+                        "links": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "sourceUrl": { "type": "string" }, "title": { "type": "string" }, "description": { "type": "string", "description": "optional user comment" } } } }
                     }),
                     &["board", "idempotencyKey", "links"]
                 ),
@@ -343,6 +343,11 @@ fn handle_tool_call(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string(),
+                        description: l
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
@@ -386,13 +391,27 @@ fn handle_tool_call(
             let fetcher = ReqwestMetadataFetcher::new().map_err(|e| e.to_string())?;
             let mut results = Vec::new();
             for id in &card_ids {
-                // Fresh agent-created cards have revision 1.
+                // Resolve the card's current revision first: enrichment is guarded
+                // by an optimistic revision, and agent-created cards may already
+                // have been enriched/edited (revision > 1).
+                let revision = match WorkspaceService::read_card(conn, id) {
+                    Ok(card) => match &card {
+                        myspace_lib::domain::models::CardDto::Note(n) => n.revision,
+                        myspace_lib::domain::models::CardDto::BoardPortal(p) => p.revision,
+                        myspace_lib::domain::models::CardDto::Image(i) => i.revision,
+                        myspace_lib::domain::models::CardDto::Embed(e) => e.revision,
+                    },
+                    Err(e) => {
+                        results.push(serde_json::json!({ "id": id, "status": "failed", "error": e.to_string() }));
+                        continue;
+                    }
+                };
                 match enrich_embed_with_metadata(
                     conn,
                     std::path::Path::new(asset_dir),
                     &fetcher,
                     id,
-                    1,
+                    revision,
                 ) {
                     Ok(embed) => results.push(
                         serde_json::json!({ "id": id, "status": "ready", "title": embed.title }),

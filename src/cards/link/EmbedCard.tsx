@@ -179,7 +179,10 @@ export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMet
         )}
 
         <div
-          className="link-card__description"
+          className={
+            "link-card__description" +
+            (embed.descriptionPlainText.trim() ? " link-card__description--has-content" : "")
+          }
           onDoubleClick={(e) => {
             e.stopPropagation();
             setEditing(true);

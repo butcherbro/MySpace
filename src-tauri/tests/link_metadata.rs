@@ -6,7 +6,9 @@ use myspace_lib::domain::link_metadata::{
     enrich_embed_with_metadata, extract_html_metadata, extract_youtube_feed_metadata,
     validate_public_http_url, youtube_channel_feed_url, FetchError, FetchResponse, MetadataFetcher,
 };
-use myspace_lib::domain::models::{ConvertNoteToEmbedInput, CreateNoteInput, Frame};
+use myspace_lib::domain::models::{
+    ConvertNoteToEmbedInput, CreateNoteInput, Frame, UpdateEmbedDescriptionInput,
+};
 use myspace_lib::repositories::workspace_repository;
 
 fn root_board_id(conn: &rusqlite::Connection) -> String {
@@ -209,6 +211,54 @@ fn enrich_embed_persists_failed_status_without_losing_source() {
     assert_eq!(embed.source_url, "https://example.com/page");
     assert_eq!(embed.title, "https://example.com/page");
     assert!(embed.metadata_error.unwrap().contains("offline"));
+}
+
+#[test]
+fn enrich_preserves_a_user_authored_description() {
+    let mut conn = open_in_memory().unwrap();
+    let revision = create_pending_embed(&mut conn, "https://example.com/page");
+    let tmp = std::env::temp_dir().join(format!("myspace-user-desc-{}", uuid::Uuid::now_v7()));
+    let asset_dir = tmp.join("assets");
+    fs::create_dir_all(&asset_dir).unwrap();
+
+    // A user-authored comment is set before enrichment.
+    workspace_repository::update_embed_description(
+        &mut conn,
+        &UpdateEmbedDescriptionInput {
+            id: "link-card".to_string(),
+            expected_revision: revision,
+            description_json: serde_json::json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"мой комментарий"}]}]}),
+            description_plain_text: "мой комментарий".to_string(),
+        },
+    )
+    .unwrap();
+
+    let fetcher = StubFetcher {
+        page: Ok(FetchResponse {
+            final_url: "https://example.com/page".to_string(),
+            mime_type: "text/html".to_string(),
+            bytes: br#"
+              <html><head>
+                <meta property="og:title" content="Site Title">
+                <meta property="og:description" content="Site Description">
+              </head></html>
+            "#
+            .to_vec(),
+        }),
+        image: None,
+    };
+
+    // Enrichment runs against revision 2 (the description bump).
+    let embed =
+        enrich_embed_with_metadata(&mut conn, &asset_dir, &fetcher, "link-card", revision + 1)
+            .unwrap();
+
+    assert_eq!(embed.metadata_status, "ready");
+    assert_eq!(embed.title, "Site Title");
+    // The user's comment wins over the fetched site description.
+    assert_eq!(embed.description_plain_text, "мой комментарий");
+
+    fs::remove_dir_all(&tmp).ok();
 }
 
 #[test]
