@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from "react";
 import type { BoardPortalDto } from "../../services/workspace-gateway";
+import { BoardIdentityThumbnail } from "../../boards/BoardIdentityThumbnail";
 import "./board-portal-card.css";
 
 interface BoardPortalCardProps {
@@ -20,13 +21,6 @@ const COLOR_VARS: Record<string, string> = {
   ink: "#657482",
 };
 
-/** First grapheme, spanning surrogate pairs so emoji don't split. */
-function firstGrapheme(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return "·";
-  return Array.from(trimmed)[0] ?? "·";
-}
-
 /**
  * The signature "doorway" card. Double-click the tile opens the child board;
  * double-click the title renames it inline; right-click opens a context menu.
@@ -42,8 +36,6 @@ export function BoardPortalCard({
   const [titleText, setTitleText] = useState(portal.target.title);
 
   const color = COLOR_VARS[portal.target.colorToken] ?? COLOR_VARS.ink;
-  const symbol = portal.target.symbol ?? firstGrapheme(portal.target.title);
-  const cover = portal.target.coverAsset;
   const childCount = portal.target.childBoardCount;
   const cardCount = portal.target.childCardCount;
 
@@ -86,16 +78,13 @@ export function BoardPortalCard({
           onOpen(portal.target.id);
         }}
       >
-        {cover ? (
-          <img
-            className="board-portal-card__cover"
-            src={`myspace-asset://localhost/${cover.filePath}`}
-            alt={portal.target.title}
-            draggable={false}
-          />
-        ) : (
-          <span className="board-portal-card__symbol">{symbol}</span>
-        )}
+        <BoardIdentityThumbnail
+          title={portal.target.title}
+          colorToken={portal.target.colorToken}
+          symbol={portal.target.symbol}
+          coverAsset={portal.target.coverAsset}
+          size="portal"
+        />
       </div>
 
       {renaming ? (

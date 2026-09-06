@@ -130,7 +130,7 @@ describe("BoardPortalCard", () => {
 
   it("falls back to the symbol when there is no cover", () => {
     renderCard(portal({ coverAsset: null }));
-    expect(document.querySelector(".board-portal-card__symbol")).toBeInTheDocument();
+    expect(document.querySelector(".board-identity-thumbnail__symbol")).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "Books" })).not.toBeInTheDocument();
   });
 });
