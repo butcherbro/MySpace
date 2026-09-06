@@ -38,16 +38,35 @@ pub fn load_board_snapshot(
 /// Lists all active (non-trashed) boards.
 pub fn list_boards(conn: &Connection) -> Result<Vec<BoardSummary>, WorkspaceError> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, parent_board_id, revision
-         FROM boards WHERE deleted_at IS NULL
-         ORDER BY created_at, id",
+        "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+         FROM boards b
+         LEFT JOIN assets ca ON ca.id = b.cover_asset_id
+         WHERE b.deleted_at IS NULL
+         ORDER BY b.created_at, b.id",
     )?;
     let rows = stmt.query_map([], |row| {
+        let cover_asset = if row.get::<_, Option<String>>(6)?.is_some() {
+            Some(AssetDto {
+                id: row.get(6)?,
+                file_name: row.get(7)?,
+                mime_type: row.get(8)?,
+                width: row.get(9)?,
+                height: row.get(10)?,
+                size_bytes: row.get(11)?,
+                file_path: row.get(12)?,
+            })
+        } else {
+            None
+        };
         Ok(BoardSummary {
             id: row.get(0)?,
             title: row.get(1)?,
             parent_board_id: row.get(2)?,
             revision: row.get(3)?,
+            color_token: row.get(4)?,
+            symbol: row.get(5)?,
+            cover_asset,
         })
     })?;
     let mut out = Vec::new();
@@ -59,14 +78,34 @@ pub fn list_boards(conn: &Connection) -> Result<Vec<BoardSummary>, WorkspaceErro
 
 fn load_board_summary(conn: &Connection, board_id: &str) -> Result<BoardSummary, WorkspaceError> {
     conn.query_row(
-        "SELECT id, title, parent_board_id, revision FROM boards WHERE id = ?1 AND deleted_at IS NULL",
+        "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+         FROM boards b
+         LEFT JOIN assets ca ON ca.id = b.cover_asset_id
+         WHERE b.id = ?1 AND b.deleted_at IS NULL",
         [board_id],
         |row| {
+            let cover_asset = if row.get::<_, Option<String>>(6)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(6)?,
+                    file_name: row.get(7)?,
+                    mime_type: row.get(8)?,
+                    width: row.get(9)?,
+                    height: row.get(10)?,
+                    size_bytes: row.get(11)?,
+                    file_path: row.get(12)?,
+                })
+            } else {
+                None
+            };
             Ok(BoardSummary {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 parent_board_id: row.get(2)?,
                 revision: row.get(3)?,
+                color_token: row.get(4)?,
+                symbol: row.get(5)?,
+                cover_asset,
             })
         },
     )

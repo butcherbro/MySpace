@@ -1,4 +1,5 @@
 import type { BoardTab } from "./board-tabs";
+import { BoardIdentityThumbnail } from "../boards/BoardIdentityThumbnail";
 import "./board-tabs.css";
 
 interface BoardTabsProps {
@@ -48,7 +49,15 @@ export function BoardTabs({
               tabIndex={active ? 0 : -1}
               onClick={() => onActivate(tab.boardId)}
             >
-              {tab.title}
+              <BoardIdentityThumbnail
+                title={tab.title}
+                colorToken={tab.colorToken}
+                symbol={tab.symbol}
+                coverAsset={tab.coverAsset}
+                size="navigation"
+                decorative
+              />
+              <span className="board-tabs__title">{tab.title}</span>
             </button>
             {tab.boardId !== homeBoardId && (
               <button

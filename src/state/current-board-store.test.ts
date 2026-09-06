@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 import { initialState, reducer, type CurrentBoardState } from "./current-board-store";
 import type { BoardSummary, EmbedCardDto, NoteCardDto } from "../services/workspace-gateway";
 
-const home: BoardSummary = { id: "home", title: "Home", parentBoardId: null, revision: 1 };
+const home: BoardSummary = {
+  id: "home",
+  title: "Home",
+  parentBoardId: null,
+  revision: 1,
+  colorToken: "ink",
+  symbol: null,
+  coverAsset: null,
+};
 
 function note(id: string, x = 0): NoteCardDto {
   return {

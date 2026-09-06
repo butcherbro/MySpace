@@ -1,16 +1,26 @@
 // Browser-like open-board tabs (session-only).
 //
-// A tab is just an open Board: its id and a title for the strip. Tabs are
-// stable references to Boards, never copies, and closing a tab never deletes
-// its Board (it only removes the tab). Home is always the leftmost tab and
-// cannot be closed, so there is always at least one tab.
+// A tab is just an open Board: its id, title, and visual identity (color/symbol
+// or cover) for the strip. Tabs are stable references to Boards, never copies,
+// and closing a tab never deletes its Board (it only removes the tab). Home is
+// always the leftmost tab and cannot be closed, so there is always at least one
+// tab.
 //
 // This model is independent of the active board's content projection: switching
 // a tab re-runs the existing `navigateTo` path. Per-tab viewport/selection
 // persistence is intentionally out of scope for this slice (the board reopens
 // pinned to its top-left origin anyway, per the current store).
 
-export interface BoardTab {
+import type { AssetDto } from "../services/workspace-gateway";
+
+/** The visual identity of a Board: color/symbol fallback or a cover image. */
+export interface BoardVisualIdentity {
+  colorToken: string;
+  symbol: string | null;
+  coverAsset: AssetDto | null;
+}
+
+export interface BoardTab extends BoardVisualIdentity {
   boardId: string;
   title: string;
 }
@@ -24,64 +34,49 @@ export interface BoardTabsState {
   activeBoardId: string;
 }
 
-export function createBoardTabs(homeId: string, homeTitle: string): BoardTabsState {
+export function createBoardTabs(homeTab: BoardTab): BoardTabsState {
   return {
-    homeBoardId: homeId,
-    tabs: [{ boardId: homeId, title: homeTitle }],
-    activeBoardId: homeId,
+    homeBoardId: homeTab.boardId,
+    tabs: [homeTab],
+    activeBoardId: homeTab.boardId,
   };
 }
 
 /** Opens (or activates) a board tab. Already-open boards activate in place. */
-export function openBoardTab(
-  state: BoardTabsState,
-  boardId: string,
-  title: string,
-): BoardTabsState {
-  const existing = state.tabs.find((t) => t.boardId === boardId);
+export function openBoardTab(state: BoardTabsState, tab: BoardTab): BoardTabsState {
+  const existing = state.tabs.find((t) => t.boardId === tab.boardId);
   if (existing) {
     return {
       ...state,
-      tabs: state.tabs.map((tab) =>
-        tab.boardId === boardId ? { ...tab, title } : tab,
-      ),
-      activeBoardId: boardId,
+      tabs: state.tabs.map((t) => (t.boardId === tab.boardId ? { ...t, ...tab } : t)),
+      activeBoardId: tab.boardId,
     };
   }
   return {
     homeBoardId: state.homeBoardId,
-    tabs: [...state.tabs, { boardId, title }],
-    activeBoardId: boardId,
+    tabs: [...state.tabs, tab],
+    activeBoardId: tab.boardId,
   };
 }
 
-/** Syncs the title of an already-open tab without opening or reordering tabs. */
-export function syncBoardTab(
-  state: BoardTabsState,
-  boardId: string,
-  title: string,
-): BoardTabsState {
-  if (!state.tabs.some((t) => t.boardId === boardId)) {
+/** Syncs the identity of an already-open tab without opening or reordering tabs. */
+export function syncBoardTab(state: BoardTabsState, tab: BoardTab): BoardTabsState {
+  if (!state.tabs.some((t) => t.boardId === tab.boardId)) {
     return state;
   }
   return {
     ...state,
-    tabs: state.tabs.map((tab) =>
-      tab.boardId === boardId ? { ...tab, title } : tab,
-    ),
+    tabs: state.tabs.map((t) => (t.boardId === tab.boardId ? { ...t, ...tab } : t)),
   };
 }
 
 /** Applies a navigation intent to tabs. Open recreates missing tabs; sync does not. */
 export function navigateBoardTab(
   state: BoardTabsState,
-  boardId: string,
-  title: string,
+  tab: BoardTab,
   mode: "open" | "sync",
 ): BoardTabsState {
-  return mode === "open"
-    ? openBoardTab(state, boardId, title)
-    : syncBoardTab(state, boardId, title);
+  return mode === "open" ? openBoardTab(state, tab) : syncBoardTab(state, tab);
 }
 
 /**

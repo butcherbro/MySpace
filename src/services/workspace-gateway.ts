@@ -14,6 +14,10 @@ export interface BoardSummary {
   title: string;
   parentBoardId: string | null;
   revision: number;
+  /** Visual identity: color/symbol fallback or a cover image. */
+  colorToken: string;
+  symbol: string | null;
+  coverAsset: AssetDto | null;
 }
 
 export interface Breadcrumb {

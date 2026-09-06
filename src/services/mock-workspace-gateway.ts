@@ -36,6 +36,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     title: "Home",
     parentBoardId: null,
     revision: 1,
+    colorToken: "ink",
+    symbol: null,
+    coverAsset: null,
   };
   private boards = new Map<string, BoardSummary>([[this.board.id, this.board]]);
 
@@ -194,6 +197,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       title: input.title,
       parentBoardId: input.parentBoardId,
       revision: 1,
+      colorToken: "terracotta",
+      symbol: null,
+      coverAsset: null,
     };
     this.boards.set(childBoard.id, childBoard);
 

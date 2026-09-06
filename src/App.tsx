@@ -19,6 +19,7 @@ import {
   createBoardTabs,
   closeBoardTab,
   navigateBoardTab,
+  type BoardTab,
   type BoardTabsState,
 } from "./navigation/board-tabs";
 import { BoardHistory } from "./navigation/board-history";
@@ -158,7 +159,15 @@ function App() {
         const snapshot = await gateway.loadBoardSnapshot(home.id);
         if (cancelled) return;
         historyRef.current = new BoardHistory(home.id);
-        setTabs(createBoardTabs(snapshot.board.id, snapshot.board.title));
+        setTabs(
+          createBoardTabs({
+            boardId: snapshot.board.id,
+            title: snapshot.board.title,
+            colorToken: snapshot.board.colorToken,
+            symbol: snapshot.board.symbol,
+            coverAsset: snapshot.board.coverAsset,
+          }),
+        );
         dispatch({
           type: "snapshotLoaded",
           board: snapshot.board,
@@ -922,17 +931,16 @@ function App() {
       // Track the board as an open tab: explicit navigation opens/activates a
       // tab; a reload just re-syncs the active id to the loaded board.
       setTabs((prev) => {
-        const base = prev ?? createBoardTabs(snapshot.board.id, snapshot.board.title);
-        const withHome =
-          base.tabs.length === 0
-            ? createBoardTabs(snapshot.board.id, snapshot.board.title)
-            : base;
-        const next = navigateBoardTab(
-          withHome,
-          snapshot.board.id,
-          snapshot.board.title,
-          tabMode,
-        );
+        const tab: BoardTab = {
+          boardId: snapshot.board.id,
+          title: snapshot.board.title,
+          colorToken: snapshot.board.colorToken,
+          symbol: snapshot.board.symbol,
+          coverAsset: snapshot.board.coverAsset,
+        };
+        const base = prev ?? createBoardTabs(tab);
+        const withHome = base.tabs.length === 0 ? createBoardTabs(tab) : base;
+        const next = navigateBoardTab(withHome, tab, tabMode);
         return tabMode === "sync" ? activateBoardTab(next, snapshot.board.id) : next;
       });
       dispatch({

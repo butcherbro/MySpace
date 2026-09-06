@@ -25,6 +25,10 @@ pub struct BoardSummary {
     pub title: String,
     pub parent_board_id: Option<String>,
     pub revision: i64,
+    /// Visual identity: color/symbol fallback or a cover image.
+    pub color_token: String,
+    pub symbol: Option<String>,
+    pub cover_asset: Option<AssetDto>,
 }
 
 /// A breadcrumb ancestor entry (Home ... current board).

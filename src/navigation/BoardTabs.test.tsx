@@ -5,7 +5,7 @@ import { BoardTabs } from "./BoardTabs";
 import type { BoardTab } from "./board-tabs";
 
 function tab(boardId: string, title: string): BoardTab {
-  return { boardId, title };
+  return { boardId, title, colorToken: "terracotta", symbol: null, coverAsset: null };
 }
 
 describe("BoardTabs", () => {
@@ -103,5 +103,44 @@ describe("BoardTabs", () => {
     expect(tabs[1]).toHaveAttribute("aria-selected", "true");
     expect(tabs[1]).toHaveAttribute("tabIndex", "0");
     expect(screen.getByRole("button", { name: "Close tab Books" })).toBeInTheDocument();
+  });
+
+  it("renders a decorative identity thumbnail before each tab label", () => {
+    const { container } = render(
+      <BoardTabs
+        homeBoardId="home"
+        tabs={[
+          tab("home", "Home"),
+          {
+            boardId: "a",
+            title: "Books",
+            colorToken: "terracotta",
+            symbol: null,
+            coverAsset: {
+              id: "asset-1",
+              fileName: "cover.png",
+              mimeType: "image/png",
+              width: null,
+              height: null,
+              sizeBytes: 0,
+              filePath: "asset-1.png",
+            },
+          },
+        ]}
+        activeBoardId="a"
+        onActivate={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const thumbs = container.querySelectorAll(".board-identity-thumbnail");
+    expect(thumbs).toHaveLength(2);
+    // Decorative: hidden from the accessibility tree, the title names the board.
+    expect(thumbs[0]).toHaveAttribute("aria-hidden", "true");
+    // The cover tab renders an image inside its thumbnail.
+    expect(thumbs[1].querySelector("img")).toHaveAttribute(
+      "src",
+      "myspace-asset://localhost/asset-1.png",
+    );
   });
 });
