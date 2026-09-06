@@ -301,7 +301,7 @@ describe("CanvasAdapter", () => {
     expect(backgroundProps[backgroundProps.length - 1]).toMatchObject({
       variant: "dots",
       gap: 20,
-      size: 4,
+      size: 3,
       color: "var(--desk-dot)",
     });
   });

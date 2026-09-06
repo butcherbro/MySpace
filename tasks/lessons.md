@@ -93,5 +93,5 @@
 ## 2026-09-06 — The Desk grid is an orientation tool, not decorative noise
 
 - User correction: the Milanote-like dot grid must remain clearly visible; making it "quiet" until it disappears breaks spatial orientation.
-- Reference calibration: `#ebedee` Desk, `#dfe1e2` dots, `20px` gap, and `2px` SVG dot radius (approximately 4 px diameter in the accepted screenshot).
+- Reference calibration after live-size correction: `#ebedee` Desk, `#dfe1e2` dots, `20px` gap, and React Flow `size={3}` at zoom 1. The grid scales naturally with canvas zoom.
 - Implementation consequence: keep the grid parameters under a regression test and validate at reduced zoom and on Retina rather than judging only from token opacity.

@@ -91,7 +91,7 @@ The application shell has three regions:
 
 - Fills all space right of the rail and below the top bar.
 - Background: `--desk` with low-contrast dots using `--desk-dot`.
-- Dot gap: `20px` at zoom 1; dot radius: `2px`. The light Desk calibration is
+- Dot gap: `20px` at zoom 1; React Flow dot size: `3px` (rendered radius `1.5px`). The light Desk calibration is
   sampled from the accepted Milanote reference: `#ebedee` surface with `#dfe1e2`
   dots. Do not reduce the dot to a subpixel treatment on Retina displays.
 - No permanent minimap, zoom widget, tips panel, or inspector.
