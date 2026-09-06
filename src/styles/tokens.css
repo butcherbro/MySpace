@@ -1,8 +1,8 @@
 :root {
   color-scheme: light dark;
 
-  --desk: #f3f5f4;
-  --desk-dot: rgba(74, 82, 78, 0.14);
+  --desk: #ebedee;
+  --desk-dot: #dfe1e2;
   --chrome-surface: rgba(255, 255, 255, 0.96);
   --paper: #fffefa;
   --paper-raised: #ffffff;

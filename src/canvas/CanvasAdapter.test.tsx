@@ -277,7 +277,7 @@ describe("CanvasAdapter", () => {
     expect(screen.getByTestId("card-a")).toHaveTextContent("hello");
   });
 
-  it("renders a desk surface root and quiet dot background", () => {
+  it("renders the Milanote-calibrated desk dot grid", () => {
     reactFlowProps.length = 0;
     backgroundProps.length = 0;
 
@@ -301,7 +301,7 @@ describe("CanvasAdapter", () => {
     expect(backgroundProps[backgroundProps.length - 1]).toMatchObject({
       variant: "dots",
       gap: 20,
-      size: 1,
+      size: 4,
       color: "var(--desk-dot)",
     });
   });

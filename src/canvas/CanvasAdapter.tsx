@@ -428,7 +428,7 @@ export function CanvasAdapter({
         minZoom={0.1}
         maxZoom={4}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--desk-dot)" />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={4} color="var(--desk-dot)" />
       </ReactFlow>
     </div>
   );

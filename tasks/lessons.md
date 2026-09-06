@@ -89,3 +89,9 @@
 - Root cause: plain `Backspace`/`Delete` could not reach the durable Trash command because the application handler returned unless Cmd/Ctrl was pressed, while React Flow still retained its independent built-in deletion path.
 - Implementation consequence: disable React Flow's `deleteKeyCode` and route both plain keyboard deletion and context-menu deletion through `TrashSelectionCommand`. A canvas library may report selection and gestures, but it must never own persistence-visible removal.
 - Regression requirement: delete a mixed Note plus Board Portal selection, trigger a later projection rebuild, and prove the removed objects do not return.
+
+## 2026-09-06 — The Desk grid is an orientation tool, not decorative noise
+
+- User correction: the Milanote-like dot grid must remain clearly visible; making it "quiet" until it disappears breaks spatial orientation.
+- Reference calibration: `#ebedee` Desk, `#dfe1e2` dots, `20px` gap, and `2px` SVG dot radius (approximately 4 px diameter in the accepted screenshot).
+- Implementation consequence: keep the grid parameters under a regression test and validate at reduced zoom and on Retina rather than judging only from token opacity.

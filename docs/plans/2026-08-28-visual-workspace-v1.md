@@ -622,8 +622,8 @@ The Board Portal is the signature: a compact colored square or symbol that acts 
 
 ```css
 :root {
-  --desk: #f3f5f4;
-  --desk-dot: rgba(74, 82, 78, 0.14);
+  --desk: #ebedee;
+  --desk-dot: #dfe1e2;
   --paper: #fffefa;
   --paper-raised: #ffffff;
   --ink: #252927;
