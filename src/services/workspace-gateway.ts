@@ -112,6 +112,8 @@ export interface EmbedCardDto {
   provider: string | null;
   descriptionJson: unknown;
   descriptionPlainText: string;
+  /** `'user'` = author's comment (authoritative), `'site'` = fetched fallback, `null` = none. */
+  descriptionOrigin: "user" | "site" | null;
   faviconAsset: AssetDto | null;
   previewAsset: AssetDto | null;
   previewOrigin: "fetched" | "custom" | null;

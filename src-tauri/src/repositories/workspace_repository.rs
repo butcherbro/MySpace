@@ -269,7 +269,7 @@ fn load_cards(
         let mut stmt = conn.prepare(
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                     e.source_url, e.display_url, e.site_name, e.title, e.provider,
-                    e.description_json, e.description_plain_text,
+                    e.description_json, e.description_plain_text, e.description_origin,
                     e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
                     pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
                     fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
@@ -285,29 +285,29 @@ fn load_cards(
             let description_json: serde_json::Value =
                 serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
 
-            let preview_asset = if row.get::<_, Option<String>>(15)?.is_some() {
+            let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
                 Some(AssetDto {
-                    id: row.get(15)?,
-                    file_name: row.get(20)?,
-                    mime_type: row.get(21)?,
-                    width: row.get(22)?,
-                    height: row.get(23)?,
-                    size_bytes: row.get(24)?,
-                    file_path: row.get(25)?,
+                    id: row.get(16)?,
+                    file_name: row.get(21)?,
+                    mime_type: row.get(22)?,
+                    width: row.get(23)?,
+                    height: row.get(24)?,
+                    size_bytes: row.get(25)?,
+                    file_path: row.get(26)?,
                 })
             } else {
                 None
             };
 
-            let favicon_asset = if row.get::<_, Option<String>>(16)?.is_some() {
+            let favicon_asset = if row.get::<_, Option<String>>(17)?.is_some() {
                 Some(AssetDto {
-                    id: row.get(16)?,
-                    file_name: row.get(26)?,
-                    mime_type: row.get(27)?,
-                    width: row.get(28)?,
-                    height: row.get(29)?,
-                    size_bytes: row.get(30)?,
-                    file_path: row.get(31)?,
+                    id: row.get(17)?,
+                    file_name: row.get(27)?,
+                    mime_type: row.get(28)?,
+                    width: row.get(29)?,
+                    height: row.get(30)?,
+                    size_bytes: row.get(31)?,
+                    file_path: row.get(32)?,
                 })
             } else {
                 None
@@ -331,11 +331,12 @@ fn load_cards(
                 provider: row.get(12)?,
                 description_json,
                 description_plain_text: row.get(14)?,
+                description_origin: row.get(15)?,
                 favicon_asset,
                 preview_asset,
-                preview_origin: row.get(17)?,
-                metadata_status: row.get(18)?,
-                metadata_error: row.get(19)?,
+                preview_origin: row.get(18)?,
+                metadata_status: row.get(19)?,
+                metadata_error: row.get(20)?,
             }))
         })?;
 
@@ -481,7 +482,7 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
             conn.query_row(
                 "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                         e.source_url, e.display_url, e.site_name, e.title, e.provider,
-                        e.description_json, e.description_plain_text,
+                        e.description_json, e.description_plain_text, e.description_origin,
                         e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
                         pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
                         fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
@@ -496,29 +497,29 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                     let description_json: serde_json::Value =
                         serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
 
-                    let preview_asset = if row.get::<_, Option<String>>(15)?.is_some() {
+                    let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
                         Some(AssetDto {
-                            id: row.get(15)?,
-                            file_name: row.get(20)?,
-                            mime_type: row.get(21)?,
-                            width: row.get(22)?,
-                            height: row.get(23)?,
-                            size_bytes: row.get(24)?,
-                            file_path: row.get(25)?,
+                            id: row.get(16)?,
+                            file_name: row.get(21)?,
+                            mime_type: row.get(22)?,
+                            width: row.get(23)?,
+                            height: row.get(24)?,
+                            size_bytes: row.get(25)?,
+                            file_path: row.get(26)?,
                         })
                     } else {
                         None
                     };
 
-                    let favicon_asset = if row.get::<_, Option<String>>(16)?.is_some() {
+                    let favicon_asset = if row.get::<_, Option<String>>(17)?.is_some() {
                         Some(AssetDto {
-                            id: row.get(16)?,
-                            file_name: row.get(26)?,
-                            mime_type: row.get(27)?,
-                            width: row.get(28)?,
-                            height: row.get(29)?,
-                            size_bytes: row.get(30)?,
-                            file_path: row.get(31)?,
+                            id: row.get(17)?,
+                            file_name: row.get(27)?,
+                            mime_type: row.get(28)?,
+                            width: row.get(29)?,
+                            height: row.get(30)?,
+                            size_bytes: row.get(31)?,
+                            file_path: row.get(32)?,
                         })
                     } else {
                         None
@@ -542,11 +543,12 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                         provider: row.get(12)?,
                         description_json,
                         description_plain_text: row.get(14)?,
+                        description_origin: row.get(15)?,
                         favicon_asset,
                         preview_asset,
-                        preview_origin: row.get(17)?,
-                        metadata_status: row.get(18)?,
-                        metadata_error: row.get(19)?,
+                        preview_origin: row.get(18)?,
+                        metadata_status: row.get(19)?,
+                        metadata_error: row.get(20)?,
                     }))
                 },
             )
@@ -954,7 +956,7 @@ fn load_embed_card(conn: &Connection, card_id: &str) -> Result<EmbedCardDto, Wor
     let row = conn.query_row(
         "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                 e.source_url, e.display_url, e.site_name, e.title, e.provider,
-                e.description_json, e.description_plain_text,
+                e.description_json, e.description_plain_text, e.description_origin,
                 e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
                 pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
                 fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
@@ -969,29 +971,29 @@ fn load_embed_card(conn: &Connection, card_id: &str) -> Result<EmbedCardDto, Wor
             let description_json: serde_json::Value =
                 serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
 
-            let preview_asset = if row.get::<_, Option<String>>(15)?.is_some() {
+            let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
                 Some(AssetDto {
-                    id: row.get(15)?,
-                    file_name: row.get(20)?,
-                    mime_type: row.get(21)?,
-                    width: row.get(22)?,
-                    height: row.get(23)?,
-                    size_bytes: row.get(24)?,
-                    file_path: row.get(25)?,
+                    id: row.get(16)?,
+                    file_name: row.get(21)?,
+                    mime_type: row.get(22)?,
+                    width: row.get(23)?,
+                    height: row.get(24)?,
+                    size_bytes: row.get(25)?,
+                    file_path: row.get(26)?,
                 })
             } else {
                 None
             };
 
-            let favicon_asset = if row.get::<_, Option<String>>(16)?.is_some() {
+            let favicon_asset = if row.get::<_, Option<String>>(17)?.is_some() {
                 Some(AssetDto {
-                    id: row.get(16)?,
-                    file_name: row.get(26)?,
-                    mime_type: row.get(27)?,
-                    width: row.get(28)?,
-                    height: row.get(29)?,
-                    size_bytes: row.get(30)?,
-                    file_path: row.get(31)?,
+                    id: row.get(17)?,
+                    file_name: row.get(27)?,
+                    mime_type: row.get(28)?,
+                    width: row.get(29)?,
+                    height: row.get(30)?,
+                    size_bytes: row.get(31)?,
+                    file_path: row.get(32)?,
                 })
             } else {
                 None
@@ -1015,11 +1017,12 @@ fn load_embed_card(conn: &Connection, card_id: &str) -> Result<EmbedCardDto, Wor
                 provider: row.get(12)?,
                 description_json,
                 description_plain_text: row.get(14)?,
+                description_origin: row.get(15)?,
                 favicon_asset,
                 preview_asset,
-                preview_origin: row.get(17)?,
-                metadata_status: row.get(18)?,
-                metadata_error: row.get(19)?,
+                preview_origin: row.get(18)?,
+                metadata_status: row.get(19)?,
+                metadata_error: row.get(20)?,
             })
         },
     );
@@ -1065,8 +1068,9 @@ pub fn update_embed_description(
         });
     }
 
+    // Editing the description in the UI makes it a user-authored comment.
     tx.execute(
-        "UPDATE embed_cards SET description_json = ?1, description_plain_text = ?2 WHERE card_id = ?3",
+        "UPDATE embed_cards SET description_json = ?1, description_plain_text = ?2, description_origin = 'user' WHERE card_id = ?3",
         params![description_json, input.description_plain_text, input.id],
     )?;
 
@@ -1084,7 +1088,7 @@ pub fn load_embed_for_metadata(
 ) -> Result<EmbedForMetadata, WorkspaceError> {
     let row = conn
         .query_row(
-            "SELECT c.id, c.revision, e.source_url, e.display_url, COALESCE(e.title, ''), e.preview_origin, COALESCE(e.description_plain_text, '')
+            "SELECT c.id, c.revision, e.source_url, e.display_url, COALESCE(e.title, ''), e.preview_origin, COALESCE(e.description_plain_text, ''), e.description_origin
              FROM cards c
              JOIN embed_cards e ON e.card_id = c.id
              WHERE c.id = ?1 AND c.kind = 'embed' AND c.deleted_at IS NULL",
@@ -1098,6 +1102,7 @@ pub fn load_embed_for_metadata(
                     title: row.get(4)?,
                     preview_origin: row.get(5)?,
                     description_plain_text: row.get(6)?,
+                    description_origin: row.get(7)?,
                 })
             },
         )
@@ -1163,9 +1168,9 @@ pub fn apply_embed_metadata(
         tx.execute(
             "UPDATE embed_cards
              SET display_url = ?1, site_name = ?2, title = ?3, provider = ?4,
-                 description_json = ?5, description_plain_text = ?6,
-                 favicon_asset_id = ?7, metadata_status = ?8, metadata_error = ?9
-             WHERE card_id = ?10",
+                 description_json = ?5, description_plain_text = ?6, description_origin = ?7,
+                 favicon_asset_id = ?8, metadata_status = ?9, metadata_error = ?10
+             WHERE card_id = ?11",
             params![
                 input.display_url,
                 input.site_name,
@@ -1173,6 +1178,7 @@ pub fn apply_embed_metadata(
                 input.provider,
                 description_json,
                 input.description_plain_text,
+                input.description_origin,
                 input.favicon_asset_id,
                 input.metadata_status,
                 input.metadata_error,
@@ -1187,10 +1193,10 @@ pub fn apply_embed_metadata(
         tx.execute(
             "UPDATE embed_cards
              SET display_url = ?1, site_name = ?2, title = ?3, provider = ?4,
-                 description_json = ?5, description_plain_text = ?6,
-                 asset_id = ?7, favicon_asset_id = ?8, preview_origin = ?9,
-                 metadata_status = ?10, metadata_error = ?11
-             WHERE card_id = ?12",
+                 description_json = ?5, description_plain_text = ?6, description_origin = ?7,
+                 asset_id = ?8, favicon_asset_id = ?9, preview_origin = ?10,
+                 metadata_status = ?11, metadata_error = ?12
+             WHERE card_id = ?13",
             params![
                 input.display_url,
                 input.site_name,
@@ -1198,6 +1204,7 @@ pub fn apply_embed_metadata(
                 input.provider,
                 description_json,
                 input.description_plain_text,
+                input.description_origin,
                 input.preview_asset_id,
                 input.favicon_asset_id,
                 next_preview_origin,
@@ -1335,10 +1342,15 @@ pub fn create_link_batch(
                 now,
             ],
         )?;
+        let description_origin = if description.is_empty() {
+            None
+        } else {
+            Some("user")
+        };
         tx.execute(
-            "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, metadata_status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending')",
-            params![link.id, link.source_url, display_url, link.title, description_json, description],
+            "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, description_origin, metadata_status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')",
+            params![link.id, link.source_url, display_url, link.title, description_json, description, description_origin],
         )?;
 
         card_ids.push(link.id.clone());

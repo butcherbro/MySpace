@@ -257,6 +257,40 @@ fn enrich_preserves_a_user_authored_description() {
     assert_eq!(embed.title, "Site Title");
     // The user's comment wins over the fetched site description.
     assert_eq!(embed.description_plain_text, "мой комментарий");
+    assert_eq!(embed.description_origin.as_deref(), Some("user"));
+
+    fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn enrich_marks_a_fetched_description_as_site_origin() {
+    let mut conn = open_in_memory().unwrap();
+    let revision = create_pending_embed(&mut conn, "https://example.com/page");
+    let tmp = std::env::temp_dir().join(format!("myspace-site-desc-{}", uuid::Uuid::now_v7()));
+    let asset_dir = tmp.join("assets");
+    fs::create_dir_all(&asset_dir).unwrap();
+
+    // No user comment: enrichment fills the description from the site.
+    let fetcher = StubFetcher {
+        page: Ok(FetchResponse {
+            final_url: "https://example.com/page".to_string(),
+            mime_type: "text/html".to_string(),
+            bytes: br#"
+              <html><head>
+                <meta property="og:title" content="Site Title">
+                <meta property="og:description" content="Site Description">
+              </head></html>
+            "#
+            .to_vec(),
+        }),
+        image: None,
+    };
+
+    let embed =
+        enrich_embed_with_metadata(&mut conn, &asset_dir, &fetcher, "link-card", revision).unwrap();
+
+    assert_eq!(embed.description_plain_text, "Site Description");
+    assert_eq!(embed.description_origin.as_deref(), Some("site"));
 
     fs::remove_dir_all(&tmp).ok();
 }

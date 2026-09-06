@@ -39,6 +39,7 @@ function embed(overrides: Partial<EmbedCardDto> = {}): EmbedCardDto {
     provider: null,
     descriptionJson: { type: "doc", content: [{ type: "paragraph" }] },
     descriptionPlainText: "",
+    descriptionOrigin: null,
     faviconAsset: null,
     previewAsset: null,
     previewOrigin: null,

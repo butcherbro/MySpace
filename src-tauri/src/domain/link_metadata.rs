@@ -304,11 +304,24 @@ pub fn enrich_embed_with_metadata(
             // A user-authored description is authoritative and never overwritten
             // by site metadata. Fall back to the site description only when empty.
             let user_description = embed.description_plain_text.trim();
-            let description = if user_description.is_empty() {
-                metadata.description.unwrap_or_default()
-            } else {
-                user_description.to_string()
-            };
+            let is_user_origin = embed.description_origin.as_deref() == Some("user");
+            let (description, description_origin) =
+                if !user_description.is_empty() && is_user_origin {
+                    (user_description.to_string(), Some("user".to_string()))
+                } else if user_description.is_empty() {
+                    let site = metadata.description.unwrap_or_default();
+                    (
+                        site.clone(),
+                        if site.is_empty() {
+                            None
+                        } else {
+                            Some("site".to_string())
+                        },
+                    )
+                } else {
+                    // Non-empty but not user-marked (legacy rows): keep it, mark as user.
+                    (user_description.to_string(), Some("user".to_string()))
+                };
             ApplyEmbedMetadataInput {
                 id: id.to_string(),
                 expected_revision,
@@ -318,6 +331,7 @@ pub fn enrich_embed_with_metadata(
                 provider: metadata.provider,
                 description_json: plain_text_document(&description),
                 description_plain_text: description,
+                description_origin,
                 preview_asset_id,
                 favicon_asset_id,
                 metadata_status: "ready".to_string(),
@@ -333,6 +347,7 @@ pub fn enrich_embed_with_metadata(
             provider: None,
             description_json: plain_text_document(&embed.description_plain_text),
             description_plain_text: embed.description_plain_text.clone(),
+            description_origin: embed.description_origin.clone(),
             preview_asset_id: None,
             favicon_asset_id: None,
             metadata_status: "failed".to_string(),

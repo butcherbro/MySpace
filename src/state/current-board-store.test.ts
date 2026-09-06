@@ -32,6 +32,7 @@ function embed(id: string): EmbedCardDto {
     provider: null,
     descriptionJson: { type: "doc", content: [] },
     descriptionPlainText: "",
+    descriptionOrigin: null,
     faviconAsset: null,
     previewAsset: null,
     previewOrigin: null,

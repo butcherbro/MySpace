@@ -73,12 +73,15 @@
   cursor: text;
 }
 
-/* A user-authored comment is visually separated from the preview/description
-   block so it reads as its own note, not a continuation of the site text. */
-.link-card__description--has-content {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--edge-subtle);
+/* A user-authored comment reads as its own note: an empty line above it and a
+   bolder weight, so it never looks like a continuation of the site text. */
+.link-card__description--user-comment {
+  margin-top: 16px;
+}
+
+.link-card__description--user-comment .link-card__description-display {
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .link-card__description-display {

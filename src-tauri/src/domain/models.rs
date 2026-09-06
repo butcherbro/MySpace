@@ -114,6 +114,9 @@ pub struct EmbedCardDto {
     pub provider: Option<String>,
     pub description_json: Value,
     pub description_plain_text: String,
+    /// `'user'` = author's comment (authoritative), `'site'` = fetched fallback,
+    /// `None` = no description. Renders a user comment as its own note.
+    pub description_origin: Option<String>,
     pub favicon_asset: Option<AssetDto>,
     pub preview_asset: Option<AssetDto>,
     pub preview_origin: Option<String>,
@@ -334,6 +337,8 @@ pub struct EmbedForMetadata {
     pub preview_origin: Option<String>,
     /// The current user-authored description, if any (guard against overwrite).
     pub description_plain_text: String,
+    /// `'user'` if the description is an authoritative user comment.
+    pub description_origin: Option<String>,
 }
 
 /// Transactional metadata update for an embed (Link) card.
@@ -347,6 +352,7 @@ pub struct ApplyEmbedMetadataInput {
     pub provider: Option<String>,
     pub description_json: Value,
     pub description_plain_text: String,
+    pub description_origin: Option<String>,
     pub preview_asset_id: Option<String>,
     pub favicon_asset_id: Option<String>,
     pub metadata_status: String,

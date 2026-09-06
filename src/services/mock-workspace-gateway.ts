@@ -353,6 +353,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       provider: null,
       descriptionJson: input.descriptionJson,
       descriptionPlainText: input.descriptionPlainText,
+      descriptionOrigin: input.descriptionPlainText ? "user" : null,
       faviconAsset: null,
       previewAsset: null,
       previewOrigin: null,
@@ -376,7 +377,12 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     card.revision += 1;
     card.siteName = host;
     card.title = `Preview for ${host}`;
-    card.descriptionPlainText = `Link preview for ${host}`;
+    // A user-authored comment is authoritative; only fill a site description
+    // when the field is empty (mirrors the Rust enrichment rule).
+    if (!card.descriptionPlainText) {
+      card.descriptionPlainText = `Link preview for ${host}`;
+      card.descriptionOrigin = "site";
+    }
     card.descriptionJson = {
       type: "doc",
       content: [{ type: "paragraph", content: [{ type: "text", text: card.descriptionPlainText }] }],
