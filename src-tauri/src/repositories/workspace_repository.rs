@@ -167,10 +167,12 @@ fn load_cards(
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                     p.target_board_id, b.revision, b.title, b.color_token, b.symbol,
                     COALESCE(child.child_board_count, 0),
-                    COALESCE(cardchild.child_card_count, 0)
+                    COALESCE(cardchild.child_card_count, 0),
+                    ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
              FROM cards c
              JOIN board_portal_cards p ON p.card_id = c.id
              JOIN boards b ON b.id = p.target_board_id
+             LEFT JOIN assets ca ON ca.id = b.cover_asset_id
              LEFT JOIN (
                  SELECT parent_board_id, COUNT(*) AS child_board_count
                  FROM boards WHERE deleted_at IS NULL GROUP BY parent_board_id
@@ -188,6 +190,19 @@ fn load_cards(
                 (row.get::<_, i64>(13)?, row.get::<_, i64>(14)?)
             } else {
                 (0, 0)
+            };
+            let cover_asset = if row.get::<_, Option<String>>(15)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(15)?,
+                    file_name: row.get(16)?,
+                    mime_type: row.get(17)?,
+                    width: row.get(18)?,
+                    height: row.get(19)?,
+                    size_bytes: row.get(20)?,
+                    file_path: row.get(21)?,
+                })
+            } else {
+                None
             };
             Ok(CardDto::BoardPortal(BoardPortalDto {
                 id: row.get(0)?,
@@ -208,6 +223,7 @@ fn load_cards(
                     symbol: row.get(12)?,
                     child_board_count,
                     child_card_count,
+                    cover_asset,
                 },
             }))
         })?;
@@ -397,10 +413,12 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                 "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                         p.target_board_id, b.revision, b.title, b.color_token, b.symbol,
                         COALESCE(child.child_board_count, 0),
-                        COALESCE(cardchild.child_card_count, 0)
+                        COALESCE(cardchild.child_card_count, 0),
+                        ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
                  FROM cards c
                  JOIN board_portal_cards p ON p.card_id = c.id
                  JOIN boards b ON b.id = p.target_board_id
+                 LEFT JOIN assets ca ON ca.id = b.cover_asset_id
                  LEFT JOIN (
                      SELECT parent_board_id, COUNT(*) AS child_board_count
                      FROM boards WHERE deleted_at IS NULL GROUP BY parent_board_id
@@ -412,6 +430,19 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                  WHERE c.id = ?1 AND c.deleted_at IS NULL",
                 [card_id],
                 |row| {
+                    let cover_asset = if row.get::<_, Option<String>>(15)?.is_some() {
+                        Some(AssetDto {
+                            id: row.get(15)?,
+                            file_name: row.get(16)?,
+                            mime_type: row.get(17)?,
+                            width: row.get(18)?,
+                            height: row.get(19)?,
+                            size_bytes: row.get(20)?,
+                            file_path: row.get(21)?,
+                        })
+                    } else {
+                        None
+                    };
                     Ok(CardDto::BoardPortal(BoardPortalDto {
                         id: row.get(0)?,
                         board_id: row.get(1)?,
@@ -431,6 +462,7 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                             symbol: row.get(12)?,
                             child_board_count: row.get(13)?,
                             child_card_count: row.get(14)?,
+                            cover_asset,
                         },
                     }))
                 },
@@ -1409,18 +1441,34 @@ fn next_card_y(conn: &Connection, board_id: &str) -> f64 {
 /// returned (a trashed/missing Board never renders as a live Quick Board).
 pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, WorkspaceError> {
     let mut stmt = conn.prepare(
-        "SELECT qb.board_id, b.title, b.color_token, qb.sort_order
+        "SELECT qb.board_id, b.title, b.color_token, qb.sort_order,
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
          FROM quick_boards qb
          JOIN boards b ON b.id = qb.board_id
+         LEFT JOIN assets ca ON ca.id = b.cover_asset_id
          WHERE b.deleted_at IS NULL
          ORDER BY qb.sort_order ASC, qb.board_id ASC",
     )?;
     let rows = stmt.query_map([], |row| {
+        let cover_asset = if row.get::<_, Option<String>>(4)?.is_some() {
+            Some(AssetDto {
+                id: row.get(4)?,
+                file_name: row.get(5)?,
+                mime_type: row.get(6)?,
+                width: row.get(7)?,
+                height: row.get(8)?,
+                size_bytes: row.get(9)?,
+                file_path: row.get(10)?,
+            })
+        } else {
+            None
+        };
         Ok(QuickBoardDto {
             board_id: row.get(0)?,
             title: row.get(1)?,
             color_token: row.get(2)?,
             sort_order: row.get(3)?,
+            cover_asset,
         })
     })?;
     let mut out = Vec::new();

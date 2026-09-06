@@ -19,6 +19,7 @@ import type {
   QuickBoardDto,
   ReorderQuickBoardsInput,
   SaveViewportInput,
+  SetBoardCoverInput,
   TrashSelectionInput,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
@@ -146,5 +147,17 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   copyImageCards(input: CopyImageCardsInput): Promise<void> {
     return invoke<void>("copy_image_cards", { cardIds: input.cardIds });
+  }
+
+  importClipboardImage(): Promise<AssetDto> {
+    return invoke<AssetDto>("import_clipboard_image", {});
+  }
+
+  setBoardCover(input: SetBoardCoverInput): Promise<void> {
+    return invoke<void>("set_board_cover", { boardId: input.boardId, assetId: input.assetId });
+  }
+
+  removeBoardCover(boardId: string): Promise<void> {
+    return invoke<void>("remove_board_cover", { boardId });
   }
 }

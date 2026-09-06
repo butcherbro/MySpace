@@ -107,6 +107,7 @@ export function QuickBoardsBar({
       )}
       {visible.map((qb, index) => {
         const color = COLOR_VARS[qb.colorToken] ?? COLOR_VARS.ink;
+        const cover = qb.coverAsset;
         const dragging = qb.boardId === draggedId;
         return (
           <span
@@ -130,7 +131,16 @@ export function QuickBoardsBar({
               onClick={() => onOpen(qb.boardId)}
             >
               <span className="quick-boards__tile" style={{ background: color }}>
-                {firstGrapheme(qb.title)}
+                {cover ? (
+                  <img
+                    className="quick-boards__cover"
+                    src={`myspace-asset://localhost/${cover.filePath}`}
+                    alt=""
+                    draggable={false}
+                  />
+                ) : (
+                  firstGrapheme(qb.title)
+                )}
               </span>
               <span className="quick-boards__title">{qb.title}</span>
             </button>

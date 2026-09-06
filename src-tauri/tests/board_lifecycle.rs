@@ -298,3 +298,56 @@ fn move_board_rejects_stale_portal_revision() {
         myspace_lib::domain::errors::WorkspaceError::StaleRevision { expected: 99, .. }
     ));
 }
+
+#[test]
+fn set_and_remove_board_cover() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    board_service::create_child_board(&mut conn, &mk(&home, "a", "pa", "A")).unwrap();
+
+    // Insert a managed asset to reference as the cover.
+    let asset_id = "01a0cover-0000-0000-0000-000000000001";
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, size_bytes, created_at)
+         VALUES (?1, 'cover.png', 'image/png', 'cover.png', 0, 0)",
+        [asset_id],
+    )
+    .unwrap();
+
+    // Set the cover.
+    board_service::set_board_cover(&mut conn, "a", Some(asset_id)).unwrap();
+    let cover: Option<String> = conn
+        .query_row(
+            "SELECT cover_asset_id FROM boards WHERE id = 'a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cover.as_deref(), Some(asset_id));
+
+    // Remove the cover -> back to NULL.
+    board_service::set_board_cover(&mut conn, "a", None).unwrap();
+    let cover: Option<String> = conn
+        .query_row(
+            "SELECT cover_asset_id FROM boards WHERE id = 'a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cover, None);
+}
+
+#[test]
+fn set_board_cover_rejects_missing_asset() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    board_service::create_child_board(&mut conn, &mk(&home, "a", "pa", "A")).unwrap();
+
+    let err = board_service::set_board_cover(&mut conn, "a", Some("no-such-asset"));
+    assert!(matches!(
+        err,
+        Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
+    ));
+}

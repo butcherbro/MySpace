@@ -287,3 +287,39 @@ fn next_free_position(conn: &Connection, board_id: &str) -> (f64, f64) {
     }
     (X, max_bottom + GAP)
 }
+
+/// Sets a Board's cover image (a managed asset id). The cover replaces the
+/// color/symbol tile; `None` removes it and returns to the fallback. The asset
+/// must exist; board revision is deliberately not bumped (cover is cosmetic and
+/// does not participate in move/rename optimistic concurrency).
+pub fn set_board_cover(
+    conn: &mut Connection,
+    board_id: &str,
+    asset_id: Option<&str>,
+) -> Result<(), WorkspaceError> {
+    let changed = match asset_id {
+        Some(asset_id) => {
+            let asset_exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM assets WHERE id = ?1",
+                [asset_id],
+                |r| r.get(0),
+            )?;
+            if asset_exists == 0 {
+                return Err(WorkspaceError::NotFound(asset_id.to_string()));
+            }
+            conn.execute(
+                "UPDATE boards SET cover_asset_id = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+                params![asset_id, db::migrations::now_millis(), board_id],
+            )?
+        }
+        None => conn.execute(
+            "UPDATE boards SET cover_asset_id = NULL, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            params![db::migrations::now_millis(), board_id],
+        )?,
+    };
+
+    if changed == 0 {
+        return Err(WorkspaceError::NotFound(board_id.to_string()));
+    }
+    Ok(())
+}

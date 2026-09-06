@@ -76,6 +76,14 @@
   font-size: 11px;
   color: #fff;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.quick-boards__cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .quick-boards__title {

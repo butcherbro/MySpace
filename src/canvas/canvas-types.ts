@@ -29,6 +29,10 @@ export interface CanvasCard {
   revision: number;
   /** For board portals, the id of the board they lead to. */
   targetBoardId?: string;
+  /** For board portals: the portal's display title (re-render key). */
+  portalTitle?: string;
+  /** For board portals: the id of the cover asset, if any (re-render key). */
+  portalCoverAssetId?: string;
 }
 
 /** A point in board-space coordinates. */
@@ -108,6 +112,8 @@ export interface CanvasEvents {
   onPortalHighlight?(portalId: string | null): void;
   /** A card is being dragged; report its screen-space pointer for drop targets. */
   onCardDragMove?(e: { cardId: string; clientX: number; clientY: number }): void;
-  /** A card drag gesture finished (for clearing transient drop target state). */
-  onCardDragEnd?(): void;
+  /** A card drag gesture finished (for clearing transient drop target state).
+   *  Returns true when the drop was consumed (pinned to Quick Boards or moved
+   *  to a portal), so the canvas must not also persist a plain reposition. */
+  onCardDragEnd?(): boolean | void;
 }

@@ -37,6 +37,8 @@ export interface QuickBoardDto {
   title: string;
   colorToken: string;
   sortOrder: number;
+  /** Optional cover image, so a pinned chip mirrors the portal tile. */
+  coverAsset: AssetDto | null;
 }
 
 export interface NoteCardDto {
@@ -65,6 +67,8 @@ export interface BoardPortalDto {
     symbol: string | null;
     childBoardCount: number;
     childCardCount: number;
+    /** Optional cover image replacing the color/symbol tile. */
+    coverAsset: AssetDto | null;
   };
 }
 
@@ -259,6 +263,11 @@ export interface CopyImageCardsInput {
   cardIds: string[];
 }
 
+export interface SetBoardCoverInput {
+  boardId: string;
+  assetId: string;
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -292,4 +301,7 @@ export interface WorkspaceGateway {
   removeQuickBoard(boardId: string): Promise<void>;
   reorderQuickBoards(input: ReorderQuickBoardsInput): Promise<void>;
   copyImageCards(input: CopyImageCardsInput): Promise<void>;
+  importClipboardImage(): Promise<AssetDto>;
+  setBoardCover(input: SetBoardCoverInput): Promise<void>;
+  removeBoardCover(boardId: string): Promise<void>;
 }

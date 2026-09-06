@@ -5,7 +5,7 @@ import { QuickBoardsBar } from "./QuickBoardsBar";
 import type { QuickBoardDto } from "../services/workspace-gateway";
 
 function qb(boardId: string, title: string, sortOrder: number): QuickBoardDto {
-  return { boardId, title, colorToken: "terracotta", sortOrder };
+  return { boardId, title, colorToken: "terracotta", sortOrder, coverAsset: null };
 }
 
 const noop = {
@@ -103,5 +103,33 @@ describe("QuickBoardsBar", () => {
     fireEvent.dragOver(chips[0]);
     fireEvent.drop(chips[0]);
     expect(onReorder).not.toHaveBeenCalled();
+  });
+
+  it("renders a cover image in the chip when the board has one", () => {
+    render(
+      <QuickBoardsBar
+        quickBoards={[
+          {
+            boardId: "a",
+            title: "Books",
+            colorToken: "terracotta",
+            sortOrder: 0,
+            coverAsset: {
+              id: "asset-1",
+              fileName: "cover.png",
+              mimeType: "image/png",
+              width: null,
+              height: null,
+              sizeBytes: 0,
+              filePath: "asset-1.png",
+            },
+          },
+        ]}
+        {...noop}
+      />,
+    );
+    const img = document.querySelector(".quick-boards__cover");
+    expect(img).toBeInTheDocument();
+    expect(img).toHaveAttribute("src", "myspace-asset://localhost/asset-1.png");
   });
 });

@@ -55,6 +55,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "embed_description_origin",
         sql: include_str!("../../migrations/0008_embed_description_origin.sql"),
     },
+    Migration {
+        version: 9,
+        name: "board_cover",
+        sql: include_str!("../../migrations/0009_board_cover.sql"),
+    },
 ];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.

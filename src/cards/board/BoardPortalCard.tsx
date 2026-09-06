@@ -43,6 +43,7 @@ export function BoardPortalCard({
 
   const color = COLOR_VARS[portal.target.colorToken] ?? COLOR_VARS.ink;
   const symbol = portal.target.symbol ?? firstGrapheme(portal.target.title);
+  const cover = portal.target.coverAsset;
   const childCount = portal.target.childBoardCount;
   const cardCount = portal.target.childCardCount;
 
@@ -85,7 +86,16 @@ export function BoardPortalCard({
           onOpen(portal.target.id);
         }}
       >
-        <span className="board-portal-card__symbol">{symbol}</span>
+        {cover ? (
+          <img
+            className="board-portal-card__cover"
+            src={`myspace-asset://localhost/${cover.filePath}`}
+            alt={portal.target.title}
+            draggable={false}
+          />
+        ) : (
+          <span className="board-portal-card__symbol">{symbol}</span>
+        )}
       </div>
 
       {renaming ? (

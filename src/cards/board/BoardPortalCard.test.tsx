@@ -20,6 +20,7 @@ function portal(overrides: Partial<BoardPortalDto["target"]> = {}): BoardPortalD
       symbol: null,
       childBoardCount: 2,
       childCardCount: 5,
+      coverAsset: null,
       ...overrides,
     },
   };
@@ -106,5 +107,30 @@ describe("BoardPortalCard", () => {
 
     await user.pointer({ keys: "[MouseRight]", target: screen.getByTestId("board-portal-card") });
     expect(onContextMenu).toHaveBeenCalled();
+  });
+
+  it("renders a cover image instead of the symbol when a cover asset exists", () => {
+    renderCard(
+      portal({
+        coverAsset: {
+          id: "asset-1",
+          fileName: "cover.png",
+          mimeType: "image/png",
+          width: null,
+          height: null,
+          sizeBytes: 0,
+          filePath: "asset-1.png",
+        },
+      }),
+    );
+    const img = screen.getByRole("img", { name: "Books" });
+    expect(img).toHaveAttribute("src", "myspace-asset://localhost/asset-1.png");
+    expect(screen.queryByText("📚")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the symbol when there is no cover", () => {
+    renderCard(portal({ coverAsset: null }));
+    expect(document.querySelector(".board-portal-card__symbol")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Books" })).not.toBeInTheDocument();
   });
 });

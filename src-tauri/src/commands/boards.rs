@@ -106,3 +106,25 @@ pub fn move_board(db: DbState<'_>, input: MoveBoardInput) -> Result<(), Workspac
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     board_service::move_board(&mut conn, &input)
 }
+
+/// Sets a Board's cover image from an already-imported asset id.
+#[tauri::command]
+pub fn set_board_cover(
+    db: DbState<'_>,
+    board_id: String,
+    asset_id: String,
+) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    board_service::set_board_cover(&mut conn, &board_id, Some(&asset_id))
+}
+
+/// Removes a Board's cover image, returning to the color/symbol tile.
+#[tauri::command]
+pub fn remove_board_cover(db: DbState<'_>, board_id: String) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    board_service::set_board_cover(&mut conn, &board_id, None)
+}

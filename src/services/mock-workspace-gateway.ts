@@ -18,6 +18,7 @@ import type {
   QuickBoardDto,
   ReorderQuickBoardsInput,
   SaveViewportInput,
+  SetBoardCoverInput,
   TrashSelectionInput,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
@@ -211,6 +212,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         symbol: null,
         childBoardCount: 0,
         childCardCount: 0,
+        coverAsset: null,
       },
     };
     this.snapshot.cards.push(portal);
@@ -426,6 +428,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         title: board.title,
         colorToken,
         sortOrder: this.quickBoards.length,
+        coverAsset: null,
       });
     }
     return Promise.resolve();
@@ -458,6 +461,46 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     void input;
     // Browser/tests have no pasteboard; succeed as a no-op (no-op parity with
     // the real command path, which only fails on missing assets/macOS).
+    return Promise.resolve();
+  }
+
+  importClipboardImage(): Promise<AssetDto> {
+    const id = `clip-${this.dataVersion++}`;
+    return Promise.resolve({
+      id,
+      fileName: "clipboard.png",
+      mimeType: "image/png",
+      width: null,
+      height: null,
+      sizeBytes: 0,
+      filePath: `${id}.png`,
+    });
+  }
+
+  setBoardCover(input: SetBoardCoverInput): Promise<void> {
+    const portal = this.snapshot.cards.find(
+      (c): c is Extract<(typeof this.snapshot.cards)[number], { kind: "board_portal" }> =>
+        c.kind === "board_portal" && c.target.id === input.boardId,
+    );
+    if (!portal) return Promise.reject(new Error(`board not found: ${input.boardId}`));
+    portal.target.coverAsset = {
+      id: input.assetId,
+      fileName: "cover.png",
+      mimeType: "image/png",
+      width: null,
+      height: null,
+      sizeBytes: 0,
+      filePath: `${input.assetId}.png`,
+    };
+    return Promise.resolve();
+  }
+
+  removeBoardCover(boardId: string): Promise<void> {
+    const portal = this.snapshot.cards.find(
+      (c): c is Extract<(typeof this.snapshot.cards)[number], { kind: "board_portal" }> =>
+        c.kind === "board_portal" && c.target.id === boardId,
+    );
+    if (portal) portal.target.coverAsset = null;
     return Promise.resolve();
   }
 

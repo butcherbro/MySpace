@@ -263,6 +263,7 @@ function App() {
         symbol: null,
         childBoardCount: 0,
         childCardCount: 0,
+        coverAsset: null,
       },
     };
     try {
@@ -512,6 +513,8 @@ function App() {
     zIndex: c.zIndex,
     revision: c.revision,
     targetBoardId: c.kind === "board_portal" ? c.target.id : undefined,
+    portalTitle: c.kind === "board_portal" ? c.target.title : undefined,
+    portalCoverAssetId: c.kind === "board_portal" ? c.target.coverAsset?.id ?? undefined : undefined,
   }));
 
   const handleCardsMoved = useCallback(
@@ -679,7 +682,7 @@ function App() {
     setDropActiveQuickBoards(overQuick);
   }, []);
 
-  const handleCardDragEnd = useCallback(() => {
+  const handleCardDragEnd = useCallback((): boolean => {
     const cardId = lastDraggedCardIdRef.current;
     const targetBoardId = dropTargetBoardIdRef.current;
     const overQuick = overQuickBoardsRef.current;
@@ -694,11 +697,13 @@ function App() {
       if (card?.kind === "board_portal") {
         handleQuickBoardPin(card.target.id);
       }
-      return;
+      return true; // consumed: do not also persist a plain reposition
     }
     if (cardId && targetBoardId) {
       handleCardDroppedOnPortal(cardId, targetBoardId);
+      return true; // consumed: moved to a portal
     }
+    return false;
   }, [handleCardDroppedOnPortal, handleQuickBoardPin]);
 
   const handleDeleteSelection = useCallback(async () => {
@@ -950,6 +955,72 @@ function App() {
     if (board) void navigateTo(board.id);
   }, [board, navigateTo]);
 
+  // Board cover actions: set from clipboard, choose a file, or remove. Each
+  // updates the local portal projection immediately (cardReplaced) so the tile
+  // re-renders without a full board reload.
+  const handleSetCoverFromClipboard = useCallback(async () => {
+    if (!contextMenu) return;
+    const portal = state.cards.find(
+      (c): c is BoardPortalDto => c.kind === "board_portal" && c.id === contextMenu.cardId,
+    );
+    if (!portal) return;
+    try {
+      const asset = await gateway.importClipboardImage();
+      await gateway.setBoardCover({ boardId: portal.target.id, assetId: asset.id });
+      dispatch({
+        type: "cardReplaced",
+        id: portal.id,
+        card: { ...portal, target: { ...portal.target, coverAsset: asset } },
+      });
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [contextMenu, state.cards, gateway]);
+
+  const handleChooseCover = useCallback(async () => {
+    if (!contextMenu) return;
+    const portal = state.cards.find(
+      (c): c is BoardPortalDto => c.kind === "board_portal" && c.id === contextMenu.cardId,
+    );
+    if (!portal) return;
+    const picked = await pickImageFile();
+    if (!picked) return;
+    try {
+      const asset = await gateway.importAsset({
+        id: idGenerator.nextId(),
+        sourcePath: picked.path,
+        fileName: picked.fileName,
+        mimeType: picked.mimeType,
+      });
+      await gateway.setBoardCover({ boardId: portal.target.id, assetId: asset.id });
+      dispatch({
+        type: "cardReplaced",
+        id: portal.id,
+        card: { ...portal, target: { ...portal.target, coverAsset: asset } },
+      });
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [contextMenu, state.cards, gateway, idGenerator]);
+
+  const handleRemoveCover = useCallback(async () => {
+    if (!contextMenu) return;
+    const portal = state.cards.find(
+      (c): c is BoardPortalDto => c.kind === "board_portal" && c.id === contextMenu.cardId,
+    );
+    if (!portal) return;
+    try {
+      await gateway.removeBoardCover(portal.target.id);
+      dispatch({
+        type: "cardReplaced",
+        id: portal.id,
+        card: { ...portal, target: { ...portal.target, coverAsset: null } },
+      });
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [contextMenu, state.cards, gateway]);
+
   // Quick Boards: open navigates (opening/activating a tab).
   const handleQuickBoardOpen = useCallback(
     (boardId: string) => {
@@ -1176,6 +1247,47 @@ function App() {
               >
                 Copy Image
               </button>
+            )}
+            {state.cards.find((c) => c.kind === "board_portal" && c.id === contextMenu.cardId) && (
+              <>
+                <button
+                  type="button"
+                  className="context-menu__item"
+                  onClick={() => {
+                    setContextMenu(null);
+                    void handleSetCoverFromClipboard();
+                  }}
+                >
+                  Set Cover from Clipboard
+                </button>
+                <button
+                  type="button"
+                  className="context-menu__item"
+                  onClick={() => {
+                    setContextMenu(null);
+                    void handleChooseCover();
+                  }}
+                >
+                  Choose Cover…
+                </button>
+                {state.cards.find(
+                  (c) =>
+                    c.kind === "board_portal" &&
+                    c.id === contextMenu.cardId &&
+                    c.target.coverAsset !== null,
+                ) && (
+                  <button
+                    type="button"
+                    className="context-menu__item"
+                    onClick={() => {
+                      setContextMenu(null);
+                      void handleRemoveCover();
+                    }}
+                  >
+                    Remove Cover
+                  </button>
+                )}
+              </>
             )}
             <button type="button" className="context-menu__item" onClick={handleContextDelete}>
               Delete

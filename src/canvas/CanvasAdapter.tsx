@@ -91,10 +91,16 @@ export function CanvasAdapter({
   // Rebuild nodes when the projection (frames OR revision OR editing focus)
   // changes, using React's "adjust state during render" pattern. Preserve each
   // node's `selected` flag across the rebuild so entering/leaving edit mode (or
-  // a sibling save) does not silently drop the user's selection.
+  // a sibling save) does not silently drop the user's selection. Portal
+  // appearance (title + cover) is part of the key so a rename or cover change
+  // re-renders the tile even when the card revision is unchanged.
   const cardsKey =
     cards
-      .map((c) => `${c.id}:${c.kind}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}`)
+      .map((c) => {
+        const portal = c.kind === "board_portal" ? c : null;
+        return `${c.id}:${c.kind}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}` +
+          (portal ? `:${portal.portalTitle ?? ""}:${portal.portalCoverAssetId ?? ""}` : "");
+      })
       .join("|") + `#edit:${editingCardId ?? ""}`;
   const [lastKey, setLastKey] = useState(cardsKey);
 
@@ -237,8 +243,12 @@ export function CanvasAdapter({
     }
     // Clear any transient breadcrumb drop-target highlight. This resolves the
     // drop from `dropTargetBoardIdRef` set by the last window pointermove, which
-    // already runs before React Flow's drag-stop callback.
-    events.onCardDragEnd?.();
+    // already runs before React Flow's drag-stop callback. If the drop was
+    // consumed (pinned to Quick Boards / moved to a portal), stop here and do
+    // not also persist a plain reposition.
+    if (events.onCardDragEnd?.()) {
+      return;
+    }
 
     // Drop onto a portal: if a single card's center lands inside a board portal,
     // move it to that board instead of repositioning on the current board.

@@ -85,3 +85,20 @@ pub fn copy_image_cards(
 
     crate::commands::clipboard::copy_image_files(&paths).map_err(WorkspaceError::Database)
 }
+
+/// Imports an image from the system clipboard as a managed asset and returns its
+/// DTO. Used by "Set Cover from Clipboard". Returns NotFound when the clipboard
+/// holds no image.
+#[tauri::command]
+pub fn import_clipboard_image(app: AppHandle, db: DbState<'_>) -> Result<AssetDto, WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    let dir = asset_dir(&app);
+
+    let (bytes, mime_type, file_name) = crate::commands::clipboard::read_clipboard_image()
+        .map_err(WorkspaceError::Database)?
+        .ok_or_else(|| WorkspaceError::NotFound("clipboard image".to_string()))?;
+
+    asset_service::store_asset_bytes(&mut conn, &dir, &file_name, &mime_type, &bytes)
+}

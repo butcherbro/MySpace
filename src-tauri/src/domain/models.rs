@@ -56,6 +56,8 @@ pub struct PortalTarget {
     pub symbol: Option<String>,
     pub child_board_count: i64,
     pub child_card_count: i64,
+    /// An optional cover image that replaces the color/symbol tile.
+    pub cover_asset: Option<AssetDto>,
 }
 
 /// A note card.
@@ -428,6 +430,8 @@ pub struct QuickBoardDto {
     pub title: String,
     pub color_token: String,
     pub sort_order: i64,
+    /// Optional cover image, so a pinned chip mirrors the portal tile.
+    pub cover_asset: Option<AssetDto>,
 }
 
 /// Input for adding a Quick Board reference. Idempotent: adding an already-pinned
