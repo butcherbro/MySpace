@@ -4,19 +4,22 @@ import { AppShell } from "./AppShell";
 
 describe("AppShell", () => {
   it('marks the shell with the quiet-desk theme contract', () => {
-    render(<AppShell>content</AppShell>);
+    render(<AppShell topBar={null} toolRail={null}>content</AppShell>);
 
     expect(screen.getByTestId("app-shell")).toHaveAttribute("data-theme", "system");
   });
 
-  it("renders the shell with the product title", () => {
-    render(<AppShell>content</AppShell>);
-    expect(screen.getByTestId("app-shell")).toBeInTheDocument();
-    expect(screen.getByText("MySpace")).toBeInTheDocument();
-  });
+  it("renders explicit top bar, tool rail, and canvas regions", () => {
+    render(
+      <AppShell topBar={<span>Trail</span>} toolRail={<span>Tools</span>}>
+        <span>Desk</span>
+      </AppShell>,
+    );
 
-  it("renders children in the body region", () => {
-    render(<AppShell><span data-testid="child" /></AppShell>);
-    expect(screen.getByTestId("child")).toBeInTheDocument();
+    expect(screen.getByTestId("app-shell")).toBeInTheDocument();
+    expect(screen.getByTestId("top-bar-region")).toHaveTextContent("Trail");
+    expect(screen.getByTestId("tool-rail-region")).toHaveTextContent("Tools");
+    expect(screen.getByTestId("canvas-region")).toHaveTextContent("Desk");
+    expect(screen.queryByText("MySpace")).not.toBeInTheDocument();
   });
 });

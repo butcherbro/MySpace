@@ -13,12 +13,11 @@ test("create a note, single-click to edit, drag without editing", async ({ page 
 
   // Home canvas is present with zero notes initially.
   await expect(page.getByTestId("canvas")).toBeVisible();
-  await expect(page.getByTestId("note-count")).toHaveText("0 notes");
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
 
   // Create a note.
   await page.getByRole("button", { name: "New note" }).click();
   await expect(page.getByTestId("note-card")).toHaveCount(1);
-  await expect(page.getByTestId("note-count")).toHaveText("1 note");
 
   // Wait until the note has measurable size (React Flow's measure pass is async).
   await page.waitForFunction(() => {

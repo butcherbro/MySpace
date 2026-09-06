@@ -1,31 +1,41 @@
 .app-shell {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  grid-template-rows: 44px minmax(0, 1fr);
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+  background: var(--desk);
 }
 
-.app-shell__header {
+.app-shell__top-bar {
+  grid-column: 1 / -1;
+  grid-row: 1;
   display: flex;
   align-items: center;
-  height: 40px;
-  padding: 0 16px;
-  border-bottom: 1px solid #e5e5e5;
-  flex-shrink: 0;
+  min-width: 0;
+  background: var(--chrome-surface);
+  border-bottom: 1px solid var(--edge-subtle);
   user-select: none;
+  z-index: 20;
 }
 
-.app-shell__title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a1a1a;
-}
-
-.app-shell__body {
-  flex: 1;
+.app-shell__tool-rail {
+  grid-column: 1;
+  grid-row: 2;
   min-height: 0;
+  background: var(--chrome-surface);
+  border-right: 1px solid var(--edge-subtle);
+  z-index: 10;
+}
+
+.app-shell__canvas {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+  min-width: 0;
   position: relative;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }

@@ -1085,34 +1085,8 @@ function App() {
   }, [handleNavigateBack, handleNavigateForward, dispatcher, handleDeleteSelection, handleCopySelectionImages, reloadCurrentBoard]);
 
   return (
-    <AppShell>
-      <div className="workspace">
-        <div className="workspace__toolbar">
-          <span className="workspace__board-title">
-            {board ? board.title : "Loading…"}
-          </span>
-          <span className="workspace__count" data-testid="note-count">
-            {notes.length} note{notes.length === 1 ? "" : "s"}
-          </span>
-          <button type="button" onClick={() => void handleCreateNote()}>
-            New note
-          </button>
-          <button type="button" onClick={() => void handleCreateChildBoard()}>
-            New board
-          </button>
-          <button type="button" onClick={() => void handleCreateImage()}>
-            Add image
-          </button>
-        </div>
-        {tabs && (
-          <BoardTabs
-            homeBoardId={tabs.homeBoardId}
-            tabs={tabs.tabs}
-            activeBoardId={tabs.activeBoardId}
-            onActivate={handleTabActivate}
-            onClose={handleTabClose}
-          />
-        )}
+    <AppShell
+      topBar={
         <div className="workspace__nav-row">
           <BoardBreadcrumbs
             breadcrumbs={breadcrumbs}
@@ -1130,6 +1104,31 @@ function App() {
             />
           </div>
         </div>
+      }
+      toolRail={
+        <div className="workspace__toolbar">
+          <button type="button" onClick={() => void handleCreateNote()}>
+            New note
+          </button>
+          <button type="button" onClick={() => void handleCreateChildBoard()}>
+            New board
+          </button>
+          <button type="button" onClick={() => void handleCreateImage()}>
+            Add image
+          </button>
+        </div>
+      }
+    >
+      <div className="workspace">
+        {tabs && (
+          <BoardTabs
+            homeBoardId={tabs.homeBoardId}
+            tabs={tabs.tabs}
+            activeBoardId={tabs.activeBoardId}
+            onActivate={handleTabActivate}
+            onClose={handleTabClose}
+          />
+        )}
         {contextMenu && (
           <div
             className="context-menu"

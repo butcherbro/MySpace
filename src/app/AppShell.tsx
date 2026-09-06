@@ -1,18 +1,25 @@
 import type { ReactNode } from "react";
 import "./app-shell.css";
 
-/**
- * The minimal application shell. This is the outermost chrome that wraps the
- * spatial canvas. In V1 it is intentionally bare: a title bar area and a main
- * region that will host the current board's canvas.
- */
-export function AppShell({ children }: { children: ReactNode }) {
+interface AppShellProps {
+  topBar: ReactNode;
+  toolRail: ReactNode;
+  children: ReactNode;
+}
+
+/** Fixed application chrome around the spatial workspace. */
+export function AppShell({ topBar, toolRail, children }: AppShellProps) {
   return (
     <div className="app-shell" data-testid="app-shell" data-theme="system">
-      <header className="app-shell__header">
-        <span className="app-shell__title">MySpace</span>
+      <header className="app-shell__top-bar" data-testid="top-bar-region">
+        {topBar}
       </header>
-      <main className="app-shell__body">{children}</main>
+      <aside className="app-shell__tool-rail" data-testid="tool-rail-region">
+        {toolRail}
+      </aside>
+      <main className="app-shell__canvas" data-testid="canvas-region">
+        {children}
+      </main>
     </div>
   );
 }
