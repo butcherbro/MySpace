@@ -455,7 +455,7 @@ test("Back recreates a board tab that was closed while inactive", async ({ page 
   const firstChildId = await page.getByTestId("board-tab").nth(1).getAttribute("data-board-id");
   expect(firstChildId).toBeTruthy();
 
-  await page.getByTestId("board-tab").first().getByRole("button", { name: "Home" }).click();
+  await page.getByTestId("board-tab").first().getByRole("tab", { name: "Home" }).click();
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await page.locator(".board-portal-card__tile").last().dblclick();
   await expect(page.getByTestId("board-tab")).toHaveCount(3);

@@ -84,4 +84,24 @@ describe("BoardTabs", () => {
     expect(screen.queryByRole("button", { name: /Close tab Home/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close tab Books" })).toBeInTheDocument();
   });
+
+  it("exposes the tab contract on focusable label buttons", () => {
+    render(
+      <BoardTabs
+        homeBoardId="home"
+        tabs={[tab("home", "Home"), tab("a", "Books")]}
+        activeBoardId="a"
+        onActivate={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0]).toHaveAttribute("aria-selected", "false");
+    expect(tabs[0]).toHaveAttribute("tabIndex", "-1");
+    expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+    expect(tabs[1]).toHaveAttribute("tabIndex", "0");
+    expect(screen.getByRole("button", { name: "Close tab Books" })).toBeInTheDocument();
+  });
 });

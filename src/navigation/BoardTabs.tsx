@@ -39,13 +39,13 @@ export function BoardTabs({
             data-testid="board-tab"
             data-board-id={tab.boardId}
             data-active={active ? "true" : "false"}
-            role="tab"
-            aria-selected={active}
-            onClick={() => onActivate(tab.boardId)}
           >
             <button
               type="button"
               className="board-tabs__label"
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
               onClick={() => onActivate(tab.boardId)}
             >
               {tab.title}
