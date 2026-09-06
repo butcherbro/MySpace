@@ -55,6 +55,15 @@ test("create a note, single-click to edit, drag without editing", async ({ page 
   await expect(page.locator(editSelector)).toHaveCount(0);
 });
 
+test("New link creates an editable note ready for a pasted URL", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "New link" }).click();
+
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+  await expect(page.locator('.note-card [contenteditable="true"]')).toHaveCount(1);
+});
+
 test("left-drag on empty canvas marquee-selects multiple notes", async ({ page }) => {
   await page.goto("/");
   for (let i = 0; i < 3; i++) {

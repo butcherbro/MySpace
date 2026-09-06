@@ -8,6 +8,7 @@ import { CreateChildBoardCommand, MoveBoardCommand, RenameBoardCommand } from ".
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
+import { ToolRail } from "./components/tool-rail/ToolRail";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -197,7 +198,10 @@ function App() {
   }, [loadQuickBoards]);
 
   const handleCreateNote = useCallback(
-    async (position?: { x: number; y: number }) => {
+    async (
+      position?: { x: number; y: number },
+      options?: { startEditing?: boolean },
+    ) => {
       if (!board) return;
       const id = idGenerator.nextId();
       // An explicit position (double-click on the empty pane) places the note
@@ -226,12 +230,19 @@ function App() {
           }),
         );
         dispatch({ type: "cardAdded", card });
+        if (options?.startEditing) {
+          dispatch({ type: "editingStarted", id });
+        }
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
     [board, dispatcher, idGenerator, notes.length],
   );
+
+  const handleCreateLink = useCallback(() => {
+    void handleCreateNote(undefined, { startEditing: true });
+  }, [handleCreateNote]);
 
   const handleCreateChildBoard = useCallback(async () => {
     if (!board) return;
@@ -1106,17 +1117,12 @@ function App() {
         </div>
       }
       toolRail={
-        <div className="workspace__toolbar">
-          <button type="button" onClick={() => void handleCreateNote()}>
-            New note
-          </button>
-          <button type="button" onClick={() => void handleCreateChildBoard()}>
-            New board
-          </button>
-          <button type="button" onClick={() => void handleCreateImage()}>
-            Add image
-          </button>
-        </div>
+        <ToolRail
+          onNewNote={() => void handleCreateNote()}
+          onNewLink={handleCreateLink}
+          onNewBoard={() => void handleCreateChildBoard()}
+          onAddImage={() => void handleCreateImage()}
+        />
       }
     >
       <div className="workspace">
