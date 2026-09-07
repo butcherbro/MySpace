@@ -11,6 +11,7 @@ import type { WorkspaceCommand } from "./workspace-command";
 export class CreateChildBoardCommand implements WorkspaceCommand {
   id: string;
   label = "Create board";
+  private trashBatchId: string | null = null;
 
   constructor(
     id: string,
@@ -20,11 +21,16 @@ export class CreateChildBoardCommand implements WorkspaceCommand {
   }
 
   async execute(gateway: WorkspaceGateway): Promise<void> {
+    if (this.trashBatchId) {
+      await gateway.restoreTrashBatch(this.trashBatchId);
+      this.trashBatchId = null;
+      return;
+    }
     await gateway.createChildBoard(this.input);
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
-    await gateway.trashBoard(this.input.boardId);
+    this.trashBatchId = await gateway.trashBoard(this.input.boardId);
   }
 }
 
@@ -81,16 +87,19 @@ export class MoveBoardCommand implements WorkspaceCommand {
       targetParentBoardId: this.nextParentBoardId,
       frame: this.nextFrame,
     });
+    this.boardRevision += 1;
+    this.portalRevision += 1;
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
     await gateway.moveBoard({
       boardId: this.boardId,
-      // After a successful execute, board and portal revisions each bumped by 1.
-      expectedBoardRevision: this.boardRevision + 1,
-      expectedPortalRevision: this.portalRevision + 1,
+      expectedBoardRevision: this.boardRevision,
+      expectedPortalRevision: this.portalRevision,
       targetParentBoardId: this.prevParentBoardId,
       frame: this.prevFrame,
     });
+    this.boardRevision += 1;
+    this.portalRevision += 1;
   }
 }

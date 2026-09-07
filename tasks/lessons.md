@@ -108,3 +108,9 @@
 - User-reported failure: dragging a card from Unsorted removed it from the rail, but it stayed invisible until the Board was reopened; later edits intermittently raised `stale_revision`.
 - Root cause: `cardReplaced` searched only the visible `cards` collection, so it could not update an object still held in `unsortedCards`. The following action then appended that old object with its pre-placement frame and revision.
 - Implementation consequence: moving Unsorted -> canvas must atomically remove the source object and append it with the exact persisted frame and incremented revision. Never compose a cross-collection transition from an update action that cannot address the source collection.
+
+## 2026-09-07 — Visible Redo requires commands to survive repeated execution
+
+- A reactive Redo button exposed an older hidden contract bug: move commands reused their initial optimistic revision after Undo, and create commands attempted a duplicate insert instead of restoring their soft-deleted entity.
+- Every move command now advances its owned expected revisions only after each successful direction. Create commands retain the Trash batch returned by Undo and restore that batch on Redo.
+- The dispatcher must peek before an asynchronous Undo/Redo and move the command between stacks only after success; otherwise a failed durable mutation silently destroys history.

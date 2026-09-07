@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CommandDispatcher } from "./command-dispatcher";
 import { MockWorkspaceGateway } from "../services/mock-workspace-gateway";
 import type { WorkspaceCommand } from "./workspace-command";
@@ -14,6 +14,79 @@ function cmd(
 }
 
 describe("CommandDispatcher", () => {
+  it("notifies subscribers after successful history changes", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    const listener = vi.fn();
+    const unsubscribe = d.subscribe(listener);
+    const command = cmd("a", "A", async () => {}, async () => {});
+
+    await d.execute(command);
+    await d.undo();
+    await d.redo();
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    unsubscribe();
+    await d.execute(cmd("b", "B", async () => {}, async () => {}));
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not notify subscribers when command execution fails", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    const listener = vi.fn();
+    d.subscribe(listener);
+
+    await expect(
+      d.execute(cmd("f", "F", async () => { throw new Error("boom"); }, async () => {})),
+    ).rejects.toThrow("boom");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("keeps history intact when undo or redo fails", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    let failUndo = true;
+    let failRedo = false;
+    const command = cmd(
+      "a",
+      "A",
+      async () => {
+        if (failRedo) throw new Error("redo failed");
+      },
+      async () => {
+        if (failUndo) throw new Error("undo failed");
+      },
+    );
+
+    await d.execute(command);
+    await expect(d.undo()).rejects.toThrow("undo failed");
+    expect(d.canUndo()).toBe(true);
+    expect(d.canRedo()).toBe(false);
+
+    failUndo = false;
+    await d.undo();
+    failRedo = true;
+    await expect(d.redo()).rejects.toThrow("redo failed");
+    expect(d.canUndo()).toBe(false);
+    expect(d.canRedo()).toBe(true);
+  });
+
+  it("serializes overlapping history operations", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    let releaseUndo!: () => void;
+    const undoGate = new Promise<void>((resolve) => { releaseUndo = resolve; });
+    const undo = vi.fn(async () => { await undoGate; });
+    await d.execute(cmd("a", "A", async () => {}, undo));
+
+    const first = d.undo();
+    const second = d.undo();
+    await Promise.resolve();
+    expect(undo).toHaveBeenCalledTimes(1);
+
+    releaseUndo();
+    expect(await first).toBe(true);
+    expect(await second).toBe(false);
+    expect(undo).toHaveBeenCalledTimes(1);
+  });
+
   it("executes a command and makes it undoable", async () => {
     const gw = new MockWorkspaceGateway();
     const d = new CommandDispatcher(gw);

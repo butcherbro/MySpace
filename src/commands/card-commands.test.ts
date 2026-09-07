@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { MoveCardToBoardCommand } from "./card-commands";
-import type { MoveCardToBoardInput, WorkspaceGateway } from "../services/workspace-gateway";
+import { CreateNoteCommand, MoveCardsCommand, MoveCardToBoardCommand } from "./card-commands";
+import type { MoveCardToBoardInput, MoveCardsInput, WorkspaceGateway } from "../services/workspace-gateway";
 
 function gatewaySpy() {
   const calls: MoveCardToBoardInput[] = [];
@@ -62,5 +62,56 @@ describe("MoveCardToBoardCommand", () => {
       targetBoardId: "home",
       frame: sourceFrame,
     });
+
+    await cmd.execute(gateway);
+    expect(calls[2]).toEqual({
+      id: "note-1",
+      expectedRevision: 5,
+      targetBoardId: "board-b",
+      frame: targetFrame,
+    });
+  });
+});
+
+describe("MoveCardsCommand", () => {
+  it("uses the current revision through repeated undo and redo", async () => {
+    const calls: MoveCardsInput[] = [];
+    const gateway = {
+      moveCards: vi.fn(async (input: MoveCardsInput) => { calls.push(input); }),
+    } as unknown as WorkspaceGateway;
+    const cmd = new MoveCardsCommand("move", [
+      { id: "note-1", revision: 7, before: sourceFrame, after: targetFrame },
+    ]);
+
+    await cmd.execute(gateway);
+    await cmd.undo(gateway);
+    await cmd.execute(gateway);
+
+    expect(calls.map((call) => call.cards[0].expectedRevision)).toEqual([7, 8, 9]);
+  });
+});
+
+describe("CreateNoteCommand", () => {
+  it("redoes a soft-deleted note by restoring its trash batch", async () => {
+    const gateway = {
+      createNote: vi.fn(async () => {}),
+      trashNote: vi.fn(async () => "batch-note"),
+      restoreTrashBatch: vi.fn(async () => {}),
+    } as unknown as WorkspaceGateway;
+    const cmd = new CreateNoteCommand("create", {
+      id: "note-1",
+      boardId: "home",
+      frame: sourceFrame,
+      zIndex: 0,
+      documentJson: { type: "doc" },
+      plainText: "",
+    });
+
+    await cmd.execute(gateway);
+    await cmd.undo(gateway);
+    await cmd.execute(gateway);
+
+    expect(gateway.createNote).toHaveBeenCalledTimes(1);
+    expect(gateway.restoreTrashBatch).toHaveBeenCalledWith("batch-note");
   });
 });

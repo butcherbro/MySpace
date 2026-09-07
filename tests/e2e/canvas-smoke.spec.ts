@@ -55,6 +55,23 @@ test("create a note, single-click to edit, drag without editing", async ({ page 
   await expect(page.locator(editSelector)).toHaveCount(0);
 });
 
+test("title-bar Undo and Redo follow workspace command history", async ({ page }) => {
+  await page.goto("/");
+
+  const undo = page.getByRole("button", { name: "Undo" });
+  const redo = page.getByRole("button", { name: "Redo" });
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeDisabled();
+
+  await page.getByRole("button", { name: "New note", exact: true }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+  await page.getByRole("button", { name: "Undo Create note" }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Redo Create note" }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+});
+
 test("New link creates an editable note ready for a pasted URL", async ({ page }) => {
   await page.goto("/");
 

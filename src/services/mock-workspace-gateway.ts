@@ -54,6 +54,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   };
 
   private quickBoards: QuickBoardDto[] = [];
+  private trashBatches = new Map<string, { cards: CardDto[]; boards: BoardSummary[] }>();
+  private trashSequence = 0;
 
   private dataVersion = 0;
 
@@ -260,22 +262,22 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   trashNote(cardId: string): Promise<string> {
-    const i = this.snapshot.cards.findIndex((c) => c.id === cardId);
-    if (i >= 0) this.snapshot.cards.splice(i, 1);
-    return Promise.resolve("batch-" + cardId);
+    return Promise.resolve(this.moveToTrash(new Set([cardId]), new Set()));
   }
 
   trashBoard(boardId: string): Promise<string> {
-    const batchId = "batch-" + boardId;
-    this.boards.delete(boardId);
-    this.snapshot.cards = this.snapshot.cards.filter(
-      (c) => c.boardId !== boardId && !(c.kind === "board_portal" && c.target.id === boardId),
-    );
-    return Promise.resolve(batchId);
+    return Promise.resolve(this.moveToTrash(new Set(), new Set([boardId])));
   }
 
   restoreTrashBatch(batchId: string): Promise<void> {
-    void batchId;
+    const batch = this.trashBatches.get(batchId);
+    if (!batch) return Promise.resolve();
+    for (const board of batch.boards) this.boards.set(board.id, structuredClone(board));
+    const activeCardIds = new Set(this.snapshot.cards.map((card) => card.id));
+    this.snapshot.cards.push(
+      ...structuredClone(batch.cards.filter((card) => !activeCardIds.has(card.id))),
+    );
+    this.trashBatches.delete(batchId);
     return Promise.resolve();
   }
 
@@ -420,14 +422,44 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   trashSelection(input: TrashSelectionInput): Promise<string> {
-    const ids = new Set(input.items.map((i) => i.id));
-    for (const item of input.items) {
-      if (item.kind === "board_portal") {
-        this.boards.delete(item.id);
+    const cardIds = new Set(
+      input.items.filter((item) => item.kind !== "board_portal").map((item) => item.id),
+    );
+    const boardIds = new Set(
+      input.items.filter((item) => item.kind === "board_portal").map((item) => item.id),
+    );
+    return Promise.resolve(this.moveToTrash(cardIds, boardIds));
+  }
+
+  private moveToTrash(cardIds: Set<string>, boardIds: Set<string>): string {
+    let foundDescendant = true;
+    while (foundDescendant) {
+      foundDescendant = false;
+      for (const board of this.boards.values()) {
+        if (board.parentBoardId && boardIds.has(board.parentBoardId) && !boardIds.has(board.id)) {
+          boardIds.add(board.id);
+          foundDescendant = true;
+        }
       }
     }
-    this.snapshot.cards = this.snapshot.cards.filter((c) => !ids.has(c.id) && !(c.kind === "board_portal" && ids.has(c.target.id)));
-    return Promise.resolve("batch");
+
+    const removedBoards = [...this.boards.values()].filter((board) => boardIds.has(board.id));
+    const removedCards = this.snapshot.cards.filter(
+      (card) =>
+        cardIds.has(card.id) ||
+        boardIds.has(card.boardId) ||
+        (card.kind === "board_portal" && boardIds.has(card.target.id)),
+    );
+    for (const board of removedBoards) this.boards.delete(board.id);
+    const removedCardIds = new Set(removedCards.map((card) => card.id));
+    this.snapshot.cards = this.snapshot.cards.filter((card) => !removedCardIds.has(card.id));
+
+    const batchId = `batch-${++this.trashSequence}`;
+    this.trashBatches.set(batchId, {
+      cards: structuredClone(removedCards),
+      boards: structuredClone(removedBoards),
+    });
+    return batchId;
   }
 
   listQuickBoards(): Promise<QuickBoardDto[]> {

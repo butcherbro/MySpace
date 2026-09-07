@@ -19,9 +19,11 @@
 - [ ] Add explicit clipboard replacement for Link previews and Board Portal covers.
 - [ ] Implement asset garbage collection for permanently deleted cards.
 - [ ] Continue the Milanote-like left rail, top navigation, contextual formatting, and Search from `docs/plans/2026-09-04-spatial-workspace-interface.md`.
-- [ ] Add visible Undo/Redo controls to the top-right command group. Reuse the
+- [x] Add visible Undo/Redo controls to the top-right command group. Reuse the
   existing `CommandDispatcher` and `Command-Z` handlers; include accurate disabled
   states and keep Tiptap text undo ownership while an editor has focus.
+- [x] Add session-only collapse/expand behavior to the vertical Quick Boards rail;
+  keep the collapsed edge available as a Board Portal drop target.
 - [ ] Implement the accepted Quiet Desk visual shell and dense-board acceptance gate from `docs/plans/2026-09-05-quiet-desk-visual-shell.md`.
 
 ## Backlog — user-requested features (not yet scheduled)

@@ -23,6 +23,7 @@ import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardTabs } from "./navigation/BoardTabs";
 import { QuickBoardsRail } from "./navigation/QuickBoardsRail";
+import { UndoRedoControls } from "./navigation/UndoRedoControls";
 import { UnsortedPanel } from "./navigation/UnsortedPanel";
 import {
   activateBoardTab,
@@ -1273,9 +1274,25 @@ function App() {
 
   // Reload the current board (no history push). Used to reconcile UI with the
   // database after undo/redo.
-  const reloadCurrentBoard = useCallback(() => {
-    if (board) void navigateTo(board.id);
+  const reloadCurrentBoard = useCallback(async () => {
+    if (board) await navigateTo(board.id);
   }, [board, navigateTo]);
+
+  const handleWorkspaceUndo = useCallback(async () => {
+    try {
+      if (await dispatcher.undo()) await reloadCurrentBoard();
+    } catch (error) {
+      dispatch({ type: "failed", message: errorMessage(error) });
+    }
+  }, [dispatcher, reloadCurrentBoard]);
+
+  const handleWorkspaceRedo = useCallback(async () => {
+    try {
+      if (await dispatcher.redo()) await reloadCurrentBoard();
+    } catch (error) {
+      dispatch({ type: "failed", message: errorMessage(error) });
+    }
+  }, [dispatcher, reloadCurrentBoard]);
 
   // Board cover actions: set from clipboard, choose a file, or remove. Each
   // updates the local portal projection immediately (cardReplaced) so the tile
@@ -1406,7 +1423,7 @@ function App() {
         .execute(new RenameBoardCommand(idGenerator.nextId(), boardId, title, prevTitle))
         .then(() => {
           // Reload the board so portal titles + breadcrumbs reflect the new name.
-          reloadCurrentBoard();
+          return reloadCurrentBoard();
         })
         .catch((e) => {
           dispatch({ type: "failed", message: errorMessage(e) });
@@ -1498,9 +1515,9 @@ function App() {
       } else if (e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) {
-          void dispatcher.redo().then(() => reloadCurrentBoard());
+          void handleWorkspaceRedo();
         } else {
-          void dispatcher.undo().then(() => reloadCurrentBoard());
+          void handleWorkspaceUndo();
         }
       } else if (e.key.toLowerCase() === "c") {
         e.preventDefault();
@@ -1509,17 +1526,24 @@ function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, dispatcher, handleDeleteSelection, handleCopySelectionImages, reloadCurrentBoard]);
+  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages]);
 
   return (
     <AppShell
       topBar={
-        <BoardBreadcrumbs
-          breadcrumbs={breadcrumbs}
-          currentBoardId={board?.id ?? ""}
-          dropTargetBoardId={dropTargetBoardId}
-          onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
-        />
+        <>
+          <BoardBreadcrumbs
+            breadcrumbs={breadcrumbs}
+            currentBoardId={board?.id ?? ""}
+            dropTargetBoardId={dropTargetBoardId}
+            onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
+          />
+          <UndoRedoControls
+            dispatcher={dispatcher}
+            onUndo={handleWorkspaceUndo}
+            onRedo={handleWorkspaceRedo}
+          />
+        </>
       }
       toolRail={
         <ToolRail

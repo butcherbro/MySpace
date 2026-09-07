@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MoveBoardCommand } from "./board-commands";
+import { CreateChildBoardCommand, MoveBoardCommand } from "./board-commands";
 import type { MoveBoardInput, WorkspaceGateway } from "../services/workspace-gateway";
 
 function gatewaySpy() {
@@ -66,5 +66,38 @@ describe("MoveBoardCommand", () => {
       targetParentBoardId: "home",
       frame: prevFrame,
     });
+
+    await cmd.execute(gateway);
+    expect(calls[2]).toEqual({
+      boardId: "board-a",
+      expectedBoardRevision: 5,
+      expectedPortalRevision: 7,
+      targetParentBoardId: "board-b",
+      frame: nextFrame,
+    });
+  });
+});
+
+describe("CreateChildBoardCommand", () => {
+  it("redoes a soft-deleted board by restoring its trash batch", async () => {
+    const gateway = {
+      createChildBoard: vi.fn(async () => {}),
+      trashBoard: vi.fn(async () => "batch-board"),
+      restoreTrashBatch: vi.fn(async () => {}),
+    } as unknown as WorkspaceGateway;
+    const cmd = new CreateChildBoardCommand("create", {
+      parentBoardId: "home",
+      boardId: "board-a",
+      portalCardId: "portal-a",
+      frame: nextFrame,
+      title: "Board A",
+    });
+
+    await cmd.execute(gateway);
+    await cmd.undo(gateway);
+    await cmd.execute(gateway);
+
+    expect(gateway.createChildBoard).toHaveBeenCalledTimes(1);
+    expect(gateway.restoreTrashBatch).toHaveBeenCalledWith("batch-board");
   });
 });

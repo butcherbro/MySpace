@@ -33,6 +33,7 @@ export class MoveCardsCommand implements WorkspaceCommand {
         frame: m.after,
       })),
     });
+    this.moves = this.moves.map((move) => ({ ...move, revision: move.revision + 1 }));
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
@@ -41,10 +42,11 @@ export class MoveCardsCommand implements WorkspaceCommand {
     await gateway.moveCards({
       cards: this.moves.map((m) => ({
         id: m.id,
-        expectedRevision: m.revision + 1,
+        expectedRevision: m.revision,
         frame: m.before,
       })),
     });
+    this.moves = this.moves.map((move) => ({ ...move, revision: move.revision + 1 }));
   }
 
   mergeWith(): WorkspaceCommand<unknown> | null {
@@ -56,6 +58,7 @@ export class MoveCardsCommand implements WorkspaceCommand {
 export class CreateNoteCommand implements WorkspaceCommand {
   id: string;
   label = "Create note";
+  private trashBatchId: string | null = null;
 
   constructor(
     id: string,
@@ -65,11 +68,16 @@ export class CreateNoteCommand implements WorkspaceCommand {
   }
 
   async execute(gateway: WorkspaceGateway): Promise<void> {
+    if (this.trashBatchId) {
+      await gateway.restoreTrashBatch(this.trashBatchId);
+      this.trashBatchId = null;
+      return;
+    }
     await gateway.createNote(this.input);
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
-    await gateway.trashNote(this.input.id);
+    this.trashBatchId = await gateway.trashNote(this.input.id);
   }
 }
 
@@ -87,7 +95,7 @@ export class MoveCardToBoardCommand implements WorkspaceCommand {
     private cardId: string,
     private sourceBoardId: string,
     private sourceFrame: Frame,
-    private sourceRevision: number,
+    private currentRevision: number,
     private targetBoardId: string,
     private targetFrame: Frame,
   ) {
@@ -97,10 +105,11 @@ export class MoveCardToBoardCommand implements WorkspaceCommand {
   async execute(gateway: WorkspaceGateway): Promise<void> {
     await gateway.moveCardToBoard({
       id: this.cardId,
-      expectedRevision: this.sourceRevision,
+      expectedRevision: this.currentRevision,
       targetBoardId: this.targetBoardId,
       frame: this.targetFrame,
     });
+    this.currentRevision += 1;
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
@@ -108,10 +117,11 @@ export class MoveCardToBoardCommand implements WorkspaceCommand {
     // board at its original frame.
     await gateway.moveCardToBoard({
       id: this.cardId,
-      expectedRevision: this.sourceRevision + 1,
+      expectedRevision: this.currentRevision,
       targetBoardId: this.sourceBoardId,
       frame: this.sourceFrame,
     });
+    this.currentRevision += 1;
   }
 
   mergeWith(): WorkspaceCommand<unknown> | null {
