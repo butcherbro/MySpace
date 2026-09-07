@@ -170,10 +170,13 @@ export function reducer(
     case "cardMovedToUnsorted": {
       const card = state.cards.find((c) => c.id === action.id);
       if (!card) return state;
+      // The backend bumped the card's revision on the move; reflect it so a
+      // later Place uses the current revision.
+      const moved = { ...card, revision: card.revision + 1 };
       return {
         ...state,
         cards: state.cards.filter((c) => c.id !== action.id),
-        unsortedCards: [...state.unsortedCards, card],
+        unsortedCards: [...state.unsortedCards, moved],
       };
     }
 

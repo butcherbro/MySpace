@@ -302,6 +302,41 @@ function App() {
     [state.unsortedCards, state.cards, board, gateway],
   );
 
+  // Drag a card out of the Unsorted panel onto the canvas: remember which card
+  // is being dragged so the canvas drop can place it exactly at the pointer.
+  const unsortedDragCardIdRef = useRef<string | null>(null);
+  const handleUnsortedDragStart = useCallback((cardId: string) => {
+    unsortedDragCardIdRef.current = cardId;
+  }, []);
+
+  const handleUnsortedDrop = useCallback(
+    (clientX: number, clientY: number) => {
+      const cardId = unsortedDragCardIdRef.current;
+      unsortedDragCardIdRef.current = null;
+      if (!cardId) return;
+      const card = state.unsortedCards.find((c) => c.id === cardId);
+      if (!card) return;
+      const flow = screenToFlowRef.current;
+      const point = flow ? flow(clientX, clientY) : { x: 40, y: 40 };
+      const frame = {
+        x: point.x - card.frame.width / 2,
+        y: point.y - card.frame.height / 2,
+        width: card.frame.width,
+        height: card.frame.height,
+      };
+      void gateway
+        .placeUnsortedCard({ id: cardId, expectedRevision: card.revision, frame })
+        .then(() => {
+          dispatch({ type: "cardReplaced", id: cardId, card: { ...card, frame } });
+          dispatch({ type: "unsortedCardPlaced", id: cardId });
+        })
+        .catch((e) => {
+          dispatch({ type: "failed", message: errorMessage(e) });
+        });
+    },
+    [state.unsortedCards, gateway],
+  );
+
   const handleCreateChildBoard = useCallback(async () => {
     if (!board) return;
     const boardId = idGenerator.nextId();
@@ -1088,10 +1123,12 @@ function App() {
             .then(() => {
               dispatch({ type: "cardsRemoved", ids: drag.cardIds });
               setCrossBoardDrag(commitCrossBoardDrag(drag));
+              crossBoardDragRef.current = null;
             })
             .catch((err) => {
               dispatch({ type: "failed", message: errorMessage(err) });
               setCrossBoardDrag(cancelCrossBoardDrag(drag));
+              crossBoardDragRef.current = null;
             });
           return true; // consumed
         }
@@ -1387,7 +1424,11 @@ function App() {
       }
       unsortedRail={
         state.unsortedCards.length > 0 ? (
-          <UnsortedPanel cards={state.unsortedCards} onPlace={handlePlaceUnsortedCard} />
+          <UnsortedPanel
+            cards={state.unsortedCards}
+            onPlace={handlePlaceUnsortedCard}
+            onDragStartCard={handleUnsortedDragStart}
+          />
         ) : undefined
       }
     >
@@ -1531,7 +1572,20 @@ function App() {
               </div>
             );
           })()}
-        <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
+        <div
+          className="workspace__canvas"
+          data-testid="canvas"
+          ref={canvasRef}
+          onDragOver={(e) => {
+            // Allow dropping an Unsorted card onto the canvas.
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            handleUnsortedDrop(e.clientX, e.clientY);
+          }}
+        >
           <CanvasAdapter
             cards={canvasCards}
             viewport={viewport}
