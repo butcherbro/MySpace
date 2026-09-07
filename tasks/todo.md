@@ -2,6 +2,12 @@
 
 ## Current V1 delta — 2026-09-05
 
+- [ ] Add the reversible Trash UI now: fixed bottom-left button, non-zero batch
+  count, batch inspection, and batch restore. Permanent Empty Trash and asset GC
+  remain a separately confirmed destructive slice.
+- [ ] Add mandatory Search immediately after the reversible Trash UI. Cover Note
+  text, Link title/URL/description, and Board titles, with navigation to results.
+
 - [x] Add real Link Card metadata enrichment with bounded HTTP, YouTube/Open Graph support, and persisted fallback states.
 - [x] Cache preview and favicon files as managed assets.
 - [x] Auto-grow enriched Link Cards so preview, title, and description are visible without manual resize.
