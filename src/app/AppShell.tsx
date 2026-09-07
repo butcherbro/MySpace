@@ -39,14 +39,14 @@ export function AppShell({ topBar, toolRail, rightRail, unsortedRail, children }
       <main className="app-shell__canvas" data-testid="canvas-region">
         {children}
       </main>
-      {rightRail && (
-        <aside className="app-shell__right-rail" data-testid="right-rail-region">
-          {rightRail}
-        </aside>
-      )}
       {hasUnsorted && (
         <aside className="app-shell__unsorted-rail" data-testid="unsorted-rail-region">
           {unsortedRail}
+        </aside>
+      )}
+      {rightRail && (
+        <aside className="app-shell__right-rail" data-testid="right-rail-region">
+          {rightRail}
         </aside>
       )}
     </div>

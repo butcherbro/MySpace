@@ -80,6 +80,22 @@ function App() {
   useEffect(() => {
     crossBoardDragRef.current = crossBoardDrag;
   }, [crossBoardDrag]);
+
+  // Once the target board opens (previewing), React Flow's drag stops firing, so
+  // we take over pointer tracking on window: the ghost follows the cursor and
+  // pointerup resolves the drop.
+  const crossBoardWindowMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
+  const crossBoardWindowUpRef = useRef<((e: PointerEvent) => void) | null>(null);
+  const cleanupCrossBoardWindow = useCallback(() => {
+    if (crossBoardWindowMoveRef.current) {
+      window.removeEventListener("pointermove", crossBoardWindowMoveRef.current);
+      crossBoardWindowMoveRef.current = null;
+    }
+    if (crossBoardWindowUpRef.current) {
+      window.removeEventListener("pointerup", crossBoardWindowUpRef.current);
+      crossBoardWindowUpRef.current = null;
+    }
+  }, []);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
@@ -1051,6 +1067,30 @@ function App() {
   // breadcrumb ancestor trail. Only the hovered board id is kept in state; the
   // actual drop is routed through handleCardDroppedOnPortal.
   const lastDraggedCardIdRef = useRef<string | null>(null);
+
+  // Ref to the drag-end resolver so window pointer tracking (started after the
+  // target board opens) can resolve the drop without ordering issues.
+  const handleCardDragEndRef = useRef<(() => boolean) | null>(null);
+
+  const startCrossBoardWindowTracking = useCallback(() => {
+    cleanupCrossBoardWindow();
+    const move = (e: PointerEvent) => {
+      const drag = crossBoardDragRef.current;
+      if (!drag) return;
+      const pointerBoardId = boardRef.current?.id ?? null;
+      setCrossBoardDrag((prev) =>
+        prev ? moveCrossBoardDrag(prev, { x: e.clientX, y: e.clientY }, pointerBoardId) : prev,
+      );
+    };
+    const up = () => {
+      cleanupCrossBoardWindow();
+      handleCardDragEndRef.current?.();
+    };
+    crossBoardWindowMoveRef.current = move;
+    crossBoardWindowUpRef.current = up;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }, [cleanupCrossBoardWindow]);
   const handleCardDragMove = useCallback((e: { cardId: string; clientX: number; clientY: number }) => {
     lastDraggedCardIdRef.current = e.cardId;
     // Start a cross-board drag session on the first real move of a card.
@@ -1092,6 +1132,9 @@ function App() {
           hoverTimerRef.current = setTimeout(() => {
             void navigateTo(tabBoardId, { tabMode: "open" }).then(() => {
               setCrossBoardDrag((prev) => (prev ? targetBoardLoaded(prev) : prev));
+              // React Flow's drag stops after the snapshot swap; take over on
+              // window so the ghost keeps following and pointerup resolves.
+              startCrossBoardWindowTracking();
             });
           }, 600);
         }
@@ -1103,6 +1146,7 @@ function App() {
   }, [navigateTo]);
 
   const handleCardDragEnd = useCallback((): boolean => {
+    cleanupCrossBoardWindow();
     const cardId = lastDraggedCardIdRef.current;
     const targetBoardId = dropTargetBoardIdRef.current;
     const overQuick = overQuickBoardsRef.current;
@@ -1186,7 +1230,13 @@ function App() {
       return true; // consumed: moved to a portal
     }
     return false;
-  }, [handleCardDroppedOnPortal, handleQuickBoardPin, gateway, dispatcher, idGenerator, navigateTo]);
+  }, [handleCardDroppedOnPortal, handleQuickBoardPin, gateway, dispatcher, idGenerator, navigateTo, cleanupCrossBoardWindow]);
+
+  // Keep the drag-end resolver in a ref so window pointer tracking (started
+  // after the target board opens) can resolve the drop.
+  useEffect(() => {
+    handleCardDragEndRef.current = handleCardDragEnd;
+  }, [handleCardDragEnd]);
 
   // Reload the current board (no history push). Used to reconcile UI with the
   // database after undo/redo.

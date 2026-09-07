@@ -13,7 +13,7 @@
 }
 
 .app-shell--with-unsorted {
-  grid-template-columns: 56px minmax(0, 1fr) 156px 200px;
+  grid-template-columns: 56px minmax(0, 1fr) 200px 156px;
 }
 
 .app-shell__title-bar {
@@ -64,7 +64,7 @@
   overflow: hidden;
 }
 
-.app-shell__right-rail {
+.app-shell__unsorted-rail {
   grid-column: 3;
   grid-row: 2;
   min-height: 0;
@@ -75,7 +75,7 @@
   overflow: hidden;
 }
 
-.app-shell__unsorted-rail {
+.app-shell__right-rail {
   grid-column: 4;
   grid-row: 2;
   min-height: 0;

@@ -35,7 +35,18 @@ export function UnsortedPanel({ cards, onPlace, onDragStartCard }: UnsortedPanel
               onDragStartCard?.(card.id, e.clientX, e.clientY);
             }}
           >
-            <span className="unsorted-panel__thumb">{cardTitle(card)}</span>
+            <span className="unsorted-panel__thumb">
+              {card.kind === "image" && card.asset ? (
+                <img
+                  className="unsorted-panel__mini"
+                  src={`myspace-asset://localhost/${card.asset.filePath}`}
+                  alt=""
+                  draggable={false}
+                />
+              ) : (
+                cardTitle(card)
+              )}
+            </span>
             <button
               type="button"
               className="unsorted-panel__place"
