@@ -276,6 +276,30 @@ export interface TrashSelectionInput {
   items: TrashItemInput[];
 }
 
+/** A single representative top-level item in a Trash batch. */
+export interface TrashEntryDto {
+  id: string;
+  kind: "note" | "image" | "embed" | "board";
+  title: string;
+}
+
+/** One recoverable Trash batch: a single atomic delete operation. */
+export interface TrashBatchDto {
+  batchId: string;
+  deletedAt: number;
+  items: TrashEntryDto[];
+  boardCount: number;
+  cardCount: number;
+}
+
+/** The Trash read model, newest batch first. */
+export interface TrashSummaryDto {
+  batches: TrashBatchDto[];
+  batchCount: number;
+  boardCount: number;
+  cardCount: number;
+}
+
 export interface AddQuickBoardInput {
   boardId: string;
 }
@@ -322,6 +346,7 @@ export interface WorkspaceGateway {
   enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto>;
   updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void>;
   trashSelection(input: TrashSelectionInput): Promise<string>;
+  listTrash(): Promise<TrashSummaryDto>;
   listQuickBoards(): Promise<QuickBoardDto[]>;
   addQuickBoard(input: AddQuickBoardInput): Promise<void>;
   removeQuickBoard(boardId: string): Promise<void>;

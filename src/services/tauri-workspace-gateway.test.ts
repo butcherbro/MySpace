@@ -160,4 +160,17 @@ describe("TauriWorkspaceGateway", () => {
     expect(result.kind).toBe("embed");
     expect(result.title).toBe("Example Domain");
   });
+
+  it("calls list_trash with no arguments", async () => {
+    invokeMock.mockResolvedValue({
+      batches: [],
+      batchCount: 0,
+      boardCount: 0,
+      cardCount: 0,
+    });
+    const gw = new TauriWorkspaceGateway();
+    const result = await gw.listTrash();
+    expect(invokeMock).toHaveBeenCalledWith("list_trash", {});
+    expect(result.batchCount).toBe(0);
+  });
 });

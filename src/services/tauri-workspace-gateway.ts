@@ -24,6 +24,7 @@ import type {
   SaveViewportInput,
   SetBoardCoverInput,
   TrashSelectionInput,
+  TrashSummaryDto,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
@@ -134,6 +135,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   trashSelection(input: TrashSelectionInput): Promise<string> {
     return invoke<string>("trash_selection", { input });
+  }
+
+  listTrash(): Promise<TrashSummaryDto> {
+    return invoke<TrashSummaryDto>("list_trash", {});
   }
 
   listQuickBoards(): Promise<QuickBoardDto[]> {

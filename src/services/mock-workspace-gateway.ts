@@ -22,7 +22,9 @@ import type {
   ReorderQuickBoardsInput,
   SaveViewportInput,
   SetBoardCoverInput,
+  TrashEntryDto,
   TrashSelectionInput,
+  TrashSummaryDto,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
@@ -54,7 +56,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   };
 
   private quickBoards: QuickBoardDto[] = [];
-  private trashBatches = new Map<string, { cards: CardDto[]; boards: BoardSummary[] }>();
+  private trashBatches = new Map<
+    string,
+    { cards: CardDto[]; boards: BoardSummary[]; deletedAt: number }
+  >();
   private trashSequence = 0;
 
   private dataVersion = 0;
@@ -431,6 +436,47 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve(this.moveToTrash(cardIds, boardIds));
   }
 
+  listTrash(): Promise<TrashSummaryDto> {
+    const batches = [...this.trashBatches.entries()].map(([batchId, batch]) => {
+      const boardIds = new Set(batch.boards.map((board) => board.id));
+
+      const boardItems: TrashEntryDto[] = batch.boards
+        .filter((board) => !board.parentBoardId || !boardIds.has(board.parentBoardId))
+        .map((board) => ({
+          id: board.id,
+          kind: "board" as const,
+          title: board.title,
+        }))
+        .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+
+      const cardItems: TrashEntryDto[] = batch.cards
+        .filter((card) => card.kind !== "board_portal" && !boardIds.has(card.boardId))
+        .map((card) => ({
+          id: card.id,
+          kind: card.kind as TrashEntryDto["kind"],
+          title: cardTitle(card),
+        }))
+        .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+
+      return {
+        batchId,
+        deletedAt: batch.deletedAt,
+        items: [...boardItems, ...cardItems],
+        boardCount: batch.boards.length,
+        cardCount: batch.cards.length,
+      };
+    });
+
+    batches.sort((a, b) => b.deletedAt - a.deletedAt || b.batchId.localeCompare(a.batchId));
+
+    return Promise.resolve({
+      batches,
+      batchCount: batches.length,
+      boardCount: batches.reduce((sum, batch) => sum + batch.boardCount, 0),
+      cardCount: batches.reduce((sum, batch) => sum + batch.cardCount, 0),
+    });
+  }
+
   private moveToTrash(cardIds: Set<string>, boardIds: Set<string>): string {
     let foundDescendant = true;
     while (foundDescendant) {
@@ -458,6 +504,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     this.trashBatches.set(batchId, {
       cards: structuredClone(removedCards),
       boards: structuredClone(removedBoards),
+      deletedAt: Date.now(),
     });
     return batchId;
   }
@@ -602,5 +649,18 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
 
     return crumbs;
+  }
+}
+
+function cardTitle(card: CardDto): string {
+  switch (card.kind) {
+    case "note":
+      return card.plainText || "";
+    case "image":
+      return card.captionPlainText || card.asset.fileName || "";
+    case "embed":
+      return card.title || card.sourceUrl || "";
+    default:
+      return "";
   }
 }
