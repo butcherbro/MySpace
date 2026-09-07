@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
+import {
+  cancelCrossBoardDrag,
+  commitCrossBoardDrag,
+  createCrossBoardDrag,
+  hoverCrossBoardTab,
+  moveCrossBoardDrag,
+  targetBoardLoaded,
+  type CrossBoardDragState,
+} from "./canvas/cross-board-drag";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand } from "./commands/card-commands";
@@ -62,6 +71,15 @@ function App() {
   // drag, so a drop pins a reference instead of reparenting the Board.
   const overQuickBoardsRef = useRef<boolean>(false);
   const [dropActiveQuickBoards, setDropActiveQuickBoards] = useState(false);
+
+  // Cross-board drag: app-owned state machine for dragging cards onto a Board
+  // tab, opening that board, and dropping into its Unsorted panel.
+  const [crossBoardDrag, setCrossBoardDrag] = useState<CrossBoardDragState | null>(null);
+  const crossBoardDragRef = useRef<CrossBoardDragState | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    crossBoardDragRef.current = crossBoardDrag;
+  }, [crossBoardDrag]);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
@@ -707,51 +725,6 @@ function App() {
     [gateway, loadQuickBoards],
   );
 
-  // During a card drag, resolve the board the pointer is over by hit-testing the
-  // breadcrumb ancestor trail. Only the hovered board id is kept in state; the
-  // actual drop is routed through handleCardDroppedOnPortal.
-  const lastDraggedCardIdRef = useRef<string | null>(null);
-  const handleCardDragMove = useCallback((e: { cardId: string; clientX: number; clientY: number }) => {
-    lastDraggedCardIdRef.current = e.cardId;
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const crumbEl = el?.closest?.("[data-board-drop-id]") as HTMLElement | null;
-    const boardId = crumbEl?.getAttribute("data-board-drop-id") ?? null;
-    dropTargetBoardIdRef.current = boardId;
-    setDropTargetBoardId(boardId);
-    // Also hit-test the Quick Boards region so a Board Portal drop there pins a
-    // reference instead of reparenting the Board.
-    const quickEl = el?.closest?.("[data-quick-boards-drop]") as HTMLElement | null;
-    const overQuick = Boolean(quickEl);
-    overQuickBoardsRef.current = overQuick;
-    setDropActiveQuickBoards(overQuick);
-  }, []);
-
-  const handleCardDragEnd = useCallback((): boolean => {
-    const cardId = lastDraggedCardIdRef.current;
-    const targetBoardId = dropTargetBoardIdRef.current;
-    const overQuick = overQuickBoardsRef.current;
-    dropTargetBoardIdRef.current = null;
-    overQuickBoardsRef.current = false;
-    setDropTargetBoardId(null);
-    setDropActiveQuickBoards(false);
-    lastDraggedCardIdRef.current = null;
-    if (cardId && overQuick) {
-      // Pin the dragged Board Portal as a Quick Board reference (no move/reparent).
-      const card = cardsRef.current.find((c) => c.id === cardId);
-      if (card?.kind === "board_portal") {
-        handleQuickBoardPin(card.target.id);
-        return true; // consumed: do not also persist a plain reposition
-      }
-      // Quick Boards only accepts Board Portals. A leaf card dragged across the
-      // rail must still follow the normal canvas-position persistence path.
-    }
-    if (cardId && targetBoardId) {
-      handleCardDroppedOnPortal(cardId, targetBoardId);
-      return true; // consumed: moved to a portal
-    }
-    return false;
-  }, [handleCardDroppedOnPortal, handleQuickBoardPin]);
-
   const handleDeleteSelection = useCallback(async () => {
     if (state.selection.length === 0) return;
     const items = state.selection
@@ -1006,6 +979,126 @@ function App() {
     },
     [gateway],
   );
+
+  // During a card drag, resolve the board the pointer is over by hit-testing the
+  // breadcrumb ancestor trail. Only the hovered board id is kept in state; the
+  // actual drop is routed through handleCardDroppedOnPortal.
+  const lastDraggedCardIdRef = useRef<string | null>(null);
+  const handleCardDragMove = useCallback((e: { cardId: string; clientX: number; clientY: number }) => {
+    lastDraggedCardIdRef.current = e.cardId;
+    // Start a cross-board drag session on the first real move of a card.
+    if (!crossBoardDragRef.current) {
+      const card = cardsRef.current.find((c) => c.id === e.cardId);
+      if (card) {
+        const drag = createCrossBoardDrag([e.cardId], card.boardId);
+        crossBoardDragRef.current = drag;
+        setCrossBoardDrag(drag);
+      }
+    }
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const crumbEl = el?.closest?.("[data-board-drop-id]") as HTMLElement | null;
+    const boardId = crumbEl?.getAttribute("data-board-drop-id") ?? null;
+    dropTargetBoardIdRef.current = boardId;
+    setDropTargetBoardId(boardId);
+    // Also hit-test the Quick Boards region so a Board Portal drop there pins a
+    // reference instead of reparenting the Board.
+    const quickEl = el?.closest?.("[data-quick-boards-drop]") as HTMLElement | null;
+    const overQuick = Boolean(quickEl);
+    overQuickBoardsRef.current = overQuick;
+    setDropActiveQuickBoards(overQuick);
+
+    // Cross-board: hit-test a Board tab. Hovering a tab for 600ms opens that
+    // board so the drag can continue inside it (ghost follows the cursor).
+    const tabEl = el?.closest?.("[data-testid='board-tab']") as HTMLElement | null;
+    const tabBoardId = tabEl?.getAttribute("data-board-id") ?? null;
+    const drag = crossBoardDragRef.current;
+    if (drag) {
+      // Track the board under the pointer (the currently open board's id).
+      const pointerBoardId = boardRef.current?.id ?? null;
+      setCrossBoardDrag((prev) =>
+        prev ? moveCrossBoardDrag(prev, { x: e.clientX, y: e.clientY }, pointerBoardId) : prev,
+      );
+      if (tabBoardId && tabBoardId !== drag.sourceBoardId) {
+        if (drag.hoverBoardId !== tabBoardId) {
+          setCrossBoardDrag((prev) => (prev ? hoverCrossBoardTab(prev, tabBoardId) : prev));
+          if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+          hoverTimerRef.current = setTimeout(() => {
+            void navigateTo(tabBoardId, { tabMode: "open" }).then(() => {
+              setCrossBoardDrag((prev) => (prev ? targetBoardLoaded(prev) : prev));
+            });
+          }, 600);
+        }
+      } else if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    }
+  }, [navigateTo]);
+
+  const handleCardDragEnd = useCallback((): boolean => {
+    const cardId = lastDraggedCardIdRef.current;
+    const targetBoardId = dropTargetBoardIdRef.current;
+    const overQuick = overQuickBoardsRef.current;
+    dropTargetBoardIdRef.current = null;
+    overQuickBoardsRef.current = false;
+    setDropTargetBoardId(null);
+    setDropActiveQuickBoards(false);
+    lastDraggedCardIdRef.current = null;
+
+    // Cross-board drag: resolve the final drop. Only a drag that actually
+    // reached the previewing phase (a tab was hovered and its board opened)
+    // consumes the drop; otherwise fall through to the normal move path.
+    const drag = crossBoardDragRef.current;
+    if (drag) {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+      const target = drag.hoverBoardId;
+      const overTargetCanvas = drag.pointerBoardId === target;
+      if (drag.phase === "previewing" && target && overTargetCanvas) {
+        // Commit: move the dragged cards into the target board's Unsorted panel.
+        const items = drag.cardIds
+          .map((id) => {
+            const card = cardsRef.current.find((c) => c.id === id);
+            return card ? { id, expectedRevision: card.revision } : null;
+          })
+          .filter((x): x is { id: string; expectedRevision: number } => x !== null);
+        if (items.length > 0) {
+          void gateway
+            .moveCardsToBoardUnsorted({ targetBoardId: target, cards: items })
+            .then(() => {
+              dispatch({ type: "cardsRemoved", ids: drag.cardIds });
+              setCrossBoardDrag(commitCrossBoardDrag(drag));
+            })
+            .catch((err) => {
+              dispatch({ type: "failed", message: errorMessage(err) });
+              setCrossBoardDrag(cancelCrossBoardDrag(drag));
+            });
+          return true; // consumed
+        }
+      }
+      // Not consumed: clear the drag session and let the normal path run.
+      setCrossBoardDrag(null);
+      crossBoardDragRef.current = null;
+    }
+
+    if (cardId && overQuick) {
+      // Pin the dragged Board Portal as a Quick Board reference (no move/reparent).
+      const card = cardsRef.current.find((c) => c.id === cardId);
+      if (card?.kind === "board_portal") {
+        handleQuickBoardPin(card.target.id);
+        return true; // consumed: do not also persist a plain reposition
+      }
+      // Quick Boards only accepts Board Portals. A leaf card dragged across the
+      // rail must still follow the normal canvas-position persistence path.
+    }
+    if (cardId && targetBoardId) {
+      handleCardDroppedOnPortal(cardId, targetBoardId);
+      return true; // consumed: moved to a portal
+    }
+    return false;
+  }, [handleCardDroppedOnPortal, handleQuickBoardPin, gateway]);
 
   // Reload the current board (no history push). Used to reconcile UI with the
   // database after undo/redo.
@@ -1399,6 +1492,25 @@ function App() {
             onRetry={() => dispatch({ type: "clearError" })}
           />
         )}
+        {crossBoardDrag?.phase === "previewing" &&
+          (() => {
+            const card = state.cards.find((c) => c.id === crossBoardDrag.cardIds[0]);
+            if (!card) return null;
+            return (
+              <div
+                className="cross-board-ghost"
+                data-testid="cross-board-ghost"
+                style={{
+                  left: crossBoardDrag.pointer.x,
+                  top: crossBoardDrag.pointer.y,
+                  width: card.frame.width,
+                  height: card.frame.height,
+                }}
+              >
+                {card.kind === "note" ? card.plainText || "Note" : card.kind}
+              </div>
+            );
+          })()}
         <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
           <CanvasAdapter
             cards={canvasCards}

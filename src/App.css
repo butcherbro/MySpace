@@ -30,6 +30,25 @@
   border-bottom: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
+/* Ghost copy of a card while cross-board dragging (previewing phase). */
+.cross-board-ghost {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.6;
+  background: var(--paper-raised);
+  border: 1px dashed var(--edge-strong);
+  border-radius: var(--radius-note);
+  box-shadow: var(--shadow-hover);
+  padding: 8px;
+  font-size: 13px;
+  color: var(--ink-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .workspace__canvas {
   flex: 1;
   position: relative;
