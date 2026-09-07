@@ -2,11 +2,13 @@
 
 ## Current V1 delta — 2026-09-05
 
-- [ ] Add the reversible Trash UI now: fixed bottom-left button, non-zero batch
-  count, batch inspection, and batch restore. Permanent Empty Trash and asset GC
-  remain a separately confirmed destructive slice.
-- [ ] Add mandatory Search immediately after the reversible Trash UI. Cover Note
-  text, Link title/URL/description, and Board titles, with navigation to results.
+- [x] Add the reversible Trash UI: fixed bottom-left button, non-zero batch
+  count, batch inspection, and batch restore (commit range `7cee4ee..41fa1d1`).
+  Permanent Empty Trash and asset GC remain a separately confirmed destructive
+  slice (see backlog #8).
+- [ ] Add mandatory Search after the reversible Trash UI. Spec drafted in
+  `docs/specs/search.md`; three scope decisions (global vs current board,
+  ranking, highlight) are OPEN and must be agreed before implementation.
 
 - [x] Add real Link Card metadata enrichment with bounded HTTP, YouTube/Open Graph support, and persisted fallback states.
 - [x] Cache preview and favicon files as managed assets.
@@ -115,13 +117,15 @@ architecture pass before sizing; `blocked` = depends on another item.
 ### 8. Empty Trash + asset garbage collection
 
 - `planned` — detailed TDD plan:
-  `docs/plans/2026-09-06-trash-view-and-empty-trash.md`. No Trash UI exists yet;
-  soft-delete marks
+  `docs/plans/2026-09-06-trash-view-and-empty-trash.md`. Soft-delete marks
   `deleted_at`/`trash_batch_id` but never removes files from `assets/` (on purpose,
-  so Undo/restore keep working). The accepted UX is a fixed bottom-left Trash
-  button with a non-zero batch count and a full drawer for inspecting and restoring
-  deleted work. This reversible slice ships first. A separate later slice adds a
-  permanently confirmed "Empty Trash" that
+  so Undo/restore keep working).
+- `done` (reversible slice) — fixed bottom-left Trash button with non-zero batch
+  count, a full drawer for inspecting/restoring deleted work, batch-level restore
+  (mixed selections and Board subtrees are one atomic unit), and keyboard/focus
+  handling. Backend `list_trash` read model groups by `trash_batch_id` and shows
+  only top-level representatives. Commit range `7cee4ee..41fa1d1`.
+- `next` (destructive slice) — permanently confirmed "Empty Trash" that
   hard-deletes trashed cards/detail rows + boards, then runs **mark-and-sweep GC**
   over assets still referenced by no active `image_cards`/`embed_cards` (delete
   file first, then metadata row; a missing file counts as success), with a
