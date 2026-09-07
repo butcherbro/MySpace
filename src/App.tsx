@@ -1566,6 +1566,13 @@ function App() {
       const target = e.target as HTMLElement | null;
       const inEditor = target && (target.tagName === "TEXTAREA" || target.isContentEditable);
       if (inEditor) return;
+      if (e.key === "Escape") {
+        if (trashOpen) {
+          e.preventDefault();
+          handleCloseTrash();
+        }
+        return;
+      }
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         void handleDeleteSelection();
@@ -1592,7 +1599,7 @@ function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages]);
+  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages, trashOpen, handleCloseTrash]);
 
   return (
     <AppShell

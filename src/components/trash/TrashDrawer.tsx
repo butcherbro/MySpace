@@ -49,6 +49,7 @@ export function TrashDrawer({
           className="trash-drawer__close"
           aria-label="Close Trash"
           onClick={onClose}
+          autoFocus
         >
           ✕
         </button>
