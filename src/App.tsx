@@ -1093,18 +1093,25 @@ function App() {
   }, [cleanupCrossBoardWindow]);
   const handleCardDragMove = useCallback((e: { cardId: string; clientX: number; clientY: number }) => {
     lastDraggedCardIdRef.current = e.cardId;
-    // Start a cross-board drag session on the first real move of a card.
-    if (!crossBoardDragRef.current) {
+    // Start a cross-board drag session on the first real move of a card. A
+    // lingering finished/cancelled session (effect may resync ref from state)
+    // must not block a new drag.
+    const prev = crossBoardDragRef.current;
+    if (!prev || prev.phase === "cancelled" || prev.phase === "committing") {
       const card = cardsRef.current.find((c) => c.id === e.cardId);
       if (card) {
         const drag = createCrossBoardDrag(
           [e.cardId],
           card.boardId,
           {
+            cardId: card.id,
             kind: card.kind,
             width: card.frame.width,
             height: card.frame.height,
             label: card.kind === "note" ? card.plainText || "Note" : card.kind,
+            revision: card.revision,
+            boardId: card.boardId,
+            frame: { ...card.frame },
           },
         );
         crossBoardDragRef.current = drag;
@@ -1177,38 +1184,46 @@ function App() {
       const target = drag.hoverBoardId;
       const overTargetCanvas = drag.pointerBoardId === target;
       if (drag.phase === "previewing" && target && overTargetCanvas) {
-        // Commit: place the dragged card(s) exactly where the pointer was
-        // released on the target board (screen -> board coordinates).
-        const card = cardsRef.current.find((c) => c.id === drag.cardIds[0]);
-        if (card) {
+        // Consume the session immediately so a duplicated drag-end call (React
+        // Flow onNodeDragStop + our window pointerup) cannot commit twice.
+        crossBoardDragRef.current = null;
+        const gc = drag.ghostCard;
+        if (gc) {
           const flow = screenToFlowRef.current;
           const point = flow
             ? flow(drag.pointer.x, drag.pointer.y)
             : { x: 40, y: 40 };
           const frame = {
-            x: point.x - card.frame.width / 2,
-            y: point.y - card.frame.height / 2,
-            width: card.frame.width,
-            height: card.frame.height,
+            x: point.x - gc.width / 2,
+            y: point.y - gc.height / 2,
+            width: gc.width,
+            height: gc.height,
           };
-          void dispatcher
-            .execute(
-              new MoveCardToBoardCommand(
-                idGenerator.nextId(),
-                card.id,
-                card.boardId,
-                card.frame,
-                card.revision,
-                target,
-                frame,
-              ),
-            )
+          // The card's revision may have moved since drag start (e.g. a draft
+          // save on blur); read the current revision before committing.
+          void gateway
+            .readCard(gc.cardId)
+            .then((fresh) => {
+              const revision =
+                fresh && "revision" in fresh ? (fresh as { revision: number }).revision : gc.revision;
+              return dispatcher.execute(
+                new MoveCardToBoardCommand(
+                  idGenerator.nextId(),
+                  gc.cardId,
+                  gc.boardId,
+                  gc.frame,
+                  revision,
+                  target,
+                  frame,
+                ),
+              );
+            })
             .then(() => {
-              dispatch({ type: "cardsRemoved", ids: drag.cardIds });
               setCrossBoardDrag(commitCrossBoardDrag(drag));
               crossBoardDragRef.current = null;
               // Reload the target board so the placed card appears immediately
-              // (its snapshot was loaded before the move).
+              // (its snapshot was loaded before the move; the card now lives
+              // there, so a plain cardsRemoved would wrongly hide it).
               void navigateTo(target, { tabMode: "sync" });
             })
             .catch((err) => {

@@ -300,6 +300,7 @@ export interface SetBoardCoverInput {
 export interface WorkspaceGateway {
   getHomeBoard(): Promise<BoardSummary>;
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot>;
+  readCard(cardId: string): Promise<CardDto>;
   getDataVersion(): Promise<number>;
   createNote(input: CreateNoteInput): Promise<void>;
   updateNote(input: UpdateNoteInput): Promise<void>;

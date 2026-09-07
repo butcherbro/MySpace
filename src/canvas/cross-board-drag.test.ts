@@ -8,7 +8,16 @@ import {
   targetBoardLoaded,
 } from "./cross-board-drag";
 
-const ghost = { kind: "note", width: 200, height: 80, label: "hello" };
+const ghost = {
+  cardId: "note-1",
+  kind: "note",
+  width: 200,
+  height: 80,
+  label: "hello",
+  revision: 1,
+  boardId: "home",
+  frame: { x: 0, y: 0, width: 200, height: 80 },
+};
 
 describe("cross-board drag state machine", () => {
   it("starts in dragging on the source board", () => {

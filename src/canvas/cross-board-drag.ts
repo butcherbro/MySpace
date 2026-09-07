@@ -25,8 +25,18 @@ export interface CrossBoardDragState {
   phase: CrossBoardDragPhase;
   /** Screen-space pointer position (for the ghost). */
   pointer: { x: number; y: number };
-  /** Snapshot of the dragged card for the ghost (independent of the open board). */
-  ghostCard: { kind: string; width: number; height: number; label: string } | null;
+  /** Snapshot of the dragged card: for the ghost and for the commit (the card
+   *  is not in the current board's projection once the target opens). */
+  ghostCard: {
+    cardId: string;
+    kind: string;
+    width: number;
+    height: number;
+    label: string;
+    revision: number;
+    boardId: string;
+    frame: { x: number; y: number; width: number; height: number };
+  } | null;
 }
 
 export function createCrossBoardDrag(

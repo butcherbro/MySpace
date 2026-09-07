@@ -99,6 +99,7 @@ pub fn run() {
             commands::boards::set_board_cover,
             commands::boards::remove_board_cover,
             commands::cards::create_note,
+            commands::cards::read_card,
             commands::cards::create_image_card,
             commands::cards::update_note,
             commands::cards::update_image_caption,

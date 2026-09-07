@@ -7,7 +7,7 @@ use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    ConvertNoteToEmbedInput, CreateImageCardInput, CreateNoteInput, EmbedCardDto,
+    CardDto, ConvertNoteToEmbedInput, CreateImageCardInput, CreateNoteInput, EmbedCardDto,
     MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, PlaceUnsortedCardInput,
     UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
 };
@@ -110,6 +110,15 @@ pub fn place_unsorted_card(
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::place_unsorted_card(&mut conn, &input)
+}
+
+/// Reads a single card by id (any kind).
+#[tauri::command]
+pub fn read_card(db: DbState<'_>, card_id: String) -> Result<CardDto, WorkspaceError> {
+    let conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::load_card(&conn, &card_id)
 }
 
 /// Transactionally converts a Note into an Embed (Link) Card, preserving the

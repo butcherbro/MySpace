@@ -320,6 +320,8 @@ export function CanvasAdapter({
   // accurate screen coordinates throughout the gesture, even after the node is
   // clamped at the board origin.
   const handleNodeDragStart = (event: React.MouseEvent | MouseEvent | TouchEvent, node: Node<CardNodeData>) => {
+    // eslint-disable-next-line no-console
+    console.log("RF-DRAG-START", node.id);
     draggingCardIdRef.current = node.id;
 
     const report = (e: PointerEvent) => {

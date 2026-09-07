@@ -4,6 +4,7 @@ import type {
   AssetDto,
   BoardSnapshot,
   BoardSummary,
+  CardDto,
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateChildBoardInput,
@@ -41,6 +42,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot> {
     return invoke<BoardSnapshot>("load_board_snapshot", { boardId });
+  }
+
+  readCard(cardId: string): Promise<CardDto> {
+    return invoke<CardDto>("read_card", { cardId });
   }
 
   getDataVersion(): Promise<number> {

@@ -3,6 +3,7 @@ import type {
   AssetDto,
   BoardSnapshot,
   BoardSummary,
+  CardDto,
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateChildBoardInput,
@@ -62,6 +63,12 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   getDataVersion(): Promise<number> {
     return Promise.resolve(this.dataVersion);
+  }
+
+  readCard(cardId: string): Promise<CardDto> {
+    const card = this.snapshot.cards.find((c) => c.id === cardId);
+    if (!card) return Promise.reject(new Error(`card not found: ${cardId}`));
+    return Promise.resolve({ ...card });
   }
 
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot> {
