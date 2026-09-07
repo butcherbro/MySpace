@@ -1213,3 +1213,215 @@ fn create_link_batch_rejects_unknown_board() {
         Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
     ));
 }
+
+#[test]
+fn move_cards_to_board_unsorted_batches_and_hides_from_canvas() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    myspace_lib::domain::board_service::create_child_board(
+        &mut conn,
+        &myspace_lib::domain::models::CreateChildBoardInput {
+            parent_board_id: home.clone(),
+            board_id: "target-b".to_string(),
+            portal_card_id: "target-p".to_string(),
+            frame: myspace_lib::domain::models::Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 112.0,
+            },
+            title: "Target".to_string(),
+        },
+    )
+    .unwrap();
+
+    for id in ["n1", "n2"] {
+        workspace_repository::create_note(
+            &mut conn,
+            &CreateNoteInput {
+                id: id.to_string(),
+                board_id: home.clone(),
+                frame: Frame {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 200.0,
+                    height: 80.0,
+                },
+                z_index: 0,
+                document_json: serde_json::json!({ "type": "doc" }),
+                plain_text: "".to_string(),
+            },
+        )
+        .unwrap();
+    }
+
+    workspace_repository::move_cards_to_board_unsorted(
+        &mut conn,
+        &myspace_lib::domain::models::MoveCardsToUnsortedInput {
+            target_board_id: "target-b".to_string(),
+            cards: vec![
+                myspace_lib::domain::models::MoveCardToUnsortedItem {
+                    id: "n1".to_string(),
+                    expected_revision: 1,
+                },
+                myspace_lib::domain::models::MoveCardToUnsortedItem {
+                    id: "n2".to_string(),
+                    expected_revision: 1,
+                },
+            ],
+        },
+    )
+    .unwrap();
+
+    // The target board's canvas has no cards; both are in Unsorted.
+    let snap = workspace_repository::load_board_snapshot(&conn, "target-b").unwrap();
+    assert!(snap.cards.is_empty());
+    assert_eq!(snap.unsorted_cards.len(), 2);
+    assert!(snap
+        .unsorted_cards
+        .iter()
+        .all(|c| c.id() == "n1" || c.id() == "n2"));
+
+    // Home no longer shows them on canvas either.
+    let home_snap = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    assert!(!home_snap
+        .cards
+        .iter()
+        .any(|c| c.id() == "n1" || c.id() == "n2"));
+}
+
+#[test]
+fn move_cards_to_board_unsorted_rejects_stale_revision_atomically() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    myspace_lib::domain::board_service::create_child_board(
+        &mut conn,
+        &myspace_lib::domain::models::CreateChildBoardInput {
+            parent_board_id: home.clone(),
+            board_id: "target-b".to_string(),
+            portal_card_id: "target-p".to_string(),
+            frame: myspace_lib::domain::models::Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 112.0,
+            },
+            title: "Target".to_string(),
+        },
+    )
+    .unwrap();
+
+    for id in ["n1", "n2"] {
+        workspace_repository::create_note(
+            &mut conn,
+            &CreateNoteInput {
+                id: id.to_string(),
+                board_id: home.clone(),
+                frame: Frame {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 200.0,
+                    height: 80.0,
+                },
+                z_index: 0,
+                document_json: serde_json::json!({ "type": "doc" }),
+                plain_text: "".to_string(),
+            },
+        )
+        .unwrap();
+    }
+
+    // n2 has a stale expected revision -> the whole batch is rejected.
+    let result = workspace_repository::move_cards_to_board_unsorted(
+        &mut conn,
+        &myspace_lib::domain::models::MoveCardsToUnsortedInput {
+            target_board_id: "target-b".to_string(),
+            cards: vec![
+                myspace_lib::domain::models::MoveCardToUnsortedItem {
+                    id: "n1".to_string(),
+                    expected_revision: 1,
+                },
+                myspace_lib::domain::models::MoveCardToUnsortedItem {
+                    id: "n2".to_string(),
+                    expected_revision: 99,
+                },
+            ],
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(myspace_lib::domain::errors::WorkspaceError::StaleRevision { expected: 99, .. })
+    ));
+
+    // Nothing moved: both cards are still on Home's canvas.
+    let home_snap = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    assert!(home_snap.cards.iter().any(|c| c.id() == "n1"));
+    assert!(home_snap.cards.iter().any(|c| c.id() == "n2"));
+}
+
+#[test]
+fn place_unsorted_card_puts_it_on_canvas_at_frame() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &CreateNoteInput {
+            id: "n1".to_string(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 80.0,
+            },
+            z_index: 0,
+            document_json: serde_json::json!({ "type": "doc" }),
+            plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    // Mark it unsorted first.
+    workspace_repository::move_cards_to_board_unsorted(
+        &mut conn,
+        &myspace_lib::domain::models::MoveCardsToUnsortedInput {
+            target_board_id: home.clone(),
+            cards: vec![myspace_lib::domain::models::MoveCardToUnsortedItem {
+                id: "n1".to_string(),
+                expected_revision: 1,
+            }],
+        },
+    )
+    .unwrap();
+
+    workspace_repository::place_unsorted_card(
+        &mut conn,
+        &myspace_lib::domain::models::PlaceUnsortedCardInput {
+            id: "n1".to_string(),
+            expected_revision: 2,
+            frame: Frame {
+                x: 320.0,
+                y: 240.0,
+                width: 200.0,
+                height: 80.0,
+            },
+        },
+    )
+    .unwrap();
+
+    let snap = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    assert!(snap.unsorted_cards.is_empty());
+    match snap.cards.iter().find(|c| c.id() == "n1") {
+        Some(myspace_lib::domain::models::CardDto::Note(n)) => {
+            assert_eq!(n.frame.x, 320.0);
+            assert_eq!(n.frame.y, 240.0);
+        }
+        other => panic!("expected placed note, got {other:?}"),
+    }
+}

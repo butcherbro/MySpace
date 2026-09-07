@@ -17,6 +17,8 @@ export interface CurrentBoardState {
   viewportRevision: number;
   boardOpenRevision: number;
   cards: CardDto[];
+  /** Cards in the board's Unsorted panel (hidden from canvas). */
+  unsortedCards: CardDto[];
   selection: string[];
   editingCardId: string | null;
   loading: boolean;
@@ -32,6 +34,7 @@ export type CurrentBoardAction =
       viewport: CanvasViewport;
       viewportRevision: number;
       cards: CardDto[];
+      unsortedCards: CardDto[];
     }
   | { type: "cardAdded"; card: CardDto }
   | { type: "cardContentUpdated"; id: string; revision: number; documentJson: unknown; plainText: string }
@@ -56,6 +59,7 @@ export const initialState: CurrentBoardState = {
   viewportRevision: 1,
   boardOpenRevision: 0,
   cards: [],
+  unsortedCards: [],
   selection: [],
   editingCardId: null,
   loading: false,
@@ -88,6 +92,7 @@ export function reducer(
         viewportRevision: action.viewportRevision,
         boardOpenRevision: state.boardOpenRevision + 1,
         cards: action.cards,
+        unsortedCards: action.unsortedCards,
         selection: [],
         editingCardId: null,
         loading: false,

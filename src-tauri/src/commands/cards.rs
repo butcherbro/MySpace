@@ -8,8 +8,8 @@ use tauri::State;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     ConvertNoteToEmbedInput, CreateImageCardInput, CreateNoteInput, EmbedCardDto,
-    MoveCardToBoardInput, MoveCardsInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
-    UpdateImageCaptionInput, UpdateNoteInput,
+    MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, PlaceUnsortedCardInput,
+    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -86,6 +86,30 @@ pub fn move_card_to_board(
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::move_card_to_board(&mut conn, &input)
+}
+
+/// Atomically moves a group of cards into a Board's Unsorted panel.
+#[tauri::command]
+pub fn move_cards_to_board_unsorted(
+    db: DbState<'_>,
+    input: MoveCardsToUnsortedInput,
+) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::move_cards_to_board_unsorted(&mut conn, &input)
+}
+
+/// Places one Unsorted card onto the board at an exact frame.
+#[tauri::command]
+pub fn place_unsorted_card(
+    db: DbState<'_>,
+    input: PlaceUnsortedCardInput,
+) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::place_unsorted_card(&mut conn, &input)
 }
 
 /// Transactionally converts a Note into an Embed (Link) Card, preserving the

@@ -60,6 +60,7 @@ describe("current board reducer", () => {
         viewport: { x: 0, y: 0, zoom: 1 },
         viewportRevision: 3,
         cards: [note("a")],
+        unsortedCards: [],
       },
     );
     expect(state.board).toEqual(home);
@@ -134,6 +135,7 @@ describe("current board reducer", () => {
         viewport: { x: 0, y: 0, zoom: 1 },
         viewportRevision: 1,
         cards: [note("a")],
+        unsortedCards: [],
       },
     );
     expect(state.editingCardId).toBeNull();
@@ -148,6 +150,7 @@ describe("current board reducer", () => {
       viewport: { x: -240, y: 300, zoom: 1 },
       viewportRevision: 1,
       cards: [note("a", 40)],
+      unsortedCards: [],
     });
     expect(state.viewport).toEqual({ x: 0, y: 0, zoom: 1 });
   });
@@ -160,6 +163,7 @@ describe("current board reducer", () => {
       viewport: { x: 120, y: 300, zoom: 1.5 },
       viewportRevision: 1,
       cards: [note("a", 40)],
+      unsortedCards: [],
     });
     expect(state.viewport).toEqual({ x: 0, y: 0, zoom: 1.5 });
   });

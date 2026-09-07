@@ -16,6 +16,8 @@ import type {
   MoveCardInput,
   MoveCardsInput,
   MoveCardToBoardInput,
+  MoveCardsToUnsortedInput,
+  PlaceUnsortedCardInput,
   QuickBoardDto,
   ReorderQuickBoardsInput,
   SaveViewportInput,
@@ -159,5 +161,13 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   removeBoardCover(boardId: string): Promise<void> {
     return invoke<void>("remove_board_cover", { boardId });
+  }
+
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void> {
+    return invoke<void>("move_cards_to_board_unsorted", { input });
+  }
+
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
+    return invoke<void>("place_unsorted_card", { input });
   }
 }

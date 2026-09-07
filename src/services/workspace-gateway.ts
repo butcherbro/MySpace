@@ -137,6 +137,8 @@ export interface BoardSnapshot {
   breadcrumbs: Breadcrumb[];
   viewport: Viewport;
   cards: CardDto[];
+  /** Cards in this board's Unsorted panel (not yet placed on the canvas). */
+  unsortedCards: CardDto[];
 }
 
 export interface CreateNoteInput {
@@ -185,6 +187,22 @@ export interface MoveCardToBoardInput {
   targetBoardId: string;
   /** Optional destination frame; omit to land at the board origin. */
   frame?: Frame;
+}
+
+export interface MoveCardToUnsortedItem {
+  id: string;
+  expectedRevision: number;
+}
+
+export interface MoveCardsToUnsortedInput {
+  targetBoardId: string;
+  cards: MoveCardToUnsortedItem[];
+}
+
+export interface PlaceUnsortedCardInput {
+  id: string;
+  expectedRevision: number;
+  frame: Frame;
 }
 
 export interface MoveBoardInput {
@@ -311,4 +329,6 @@ export interface WorkspaceGateway {
   importClipboardImage(): Promise<AssetDto>;
   setBoardCover(input: SetBoardCoverInput): Promise<void>;
   removeBoardCover(boardId: string): Promise<void>;
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void>;
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void>;
 }

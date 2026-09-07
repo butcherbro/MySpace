@@ -175,6 +175,8 @@ pub struct BoardSnapshot {
     pub breadcrumbs: Vec<Breadcrumb>,
     pub viewport: Viewport,
     pub cards: Vec<CardDto>,
+    /// Cards in this board's Unsorted panel (not yet placed on the canvas).
+    pub unsorted_cards: Vec<CardDto>,
 }
 
 /// Input for creating a note card.
@@ -378,6 +380,32 @@ pub struct MoveCardToBoardInput {
     /// (needed for cross-board drag-and-drop).
     #[serde(default)]
     pub frame: Option<Frame>,
+}
+
+/// One card to move into a Board's Unsorted panel (batch item).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCardToUnsortedItem {
+    pub id: String,
+    pub expected_revision: i64,
+}
+
+/// Atomically moves a group of cards into a Board's Unsorted panel. One batch =
+/// one undo unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCardsToUnsortedInput {
+    pub target_board_id: String,
+    pub cards: Vec<MoveCardToUnsortedItem>,
+}
+
+/// Places one Unsorted card onto the board at an exact frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceUnsortedCardInput {
+    pub id: String,
+    pub expected_revision: i64,
+    pub frame: Frame,
 }
 
 /// A single item to trash: a leaf card by card id, or a board (portal) by its

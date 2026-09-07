@@ -60,6 +60,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "board_cover",
         sql: include_str!("../../migrations/0009_board_cover.sql"),
     },
+    Migration {
+        version: 10,
+        name: "unsorted_cards",
+        sql: include_str!("../../migrations/0010_unsorted_cards.sql"),
+    },
 ];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.

@@ -10,9 +10,10 @@ use crate::domain::models::{
     AddQuickBoardInput, ApplyEmbedMetadataInput, AssetDto, BoardPortalDto, BoardSnapshot,
     BoardSummary, Breadcrumb, CardDto, ConvertNoteToEmbedInput, CreateImageCardInput,
     CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata,
-    Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, NoteCardDto, PortalTarget,
-    QuickBoardDto, ReorderQuickBoardsInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
-    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput, Viewport,
+    Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
+    NoteCardDto, PlaceUnsortedCardInput, PortalTarget, QuickBoardDto, ReorderQuickBoardsInput,
+    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
+    UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -25,13 +26,15 @@ pub fn load_board_snapshot(
     let board = load_board_summary(conn, board_id)?;
     let breadcrumbs = load_breadcrumbs(conn, board_id)?;
     let viewport = load_viewport(conn, board_id)?;
-    let cards = load_cards(conn, board_id, true)?;
+    let cards = load_cards(conn, board_id, true, false)?;
+    let unsorted_cards = load_cards(conn, board_id, false, true)?;
 
     Ok(BoardSnapshot {
         board,
         breadcrumbs,
         viewport,
         cards,
+        unsorted_cards,
     })
 }
 
@@ -156,13 +159,16 @@ fn load_viewport(conn: &Connection, board_id: &str) -> Result<Viewport, Workspac
 }
 
 /// Loads active cards of a board. When `include_subtree_counts` is true, portal
-/// targets carry child board/card counts.
+/// targets carry child board/card counts. `unsorted` selects either the placed
+/// canvas cards (0) or the Unsorted panel cards (1).
 fn load_cards(
     conn: &Connection,
     board_id: &str,
     include_subtree_counts: bool,
+    unsorted: bool,
 ) -> Result<Vec<CardDto>, WorkspaceError> {
     let mut out = Vec::new();
+    let unsorted_flag: i64 = if unsorted { 1 } else { 0 };
 
     // Notes
     {
@@ -171,10 +177,10 @@ fn load_cards(
                     n.document_json, n.plain_text
              FROM cards c
              JOIN note_cards n ON n.card_id = c.id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
              ORDER BY c.z_index, c.id",
         )?;
-        let rows = stmt.query_map([board_id], |row| {
+        let rows = stmt.query_map(params![board_id, unsorted_flag], |row| {
             let document_json: String = row.get(8)?;
             let document_json: serde_json::Value =
                 serde_json::from_str(&document_json).unwrap_or(serde_json::Value::Null);
@@ -220,10 +226,10 @@ fn load_cards(
                  SELECT board_id, COUNT(*) AS child_card_count
                  FROM cards WHERE deleted_at IS NULL GROUP BY board_id
              ) cardchild ON cardchild.board_id = p.target_board_id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
              ORDER BY c.z_index, c.id",
         )?;
-        let rows = stmt.query_map([board_id], |row| {
+        let rows = stmt.query_map(params![board_id, unsorted_flag], |row| {
             let target_id: String = row.get(8)?;
             let (child_board_count, child_card_count) = if include_subtree_counts {
                 (row.get::<_, i64>(13)?, row.get::<_, i64>(14)?)
@@ -281,10 +287,10 @@ fn load_cards(
              FROM cards c
              JOIN image_cards i ON i.card_id = c.id
              JOIN assets a ON a.id = i.asset_id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
              ORDER BY c.z_index, c.id",
         )?;
-        let rows = stmt.query_map([board_id], |row| {
+        let rows = stmt.query_map(params![board_id, unsorted_flag], |row| {
             let caption_json: String = row.get(15)?;
             let caption_json: serde_json::Value =
                 serde_json::from_str(&caption_json).unwrap_or(serde_json::Value::Null);
@@ -332,10 +338,10 @@ fn load_cards(
              JOIN embed_cards e ON e.card_id = c.id
              LEFT JOIN assets pa ON pa.id = e.asset_id
              LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
              ORDER BY c.z_index, c.id",
         )?;
-        let rows = stmt.query_map([board_id], |row| {
+        let rows = stmt.query_map(params![board_id, unsorted_flag], |row| {
             let description_json: String = row.get(13)?;
             let description_json: serde_json::Value =
                 serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
@@ -1351,6 +1357,102 @@ pub fn move_card_to_board(
     }
 
     tx.commit()?;
+    Ok(())
+}
+
+/// Atomically moves a group of cards into a Board's Unsorted panel. Every card
+/// must match its expected revision or the whole batch is rejected and rolled
+/// back (one batch = one undo unit). Cards keep their board_id (counts stay
+/// correct) but are flagged unsorted so the canvas hides them and the rail shows
+/// them as thumbnails.
+pub fn move_cards_to_board_unsorted(
+    conn: &mut Connection,
+    input: &MoveCardsToUnsortedInput,
+) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+
+    // The target board must exist and not be trashed.
+    let target_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
+        [input.target_board_id.as_str()],
+        |r| r.get(0),
+    )?;
+    if target_exists == 0 {
+        return Err(WorkspaceError::NotFound(input.target_board_id.clone()));
+    }
+
+    let tx = conn.transaction()?;
+
+    // Validate every card revision up front so a stale one rolls back the batch.
+    for item in &input.cards {
+        let actual: i64 = tx.query_row(
+            "SELECT revision FROM cards WHERE id = ?1 AND kind IN ('note','image','embed')",
+            [item.id.as_str()],
+            |r| r.get(0),
+        )?;
+        if actual != item.expected_revision {
+            return Err(WorkspaceError::StaleRevision {
+                expected: item.expected_revision,
+                actual,
+            });
+        }
+    }
+
+    for item in &input.cards {
+        tx.execute(
+            "UPDATE cards
+             SET board_id = ?1, unsorted = 1, revision = revision + 1, updated_at = ?2
+             WHERE id = ?3 AND revision = ?4 AND kind IN ('note','image','embed')",
+            params![input.target_board_id, now, item.id, item.expected_revision],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// Places one Unsorted card onto the board at an exact frame (unsorted = 0).
+pub fn place_unsorted_card(
+    conn: &mut Connection,
+    input: &PlaceUnsortedCardInput,
+) -> Result<(), WorkspaceError> {
+    let now = db::migrations::now_millis();
+
+    let changed = conn.execute(
+        "UPDATE cards
+         SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
+         WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed')",
+        params![
+            input.frame.x,
+            input.frame.y,
+            input.frame.width,
+            input.frame.height,
+            now,
+            input.id,
+            input.expected_revision,
+        ],
+    )?;
+
+    if changed == 0 {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(WorkspaceError::NotFound(input.id.clone()));
+        }
+        let actual: i64 = conn.query_row(
+            "SELECT revision FROM cards WHERE id = ?1",
+            [input.id.clone()],
+            |r| r.get(0),
+        )?;
+        return Err(WorkspaceError::StaleRevision {
+            expected: input.expected_revision,
+            actual,
+        });
+    }
+
     Ok(())
 }
 

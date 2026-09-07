@@ -15,6 +15,8 @@ import type {
   MoveCardInput,
   MoveCardsInput,
   MoveCardToBoardInput,
+  MoveCardsToUnsortedInput,
+  PlaceUnsortedCardInput,
   QuickBoardDto,
   ReorderQuickBoardsInput,
   SaveViewportInput,
@@ -47,6 +49,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     breadcrumbs: [{ id: "home", title: "Home" }],
     viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
     cards: [],
+    unsortedCards: [],
   };
 
   private quickBoards: QuickBoardDto[] = [];
@@ -75,7 +78,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           ? structuredClone(this.snapshot.viewport)
           : { x: 0, y: 0, zoom: 1, revision: 1 },
       cards: structuredClone(
-        this.snapshot.cards.filter((card) => card.boardId === boardId),
+        this.snapshot.cards.filter(
+          (card) => card.boardId === boardId && !(card as { unsorted?: boolean }).unsorted,
+        ),
+      ),
+      unsortedCards: structuredClone(
+        this.snapshot.cards.filter(
+          (card) => card.boardId === boardId && (card as { unsorted?: boolean }).unsorted,
+        ),
       ),
     });
   }
@@ -510,6 +520,36 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         c.kind === "board_portal" && c.target.id === boardId,
     );
     if (portal) portal.target.coverAsset = null;
+    return Promise.resolve();
+  }
+
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void> {
+    for (const item of input.cards) {
+      const card = this.snapshot.cards.find((c) => c.id === item.id);
+      if (!card) return Promise.reject(new Error(`card not found: ${item.id}`));
+      if (card.revision !== item.expectedRevision) {
+        return Promise.reject(new Error(`stale revision for ${item.id}`));
+      }
+    }
+    for (const item of input.cards) {
+      const card = this.snapshot.cards.find((c) => c.id === item.id)!;
+      card.revision += 1;
+      card.boardId = input.targetBoardId;
+      // Unsorted cards are hidden from the canvas; the rail shows them.
+      (card as { unsorted?: boolean }).unsorted = true;
+    }
+    return Promise.resolve();
+  }
+
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
+    const card = this.snapshot.cards.find((c) => c.id === input.id);
+    if (!card) return Promise.reject(new Error(`card not found: ${input.id}`));
+    if (card.revision !== input.expectedRevision) {
+      return Promise.reject(new Error(`stale revision for ${input.id}`));
+    }
+    card.revision += 1;
+    (card as { unsorted?: boolean }).unsorted = false;
+    card.frame = { ...input.frame };
     return Promise.resolve();
   }
 

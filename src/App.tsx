@@ -179,6 +179,11 @@ function App() {
               ? { ...c, documentJson: normalizeDocument(c.documentJson) }
               : c,
           ),
+          unsortedCards: snapshot.unsortedCards.map((c) =>
+            c.kind === "note"
+              ? { ...c, documentJson: normalizeDocument(c.documentJson) }
+              : c,
+          ),
         });
       } catch (e) {
         if (!cancelled) {
@@ -962,6 +967,11 @@ function App() {
         viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
         viewportRevision: snapshot.viewport.revision,
         cards: snapshot.cards.map((c) =>
+          c.kind === "note"
+            ? { ...c, documentJson: normalizeDocument(c.documentJson) }
+            : c,
+        ),
+        unsortedCards: snapshot.unsortedCards.map((c) =>
           c.kind === "note"
             ? { ...c, documentJson: normalizeDocument(c.documentJson) }
             : c,
