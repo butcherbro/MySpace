@@ -663,7 +663,14 @@ function App() {
           cards: [{ id: cardId, expectedRevision: card.revision }],
         })
         .then(() => {
-          dispatch({ type: "cardsRemoved", ids: [cardId] });
+          // If the target is the currently open board, show it in its Unsorted
+          // panel; otherwise the card simply left this board (it will appear in
+          // the target board's Unsorted when that board is opened).
+          if (targetBoardId === boardRef.current?.id) {
+            dispatch({ type: "cardMovedToUnsorted", id: cardId });
+          } else {
+            dispatch({ type: "cardsRemoved", ids: [cardId] });
+          }
         })
         .catch((err) => {
           dispatch({ type: "failed", message: errorMessage(err) });
