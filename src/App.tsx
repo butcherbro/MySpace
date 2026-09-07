@@ -14,6 +14,7 @@ import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardTabs } from "./navigation/BoardTabs";
 import { QuickBoardsRail } from "./navigation/QuickBoardsRail";
+import { UnsortedPanel } from "./navigation/UnsortedPanel";
 import {
   activateBoardTab,
   createBoardTabs,
@@ -257,6 +258,31 @@ function App() {
   const handleCreateLink = useCallback(() => {
     void handleCreateNote(undefined, { startEditing: true });
   }, [handleCreateNote]);
+
+  // Distribute one Unsorted card onto the canvas at a free cascading slot.
+  const handlePlaceUnsortedCard = useCallback(
+    (cardId: string) => {
+      const card = state.unsortedCards.find((c) => c.id === cardId);
+      if (!card || !board) return;
+      const maxBottom = state.cards.reduce((max, c) => Math.max(max, c.frame.y + c.frame.height), 0);
+      const frame = {
+        x: 40,
+        y: maxBottom > 0 ? maxBottom + 24 : 40,
+        width: card.frame.width,
+        height: card.frame.height,
+      };
+      void gateway
+        .placeUnsortedCard({ id: cardId, expectedRevision: card.revision, frame })
+        .then(() => {
+          dispatch({ type: "cardReplaced", id: cardId, card: { ...card, frame } });
+          dispatch({ type: "unsortedCardPlaced", id: cardId });
+        })
+        .catch((e) => {
+          dispatch({ type: "failed", message: errorMessage(e) });
+        });
+    },
+    [state.unsortedCards, state.cards, board, gateway],
+  );
 
   const handleCreateChildBoard = useCallback(async () => {
     if (!board) return;
@@ -1240,13 +1266,16 @@ function App() {
         />
       }
       rightRail={
-        <QuickBoardsRail
-          quickBoards={quickBoards}
-          onOpen={handleQuickBoardOpen}
-          onRemove={handleQuickBoardRemove}
-          onReorder={handleQuickBoardsReorder}
-          dropActive={dropActiveQuickBoards}
-        />
+        <div className="workspace__right-rail">
+          <QuickBoardsRail
+            quickBoards={quickBoards}
+            onOpen={handleQuickBoardOpen}
+            onRemove={handleQuickBoardRemove}
+            onReorder={handleQuickBoardsReorder}
+            dropActive={dropActiveQuickBoards}
+          />
+          <UnsortedPanel cards={state.unsortedCards} onPlace={handlePlaceUnsortedCard} />
+        </div>
       }
     >
       <div className="workspace">
