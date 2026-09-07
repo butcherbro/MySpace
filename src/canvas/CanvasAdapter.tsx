@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -83,6 +83,33 @@ export function CanvasAdapter({
   const [nodes, setNodes] = useState<Node<CardNodeData>[]>(() =>
     cards.map((c) => cardToNode(c, renderCard)),
   );
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const [interactionResetRevision, setInteractionResetRevision] = useState(0);
+
+  // React Flow 12 очищает рамку по pointerup, но оставляет её при pointercancel.
+  // WKWebView также может потерять pointerup, когда жест выходит за границы окна.
+  // Перемонтируем канвас только при реально зависшей рамке, не затрагивая обычные жесты.
+  const resetInterruptedMarquee = useCallback(() => {
+    if (!surfaceRef.current?.querySelector(".react-flow__selection")) return;
+    setInteractionResetRevision((revision) => revision + 1);
+  }, []);
+
+  useEffect(() => {
+    const handleWindowKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") resetInterruptedMarquee();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") resetInterruptedMarquee();
+    };
+    window.addEventListener("keydown", handleWindowKeyDown);
+    window.addEventListener("blur", resetInterruptedMarquee);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("keydown", handleWindowKeyDown);
+      window.removeEventListener("blur", resetInterruptedMarquee);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [resetInterruptedMarquee]);
 
   useEffect(() => {
     viewportRef.current = viewport;
@@ -320,8 +347,6 @@ export function CanvasAdapter({
   // accurate screen coordinates throughout the gesture, even after the node is
   // clamped at the board origin.
   const handleNodeDragStart = (event: React.MouseEvent | MouseEvent | TouchEvent, node: Node<CardNodeData>) => {
-    // eslint-disable-next-line no-console
-    console.log("RF-DRAG-START", node.id);
     draggingCardIdRef.current = node.id;
 
     const report = (e: PointerEvent) => {
@@ -393,14 +418,17 @@ export function CanvasAdapter({
 
   return (
     <div
+      ref={surfaceRef}
       className="canvas-surface"
       data-testid="canvas-surface"
       data-kind="desk"
       tabIndex={0}
       onKeyDown={handleCanvasKeyDown}
+      onPointerCancel={resetInterruptedMarquee}
       style={{ width: "100%", height: "100%" }}
     >
       <ReactFlow
+        key={interactionResetRevision}
         nodes={nodes}
         nodeTypes={nodeTypes}
         onNodesChange={handleNodesChange}

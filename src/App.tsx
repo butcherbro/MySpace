@@ -308,8 +308,12 @@ function App() {
       void gateway
         .placeUnsortedCard({ id: cardId, expectedRevision: card.revision, frame })
         .then(() => {
-          dispatch({ type: "cardReplaced", id: cardId, card: { ...card, frame } });
-          dispatch({ type: "unsortedCardPlaced", id: cardId });
+          dispatch({
+            type: "unsortedCardPlaced",
+            id: cardId,
+            frame,
+            revision: card.revision + 1,
+          });
         })
         .catch((e) => {
           dispatch({ type: "failed", message: errorMessage(e) });
@@ -367,8 +371,12 @@ function App() {
         void gateway
           .placeUnsortedCard({ id, expectedRevision: card.revision, frame })
           .then(() => {
-            dispatch({ type: "cardReplaced", id, card: { ...card, frame } });
-            dispatch({ type: "unsortedCardPlaced", id });
+            dispatch({
+              type: "unsortedCardPlaced",
+              id,
+              frame,
+              revision: card.revision + 1,
+            });
           })
           .catch((err) => {
             dispatch({ type: "failed", message: errorMessage(err) });
@@ -1159,7 +1167,7 @@ function App() {
         hoverTimerRef.current = null;
       }
     }
-  }, [navigateTo]);
+  }, [navigateTo, startCrossBoardWindowTracking]);
 
   const handleCardDragEnd = useCallback((): boolean => {
     cleanupCrossBoardWindow();

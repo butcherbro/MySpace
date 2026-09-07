@@ -41,7 +41,7 @@ export type CurrentBoardAction =
   | { type: "imageCaptionUpdated"; id: string; revision: number; captionJson: unknown; captionPlainText: string }
   | { type: "embedDescriptionUpdated"; id: string; revision: number; descriptionJson: unknown; descriptionPlainText: string }
   | { type: "cardReplaced"; id: string; card: CardDto }
-  | { type: "unsortedCardPlaced"; id: string }
+  | { type: "unsortedCardPlaced"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardMovedToUnsorted"; id: string }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardsRemoved"; ids: string[] }
@@ -160,10 +160,11 @@ export function reducer(
     case "unsortedCardPlaced": {
       const card = state.unsortedCards.find((c) => c.id === action.id);
       if (!card) return state;
+      const placed = { ...card, frame: action.frame, revision: action.revision };
       return {
         ...state,
         unsortedCards: state.unsortedCards.filter((c) => c.id !== action.id),
-        cards: [...state.cards, card],
+        cards: [...state.cards, placed],
       };
     }
 

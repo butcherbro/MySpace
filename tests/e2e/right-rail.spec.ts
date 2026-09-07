@@ -30,4 +30,32 @@ test("right rail renders content", async ({ page }) => {
   await expect(page.getByTestId("unsorted-card")).toHaveCount(1);
   // Right rail (bookmarks) should render its heading.
   await expect(page.getByText("Quick Boards")).toBeVisible();
+
+  // После размещения последней карточки колонка Unsorted должна исчезнуть,
+  // а Quick Boards — встать вплотную к канвасу без неявной пустой колонки.
+  await page.getByRole("button", { name: "Place" }).click();
+  await expect(page.getByTestId("unsorted-rail-region")).toHaveCount(0);
+  await expect(page.getByTestId("note-card")).toBeVisible();
+
+  // Размещённая карточка сразу получает увеличенную backend-ревизию.
+  // Раньше следующий drag отправлял старую ревизию и завершался ошибкой.
+  const placed = await page.getByTestId("note-card").boundingBox();
+  expect(placed).not.toBeNull();
+  if (placed) {
+    await page.mouse.move(placed.x + placed.width / 2, placed.y + placed.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(placed.x + placed.width / 2 + 60, placed.y + placed.height / 2 + 40, {
+      steps: 6,
+    });
+    await page.mouse.up();
+  }
+  await expect(page.getByText(/stale[_ ]revision/i)).toHaveCount(0);
+
+  const canvasBox = await page.getByTestId("canvas-region").boundingBox();
+  const quickBoardsBox = await page.getByTestId("right-rail-region").boundingBox();
+  expect(canvasBox).not.toBeNull();
+  expect(quickBoardsBox).not.toBeNull();
+  if (canvasBox && quickBoardsBox) {
+    expect(Math.abs(canvasBox.x + canvasBox.width - quickBoardsBox.x)).toBeLessThan(1);
+  }
 });

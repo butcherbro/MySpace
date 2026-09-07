@@ -31,6 +31,7 @@ describe("AppShell", () => {
     );
 
     expect(screen.getByTestId("right-rail-region")).toHaveTextContent("Quick boards");
+    expect(screen.getByTestId("right-rail-region")).toHaveClass("app-shell__right-rail--adjacent");
     expect(screen.getByTestId("canvas-region")).toHaveTextContent("Desk");
   });
 
@@ -62,6 +63,7 @@ describe("AppShell", () => {
     );
 
     expect(screen.getByTestId("right-rail-region")).toHaveTextContent("Quick boards");
+    expect(screen.getByTestId("right-rail-region")).not.toHaveClass("app-shell__right-rail--adjacent");
     expect(screen.getByTestId("unsorted-rail-region")).toHaveTextContent("Unsorted");
   });
 });

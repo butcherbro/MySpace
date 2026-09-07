@@ -74,6 +74,23 @@ describe("current board reducer", () => {
     expect(state.cards.map((c) => c.id)).toEqual(["a"]);
   });
 
+  it("places an Unsorted card with the persisted frame and revision", () => {
+    const unsorted = note("a");
+    const frame = { x: 420, y: 240, width: 200, height: 80 };
+    const state = reducer(
+      { ...initialState, unsortedCards: [unsorted] },
+      {
+        type: "unsortedCardPlaced",
+        id: "a",
+        frame,
+        revision: 2,
+      },
+    );
+
+    expect(state.unsortedCards).toEqual([]);
+    expect(state.cards).toEqual([{ ...unsorted, frame, revision: 2 }]);
+  });
+
   it("moves a card and bumps its revision", () => {
     let state = reducer(initialState, { type: "cardAdded", card: note("a") });
     state = reducer(state, {

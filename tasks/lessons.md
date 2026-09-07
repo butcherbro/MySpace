@@ -95,3 +95,16 @@
 - User correction: the Milanote-like dot grid must remain clearly visible; making it "quiet" until it disappears breaks spatial orientation.
 - Reference calibration after live-size correction: `#ebedee` Desk, `#dfe1e2` dots, `20px` gap, and React Flow `size={3}` at zoom 1. The grid scales naturally with canvas zoom.
 - Implementation consequence: keep the grid parameters under a regression test and validate at reduced zoom and on Retina rather than judging only from token opacity.
+
+## 2026-09-07 — Treat live-only visual degradation as a stateful regression
+
+- User correction: the Unsorted rail rendered correctly at first and degraded only after an interaction in the running Tauri app.
+- Root cause of the gray strip: removing the last Unsorted card removed explicit grid column 3, while Quick Boards stayed assigned to column 4. CSS Grid created an empty implicit column between the canvas and Quick Boards.
+- Root cause of the blue overlay: React Flow 12 does not clear its marquee rectangle on `pointercancel`; Escape and window blur also leave it active. WKWebView makes lost final pointer events easier to encounter.
+- Investigation consequence: do not lead with WKWebView feature support when a UI worked earlier in the same runtime. Reproduce the exact state transition and assert geometry after conditional layout regions disappear.
+
+## 2026-09-07 — Unsorted placement is one atomic state transition
+
+- User-reported failure: dragging a card from Unsorted removed it from the rail, but it stayed invisible until the Board was reopened; later edits intermittently raised `stale_revision`.
+- Root cause: `cardReplaced` searched only the visible `cards` collection, so it could not update an object still held in `unsortedCards`. The following action then appended that old object with its pre-placement frame and revision.
+- Implementation consequence: moving Unsorted -> canvas must atomically remove the source object and append it with the exact persisted frame and incremented revision. Never compose a cross-collection transition from an update action that cannot address the source collection.

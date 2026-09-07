@@ -85,3 +85,7 @@
   z-index: 10;
   overflow: hidden;
 }
+
+.app-shell__right-rail--adjacent {
+  grid-column: 3;
+}

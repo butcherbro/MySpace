@@ -45,7 +45,10 @@ export function AppShell({ topBar, toolRail, rightRail, unsortedRail, children }
         </aside>
       )}
       {rightRail && (
-        <aside className="app-shell__right-rail" data-testid="right-rail-region">
+        <aside
+          className={`app-shell__right-rail${hasUnsorted ? "" : " app-shell__right-rail--adjacent"}`}
+          data-testid="right-rail-region"
+        >
           {rightRail}
         </aside>
       )}
