@@ -1154,6 +1154,9 @@ function App() {
               dispatch({ type: "cardsRemoved", ids: drag.cardIds });
               setCrossBoardDrag(commitCrossBoardDrag(drag));
               crossBoardDragRef.current = null;
+              // Reload the target board so the placed card appears immediately
+              // (its snapshot was loaded before the move).
+              void navigateTo(target, { tabMode: "sync" });
             })
             .catch((err) => {
               dispatch({ type: "failed", message: errorMessage(err) });
@@ -1183,7 +1186,7 @@ function App() {
       return true; // consumed: moved to a portal
     }
     return false;
-  }, [handleCardDroppedOnPortal, handleQuickBoardPin, gateway, dispatcher, idGenerator]);
+  }, [handleCardDroppedOnPortal, handleQuickBoardPin, gateway, dispatcher, idGenerator, navigateTo]);
 
   // Reload the current board (no history push). Used to reconcile UI with the
   // database after undo/redo.
