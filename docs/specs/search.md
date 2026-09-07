@@ -102,6 +102,17 @@ board tab like breadcrumb navigation).
      acceptance test should assert the selected-and-visible state, not a specific
      animation, until this is agreed.
 
+## Current implementation default (shipped before final agreement)
+
+The backend/gateway and palette were shipped with these defaults so development can
+continue while the architect is rate-limited. They remain overrideable and are not a
+commitment:
+
+- **Scope**: global (the `boardTrail` contract already implies global).
+- **Ranking**: title/URL match before body match, then title, then `entityId`.
+- **Activation**: on select, navigate to the result's Board. Selecting/centering the exact
+  card and any focus pulse are still open and not yet implemented.
+
 ## Files (proposed, for implementation after agreement)
 
 - Create: `src/search/search-types.ts`, `src/search/SearchPalette.tsx`,

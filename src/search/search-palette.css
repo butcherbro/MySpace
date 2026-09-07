@@ -1,0 +1,107 @@
+.search-palette {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 560px;
+  max-width: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--paper-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-menu);
+  box-shadow: var(--shadow-menu);
+  z-index: 60;
+  overflow: hidden;
+}
+
+.search-palette__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: none;
+  border-bottom: 1px solid var(--edge-subtle);
+  background: transparent;
+  color: var(--ink);
+  font: 400 14px/1.4 var(--font-ui);
+  outline: none;
+}
+
+.search-palette__input::placeholder {
+  color: var(--ink-tertiary);
+}
+
+.search-palette__results {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.search-palette__status,
+.search-palette__empty {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--ink-secondary);
+  font: 400 13px/1.4 var(--font-ui);
+}
+
+.search-palette__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+}
+
+.search-palette__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.search-palette__item--active {
+  background: color-mix(in srgb, var(--edge-focus) 10%, transparent);
+}
+
+.search-palette__kind {
+  flex: none;
+  min-width: 40px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--edge-focus) 10%, transparent);
+  color: var(--ink-secondary);
+  font: 500 10px/16px var(--font-ui);
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.search-palette__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.search-palette__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 500 13px/1.4 var(--font-ui);
+  color: var(--ink);
+}
+
+.search-palette__excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 12px/1.4 var(--font-ui);
+  color: var(--ink-secondary);
+}
+
+.search-palette__trail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 11px/1.4 var(--font-ui);
+  color: var(--ink-tertiary);
+}

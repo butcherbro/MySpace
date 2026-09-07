@@ -19,6 +19,7 @@ import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
+import { SearchPalette } from "./search/SearchPalette";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -48,6 +49,7 @@ import type {
   ImageCardDto,
   NoteCardDto,
   QuickBoardDto,
+  SearchResultDto,
   TrashSummaryDto,
   WorkspaceGateway,
 } from "./services/workspace-gateway";
@@ -124,6 +126,13 @@ function App() {
   const [trashError, setTrashError] = useState<string | null>(null);
   const [trashOpen, setTrashOpen] = useState(false);
   const [restoringBatchId, setRestoringBatchId] = useState<string | null>(null);
+
+  // Search palette: query/debounce/results owned here; rendering/keyboard in
+  // `SearchPalette`. Global scope is the V1 default (see docs/specs/search.md).
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResultDto[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -288,6 +297,42 @@ function App() {
   const handleCloseTrash = useCallback(() => {
     setTrashOpen(false);
     setTrashError(null);
+  }, []);
+
+  const handleSearchQueryChange = useCallback((query: string) => {
+    setSearchQuery(query);
+    if (query.trim() === "") setSearchResults([]);
+  }, []);
+
+  const handleSearchClose = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchResults([]);
+  }, []);
+
+  // Debounced search (150ms) over the whole workspace. No state is set
+  // synchronously inside the effect body (see the search spec for the default).
+  useEffect(() => {
+    if (!searchOpen || searchQuery.trim() === "") return;
+    const query = searchQuery.trim();
+    const timer = setTimeout(() => {
+      setSearchLoading(true);
+      void gateway
+        .searchWorkspace(query)
+        .then((results) => setSearchResults(results))
+        .catch((e) => {
+          setSearchResults([]);
+          dispatch({ type: "failed", message: errorMessage(e) });
+        })
+        .finally(() => setSearchLoading(false));
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [searchOpen, searchQuery, gateway]);
+
+  const handleOpenSearch = useCallback(() => {
+    setSearchOpen(true);
+    setSearchQuery("");
+    setSearchResults([]);
   }, []);
 
   const handleCreateNote = useCallback(
@@ -1343,6 +1388,18 @@ function App() {
     [gateway, loadTrash, reloadCurrentBoard, loadQuickBoards],
   );
 
+  // Open the result's board. A Board result navigates to itself; a Note/Link
+  // result navigates to its containing board. Selecting/centering the exact
+  // card is deferred (see docs/specs/search.md — visual highlight is OPEN).
+  const handleSearchSelect = useCallback(
+    async (result: SearchResultDto) => {
+      handleSearchClose();
+      const targetBoardId = result.kind === "board" ? result.entityId : result.boardId;
+      await navigateTo(targetBoardId, { pushHistory: true, tabMode: "open" });
+    },
+    [handleSearchClose, navigateTo],
+  );
+
   const handleWorkspaceUndo = useCallback(async () => {
     try {
       if (await dispatcher.undo()) await reloadCurrentBoard();
@@ -1595,11 +1652,14 @@ function App() {
       } else if (e.key.toLowerCase() === "c") {
         e.preventDefault();
         handleCopySelectionImages();
+      } else if (e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        handleOpenSearch();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages, trashOpen, handleCloseTrash]);
+  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages, trashOpen, handleCloseTrash, handleOpenSearch]);
 
   return (
     <AppShell
@@ -1779,6 +1839,16 @@ function App() {
             restoringBatchId={restoringBatchId}
             onClose={handleCloseTrash}
             onRestore={(batchId) => void handleRestoreTrashBatch(batchId)}
+          />
+        )}
+        {searchOpen && (
+          <SearchPalette
+            query={searchQuery}
+            onQueryChange={handleSearchQueryChange}
+            results={searchResults}
+            loading={searchLoading}
+            onSelect={(result) => void handleSearchSelect(result)}
+            onClose={handleSearchClose}
           />
         )}
         {crossBoardDrag?.phase === "previewing" && crossBoardDrag.ghostCard && (
