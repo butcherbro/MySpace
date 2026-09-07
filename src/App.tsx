@@ -302,39 +302,69 @@ function App() {
     [state.unsortedCards, state.cards, board, gateway],
   );
 
-  // Drag a card out of the Unsorted panel onto the canvas: remember which card
-  // is being dragged so the canvas drop can place it exactly at the pointer.
+  // Pointer-drag a card out of the Unsorted panel onto the canvas: track the
+  // pointer on window, show a ghost, and place the card exactly where it is
+  // released if that is over the canvas.
   const unsortedDragCardIdRef = useRef<string | null>(null);
-  const handleUnsortedDragStart = useCallback((cardId: string) => {
-    unsortedDragCardIdRef.current = cardId;
+  const [unsortedGhost, setUnsortedGhost] = useState<{ cardId: string; x: number; y: number } | null>(null);
+  const unsortedGhostMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
+  const unsortedGhostUpRef = useRef<((e: PointerEvent) => void) | null>(null);
+
+  const cleanupUnsortedDrag = useCallback(() => {
+    if (unsortedGhostMoveRef.current) {
+      window.removeEventListener("pointermove", unsortedGhostMoveRef.current);
+      unsortedGhostMoveRef.current = null;
+    }
+    if (unsortedGhostUpRef.current) {
+      window.removeEventListener("pointerup", unsortedGhostUpRef.current);
+      unsortedGhostUpRef.current = null;
+    }
+    unsortedDragCardIdRef.current = null;
+    setUnsortedGhost(null);
   }, []);
 
-  const handleUnsortedDrop = useCallback(
-    (clientX: number, clientY: number) => {
-      const cardId = unsortedDragCardIdRef.current;
-      unsortedDragCardIdRef.current = null;
-      if (!cardId) return;
-      const card = state.unsortedCards.find((c) => c.id === cardId);
-      if (!card) return;
-      const flow = screenToFlowRef.current;
-      const point = flow ? flow(clientX, clientY) : { x: 40, y: 40 };
-      const frame = {
-        x: point.x - card.frame.width / 2,
-        y: point.y - card.frame.height / 2,
-        width: card.frame.width,
-        height: card.frame.height,
+  const handleUnsortedPointerDown = useCallback(
+    (cardId: string, clientX: number, clientY: number) => {
+      unsortedDragCardIdRef.current = cardId;
+      setUnsortedGhost({ cardId, x: clientX, y: clientY });
+
+      const move = (e: PointerEvent) =>
+        setUnsortedGhost((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
+      const up = (e: PointerEvent) => {
+        const id = unsortedDragCardIdRef.current;
+        cleanupUnsortedDrag();
+        if (!id) return;
+        // Place only if released over the canvas.
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const overCanvas = Boolean(el?.closest?.('[data-testid="canvas"]'));
+        if (!overCanvas) return;
+        const card = state.unsortedCards.find((c) => c.id === id);
+        if (!card) return;
+        const flow = screenToFlowRef.current;
+        const point = flow ? flow(e.clientX, e.clientY) : { x: 40, y: 40 };
+        const frame = {
+          x: point.x - card.frame.width / 2,
+          y: point.y - card.frame.height / 2,
+          width: card.frame.width,
+          height: card.frame.height,
+        };
+        void gateway
+          .placeUnsortedCard({ id, expectedRevision: card.revision, frame })
+          .then(() => {
+            dispatch({ type: "cardReplaced", id, card: { ...card, frame } });
+            dispatch({ type: "unsortedCardPlaced", id });
+          })
+          .catch((err) => {
+            dispatch({ type: "failed", message: errorMessage(err) });
+          });
       };
-      void gateway
-        .placeUnsortedCard({ id: cardId, expectedRevision: card.revision, frame })
-        .then(() => {
-          dispatch({ type: "cardReplaced", id: cardId, card: { ...card, frame } });
-          dispatch({ type: "unsortedCardPlaced", id: cardId });
-        })
-        .catch((e) => {
-          dispatch({ type: "failed", message: errorMessage(e) });
-        });
+
+      unsortedGhostMoveRef.current = move;
+      unsortedGhostUpRef.current = up;
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
     },
-    [state.unsortedCards, gateway],
+    [state.unsortedCards, gateway, cleanupUnsortedDrag],
   );
 
   const handleCreateChildBoard = useCallback(async () => {
@@ -1427,7 +1457,7 @@ function App() {
           <UnsortedPanel
             cards={state.unsortedCards}
             onPlace={handlePlaceUnsortedCard}
-            onDragStartCard={handleUnsortedDragStart}
+            onDragStartCard={handleUnsortedPointerDown}
           />
         ) : undefined
       }
@@ -1572,20 +1602,26 @@ function App() {
               </div>
             );
           })()}
-        <div
-          className="workspace__canvas"
-          data-testid="canvas"
-          ref={canvasRef}
-          onDragOver={(e) => {
-            // Allow dropping an Unsorted card onto the canvas.
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            handleUnsortedDrop(e.clientX, e.clientY);
-          }}
-        >
+        {unsortedGhost &&
+          (() => {
+            const card = state.unsortedCards.find((c) => c.id === unsortedGhost.cardId);
+            if (!card) return null;
+            return (
+              <div
+                className="cross-board-ghost"
+                data-testid="unsorted-ghost"
+                style={{
+                  left: unsortedGhost.x,
+                  top: unsortedGhost.y,
+                  width: card.frame.width,
+                  height: card.frame.height,
+                }}
+              >
+                {card.kind === "note" ? card.plainText || "Note" : card.kind}
+              </div>
+            );
+          })()}
+        <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
           <CanvasAdapter
             cards={canvasCards}
             viewport={viewport}
