@@ -183,6 +183,8 @@ export interface MoveCardToBoardInput {
   id: string;
   expectedRevision: number;
   targetBoardId: string;
+  /** Optional destination frame; omit to land at the board origin. */
+  frame?: Frame;
 }
 
 export interface MoveBoardInput {

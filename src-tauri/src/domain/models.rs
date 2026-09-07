@@ -373,6 +373,11 @@ pub struct MoveCardToBoardInput {
     pub id: String,
     pub expected_revision: i64,
     pub target_board_id: String,
+    /// Optional destination frame. When omitted the card lands at the board
+    /// origin (legacy behavior); when present the card is placed exactly there
+    /// (needed for cross-board drag-and-drop).
+    #[serde(default)]
+    pub frame: Option<Frame>,
 }
 
 /// A single item to trash: a leaf card by card id, or a board (portal) by its

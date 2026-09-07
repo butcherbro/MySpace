@@ -1309,14 +1309,21 @@ pub fn move_card_to_board(
         return Err(WorkspaceError::NotFound(input.target_board_id.clone()));
     }
 
+    let (dest_x, dest_y) = match &input.frame {
+        Some(f) => (f.x, f.y),
+        None => (40.0, 40.0),
+    };
+
     let tx = conn.transaction()?;
 
     let changed = tx.execute(
         "UPDATE cards
-         SET board_id = ?1, x = 40, y = 40, revision = revision + 1, updated_at = ?2
-         WHERE id = ?3 AND revision = ?4 AND kind IN ('note', 'image', 'embed')",
+         SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4
+         WHERE id = ?5 AND revision = ?6 AND kind IN ('note', 'image', 'embed')",
         params![
             input.target_board_id,
+            dest_x,
+            dest_y,
             now,
             input.id,
             input.expected_revision

@@ -3,7 +3,7 @@ import { AppShell } from "./app/AppShell";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
-import { MoveCardsCommand, CreateNoteCommand } from "./commands/card-commands";
+import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand } from "./commands/card-commands";
 import { CreateChildBoardCommand, MoveBoardCommand, RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import { TrashSelectionCommand } from "./commands/trash-commands";
@@ -606,15 +606,19 @@ function App() {
         return;
       }
 
-      void queueRef.current
-        .run(async () => {
-          const current = cardsRef.current.find((c) => c.id === cardId);
-          if (!current) return;
-          await gateway.moveCardToBoard({
-            id: cardId,
-            expectedRevision: current.revision,
+      void dispatcher
+        .execute(
+          new MoveCardToBoardCommand(
+            idGenerator.nextId(),
+            cardId,
+            card.boardId,
+            card.frame,
+            card.revision,
             targetBoardId,
-          });
+            { x: 40, y: 40, width: card.frame.width, height: card.frame.height },
+          ),
+        )
+        .then(() => {
           dispatch({ type: "cardsRemoved", ids: [cardId] });
         })
         .catch((err) => {
@@ -914,16 +918,24 @@ function App() {
       });
   }, [state.selection, state.cards, gateway]);
 
+  // Latest-wins navigation guard: a slow snapshot load must never overwrite a
+  // newer navigation. Each call claims a monotonically increasing token before
+  // awaiting; the snapshot is applied only if no newer call has started.
+  const navigationTokenRef = useRef(0);
+
   // Load a board's snapshot into the store.
   const navigateTo = useCallback(
     async (
       boardId: string,
       opts?: { pushHistory?: boolean; tabMode?: "open" | "sync" },
     ) => {
+      const token = ++navigationTokenRef.current;
       // Flush any pending note/viewport writes before replacing the projection,
       // so a debounced save cannot be abandoned by navigation (plan Section H).
       await queueRef.current.flush();
+      if (navigationTokenRef.current !== token) return; // a newer navigation started
       const snapshot = await gateway.loadBoardSnapshot(boardId);
+      if (navigationTokenRef.current !== token) return; // superseded while loading
       if (opts?.pushHistory && historyRef.current) {
         historyRef.current.push(boardId);
       }

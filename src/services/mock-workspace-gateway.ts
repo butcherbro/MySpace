@@ -152,7 +152,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     card.boardId = input.targetBoardId;
-    card.frame = { ...card.frame, x: 40, y: 40 };
+    card.frame = input.frame
+      ? { ...card.frame, x: input.frame.x, y: input.frame.y }
+      : { ...card.frame, x: 40, y: 40 };
     return Promise.resolve();
   }
 

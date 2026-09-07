@@ -72,3 +72,49 @@ export class CreateNoteCommand implements WorkspaceCommand {
     await gateway.trashNote(this.input.id);
   }
 }
+
+/**
+ * Moves a leaf card (note/image/embed) to another board at an exact frame.
+ * `undo` moves it back to its source board and original frame. One move = one
+ * undo entry, matching how Board moves are already undoable.
+ */
+export class MoveCardToBoardCommand implements WorkspaceCommand {
+  id: string;
+  label = "Move to board";
+
+  constructor(
+    id: string,
+    private cardId: string,
+    private sourceBoardId: string,
+    private sourceFrame: Frame,
+    private sourceRevision: number,
+    private targetBoardId: string,
+    private targetFrame: Frame,
+  ) {
+    this.id = id;
+  }
+
+  async execute(gateway: WorkspaceGateway): Promise<void> {
+    await gateway.moveCardToBoard({
+      id: this.cardId,
+      expectedRevision: this.sourceRevision,
+      targetBoardId: this.targetBoardId,
+      frame: this.targetFrame,
+    });
+  }
+
+  async undo(gateway: WorkspaceGateway): Promise<void> {
+    // The move bumped the card's revision by one; move it back to the source
+    // board at its original frame.
+    await gateway.moveCardToBoard({
+      id: this.cardId,
+      expectedRevision: this.sourceRevision + 1,
+      targetBoardId: this.sourceBoardId,
+      frame: this.sourceFrame,
+    });
+  }
+
+  mergeWith(): WorkspaceCommand<unknown> | null {
+    return null;
+  }
+}
