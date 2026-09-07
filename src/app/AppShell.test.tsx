@@ -48,4 +48,20 @@ describe("AppShell", () => {
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
+
+  it("renders a separate Unsorted rail when provided", () => {
+    render(
+      <AppShell
+        topBar={null}
+        toolRail={null}
+        rightRail={<span>Quick boards</span>}
+        unsortedRail={<span>Unsorted</span>}
+      >
+        <span>Desk</span>
+      </AppShell>,
+    );
+
+    expect(screen.getByTestId("right-rail-region")).toHaveTextContent("Quick boards");
+    expect(screen.getByTestId("unsorted-rail-region")).toHaveTextContent("Unsorted");
+  });
 });

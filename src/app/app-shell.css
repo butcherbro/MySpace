@@ -12,6 +12,10 @@
   grid-template-columns: 56px minmax(0, 1fr) 156px;
 }
 
+.app-shell--with-unsorted {
+  grid-template-columns: 56px minmax(0, 1fr) 156px 200px;
+}
+
 .app-shell__title-bar {
   grid-column: 1 / -1;
   grid-row: 1;
@@ -62,6 +66,17 @@
 
 .app-shell__right-rail {
   grid-column: 3;
+  grid-row: 2;
+  min-height: 0;
+  min-width: 0;
+  background: var(--chrome-surface);
+  border-left: 1px solid var(--edge-subtle);
+  z-index: 10;
+  overflow: hidden;
+}
+
+.app-shell__unsorted-rail {
+  grid-column: 4;
   grid-row: 2;
   min-height: 0;
   min-width: 0;

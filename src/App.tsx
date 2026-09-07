@@ -1377,16 +1377,18 @@ function App() {
         />
       }
       rightRail={
-        <div className="workspace__right-rail">
-          <QuickBoardsRail
-            quickBoards={quickBoards}
-            onOpen={handleQuickBoardOpen}
-            onRemove={handleQuickBoardRemove}
-            onReorder={handleQuickBoardsReorder}
-            dropActive={dropActiveQuickBoards}
-          />
+        <QuickBoardsRail
+          quickBoards={quickBoards}
+          onOpen={handleQuickBoardOpen}
+          onRemove={handleQuickBoardRemove}
+          onReorder={handleQuickBoardsReorder}
+          dropActive={dropActiveQuickBoards}
+        />
+      }
+      unsortedRail={
+        state.unsortedCards.length > 0 ? (
           <UnsortedPanel cards={state.unsortedCards} onPlace={handlePlaceUnsortedCard} />
-        </div>
+        ) : undefined
       }
     >
       <div className="workspace">
