@@ -16,6 +16,18 @@
   grid-template-columns: 56px minmax(0, 1fr) 200px 156px;
 }
 
+.app-shell--right-rail-collapsed {
+  grid-template-columns: 56px minmax(0, 1fr) 40px;
+}
+
+.app-shell--with-unsorted.app-shell--right-rail-collapsed {
+  grid-template-columns: 56px minmax(0, 1fr) 200px 40px;
+}
+
+.app-shell--with-right-rail {
+  transition: grid-template-columns 120ms ease;
+}
+
 .app-shell__title-bar {
   grid-column: 1 / -1;
   grid-row: 1;
@@ -88,4 +100,10 @@
 
 .app-shell__right-rail--adjacent {
   grid-column: 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell--with-right-rail {
+    transition: none;
+  }
 }

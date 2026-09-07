@@ -517,17 +517,29 @@ test("dropping a board portal pins a quick board; click opens; remove unpins", a
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
 
-  // Drag the portal onto the persistent Quick Boards rail.
+  // Свёрнутый край остаётся полноценной целью для закрепления доски.
+  await page.getByRole("button", { name: "Collapse quick boards" }).click();
+  await expect(page.getByTestId("right-rail-region")).toHaveAttribute("data-collapsed", "true");
+  await expect
+    .poll(async () => (await page.getByTestId("right-rail-region").boundingBox())?.width)
+    .toBeLessThanOrEqual(40);
+
+  // Перетаскиваем портал на постоянную панель Quick Boards.
   const tileCenter = await centerOf(page, ".board-portal-card__tile");
   const quickRail = page.getByTestId("right-rail-region");
   const railBox = await quickRail.boundingBox();
   expect(railBox).not.toBeNull();
   if (!railBox) return;
 
-  await dragCenter(page, tileCenter, { x: railBox.x + railBox.width / 2, y: railBox.y + 80 });
+  await page.mouse.move(tileCenter.x, tileCenter.y);
+  await page.mouse.down();
+  await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + 80, { steps: 8 });
+  await expect(page.getByTestId("quick-boards")).toHaveClass(/quick-boards-rail--drop/);
+  await page.mouse.up();
 
   // A quick board chip now appears for the pinned board.
   await expect(page.getByTestId("quick-board")).toHaveCount(1);
+  await page.getByRole("button", { name: "Expand quick boards" }).click();
 
   // Changing the source Board cover updates its pinned identity immediately.
   await page.getByTestId("board-portal-card").click({ button: "right" });

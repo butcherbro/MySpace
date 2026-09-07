@@ -8,6 +8,8 @@ interface QuickBoardsRailProps {
   onRemove: (boardId: string) => void;
   onReorder: (boardIds: string[]) => void;
   dropActive?: boolean;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 const COLOR_VARS: Record<string, string> = {
@@ -36,6 +38,8 @@ export function QuickBoardsRail({
   onRemove,
   onReorder,
   dropActive = false,
+  collapsed,
+  onToggleCollapsed,
 }: QuickBoardsRailProps) {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -67,15 +71,28 @@ export function QuickBoardsRail({
 
   return (
     <nav
-      className={`quick-boards-rail${dropActive ? " quick-boards-rail--drop" : ""}`}
+      className={`quick-boards-rail${collapsed ? " quick-boards-rail--collapsed" : ""}${dropActive ? " quick-boards-rail--drop" : ""}`}
       aria-label="Quick boards"
       data-testid="quick-boards"
       data-quick-boards-drop="true"
+      data-collapsed={collapsed ? "true" : "false"}
       onDragEnd={resetDrag}
     >
-      <div className="quick-boards-rail__heading">Quick Boards</div>
+      <div className="quick-boards-rail__header">
+        {!collapsed && <div className="quick-boards-rail__heading">Quick Boards</div>}
+        <button
+          type="button"
+          className="quick-boards-rail__toggle"
+          aria-label={collapsed ? "Expand quick boards" : "Collapse quick boards"}
+          aria-expanded={!collapsed}
+          title={collapsed ? "Expand Quick Boards" : "Collapse Quick Boards"}
+          onClick={onToggleCollapsed}
+        >
+          <span aria-hidden="true">{collapsed ? "‹" : "›"}</span>
+        </button>
+      </div>
       <div className="quick-boards-rail__list">
-        {quickBoards.length === 0 && (
+        {quickBoards.length === 0 && !collapsed && (
           <div className="quick-boards-rail__empty">
             {dropActive ? "Drop to pin" : "Pin boards here"}
           </div>
@@ -125,17 +142,19 @@ export function QuickBoardsRail({
                     identity
                   )}
                 </span>
-                <span className="quick-boards-rail__title">{board.title}</span>
+                {!collapsed && <span className="quick-boards-rail__title">{board.title}</span>}
               </button>
-              <button
-                type="button"
-                className="quick-boards-rail__remove"
-                aria-label={`Remove quick board ${board.title}`}
-                title={`Remove ${board.title}`}
-                onClick={() => onRemove(board.boardId)}
-              >
-                ×
-              </button>
+              {!collapsed && (
+                <button
+                  type="button"
+                  className="quick-boards-rail__remove"
+                  aria-label={`Remove quick board ${board.title}`}
+                  title={`Remove ${board.title}`}
+                  onClick={() => onRemove(board.boardId)}
+                >
+                  ×
+                </button>
+              )}
             </div>
           );
         })}

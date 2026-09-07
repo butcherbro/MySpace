@@ -35,6 +35,17 @@ describe("AppShell", () => {
     expect(screen.getByTestId("canvas-region")).toHaveTextContent("Desk");
   });
 
+  it("exposes the collapsed right-rail state to the layout", () => {
+    render(
+      <AppShell topBar={null} toolRail={null} rightRail={<span>Quick boards</span>} rightRailCollapsed>
+        <span>Desk</span>
+      </AppShell>,
+    );
+
+    expect(screen.getByTestId("app-shell")).toHaveClass("app-shell--right-rail-collapsed");
+    expect(screen.getByTestId("right-rail-region")).toHaveAttribute("data-collapsed", "true");
+  });
+
   it("renders a title-bar drag spacer before the top bar content", () => {
     render(
       <AppShell topBar={<span>Trail</span>} toolRail={null}>

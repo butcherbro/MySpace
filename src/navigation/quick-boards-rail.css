@@ -13,7 +13,14 @@
   background: color-mix(in srgb, var(--focus-halo) 56%, var(--chrome-surface));
 }
 
+.quick-boards-rail__header {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+}
+
 .quick-boards-rail__heading {
+  flex: 1 1 auto;
   padding: var(--space-1) var(--space-2) var(--space-2);
   color: var(--ink-tertiary);
   font-size: 10px;
@@ -21,6 +28,47 @@
   line-height: 1.2;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+.quick-boards-rail__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-tertiary);
+  font: 18px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.quick-boards-rail__toggle:hover {
+  background: var(--focus-halo);
+  color: var(--ink);
+}
+
+.quick-boards-rail__toggle:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--edge-focus), 0 0 0 2px var(--focus-halo);
+}
+
+.quick-boards-rail--collapsed {
+  padding-inline: var(--space-1);
+}
+
+.quick-boards-rail--collapsed .quick-boards-rail__header,
+.quick-boards-rail--collapsed .quick-boards-rail__open {
+  justify-content: center;
+}
+
+.quick-boards-rail--collapsed .quick-boards-rail__open {
+  flex: 0 0 32px;
+  width: 32px;
+  padding-inline: 4px;
 }
 
 .quick-boards-rail__list {
@@ -145,7 +193,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .quick-boards-rail__row {
+  .quick-boards-rail__row,
+  .quick-boards-rail__toggle {
     transition: none;
   }
 }

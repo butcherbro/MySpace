@@ -112,6 +112,7 @@ function App() {
 
   // Quick Boards: persisted, ordered references to Boards.
   const [quickBoards, setQuickBoards] = useState<QuickBoardDto[]>([]);
+  const [quickBoardsCollapsed, setQuickBoardsCollapsed] = useState(false);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -1535,8 +1536,11 @@ function App() {
           onRemove={handleQuickBoardRemove}
           onReorder={handleQuickBoardsReorder}
           dropActive={dropActiveQuickBoards}
+          collapsed={quickBoardsCollapsed}
+          onToggleCollapsed={() => setQuickBoardsCollapsed((collapsed) => !collapsed)}
         />
       }
+      rightRailCollapsed={quickBoardsCollapsed}
       unsortedRail={
         state.unsortedCards.length > 0 ? (
           <UnsortedPanel

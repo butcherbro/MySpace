@@ -25,9 +25,44 @@ const noop = {
   onOpen: vi.fn(),
   onRemove: vi.fn(),
   onReorder: vi.fn(),
+  collapsed: false,
+  onToggleCollapsed: vi.fn(),
 };
 
 describe("QuickBoardsRail", () => {
+  it("exposes an accessible control for collapsing and expanding the rail", async () => {
+    const user = userEvent.setup();
+    const onToggleCollapsed = vi.fn();
+    const { rerender } = render(
+      <QuickBoardsRail
+        quickBoards={[qb("a", "Books", 0)]}
+        {...noop}
+        collapsed={false}
+        onToggleCollapsed={onToggleCollapsed}
+      />,
+    );
+
+    const collapse = screen.getByRole("button", { name: "Collapse quick boards" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    await user.click(collapse);
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <QuickBoardsRail
+        quickBoards={[qb("a", "Books", 0)]}
+        {...noop}
+        collapsed
+        onToggleCollapsed={onToggleCollapsed}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Expand quick boards" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByText("Books")).not.toBeInTheDocument();
+    expect(screen.getByTestId("quick-boards")).toHaveAttribute("data-quick-boards-drop", "true");
+  });
+
   it("stays visible and accepts the first pinned board when empty", () => {
     render(<QuickBoardsRail quickBoards={[]} {...noop} />);
 

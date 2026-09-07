@@ -6,17 +6,33 @@ interface AppShellProps {
   topBar: ReactNode;
   toolRail: ReactNode;
   rightRail?: ReactNode;
+  rightRailCollapsed?: boolean;
   /** Optional separate Unsorted side panel (right of the Quick Boards rail). */
   unsortedRail?: ReactNode;
   children: ReactNode;
 }
 
 /** Fixed application chrome around the spatial workspace. */
-export function AppShell({ topBar, toolRail, rightRail, unsortedRail, children }: AppShellProps) {
+export function AppShell({
+  topBar,
+  toolRail,
+  rightRail,
+  rightRailCollapsed = false,
+  unsortedRail,
+  children,
+}: AppShellProps) {
   const hasUnsorted = Boolean(unsortedRail);
+  const className = [
+    "app-shell",
+    rightRail && "app-shell--with-right-rail",
+    rightRail && rightRailCollapsed && "app-shell--right-rail-collapsed",
+    hasUnsorted && "app-shell--with-unsorted",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div
-      className={`app-shell${rightRail ? " app-shell--with-right-rail" : ""}${hasUnsorted ? " app-shell--with-unsorted" : ""}`}
+      className={className}
       data-testid="app-shell"
       data-theme="system"
     >
@@ -48,6 +64,7 @@ export function AppShell({ topBar, toolRail, rightRail, unsortedRail, children }
         <aside
           className={`app-shell__right-rail${hasUnsorted ? "" : " app-shell__right-rail--adjacent"}`}
           data-testid="right-rail-region"
+          data-collapsed={rightRailCollapsed ? "true" : "false"}
         >
           {rightRail}
         </aside>
