@@ -18,6 +18,7 @@ import { CommandDispatcher } from "./commands/command-dispatcher";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
+import { TrashDrawer } from "./components/trash/TrashDrawer";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -47,6 +48,7 @@ import type {
   ImageCardDto,
   NoteCardDto,
   QuickBoardDto,
+  TrashSummaryDto,
   WorkspaceGateway,
 } from "./services/workspace-gateway";
 import {
@@ -115,9 +117,13 @@ function App() {
   const [quickBoards, setQuickBoards] = useState<QuickBoardDto[]>([]);
   const [quickBoardsCollapsed, setQuickBoardsCollapsed] = useState(false);
 
-  // Recoverable Trash surface: batch count drives the rail badge; the drawer
-  // (Task 4) consumes the same summary via `loadTrash`.
-  const [trashBatchCount, setTrashBatchCount] = useState(0);
+  // Recoverable Trash surface: the summary drives both the rail badge and the
+  // inspection/restore drawer.
+  const [trashSummary, setTrashSummary] = useState<TrashSummaryDto | null>(null);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [trashError, setTrashError] = useState<string | null>(null);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [restoringBatchId, setRestoringBatchId] = useState<string | null>(null);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -252,25 +258,37 @@ function App() {
     loadQuickBoards();
   }, [loadQuickBoards]);
 
-  // Load the recoverable Trash summary. The badge uses only `batch_count`; the
-  // drawer reuses the full summary. Refreshed on startup, after delete/restore,
-  // and on cross-process refresh.
+  // Load the recoverable Trash summary. The badge and drawer both consume the
+  // full summary. Refreshed on startup, after delete/restore, and on
+  // cross-process refresh. Mirrors `loadQuickBoards` (then/catch chaining) so
+  // state updates stay inside asynchronous callbacks.
   const loadTrash = useCallback(() => {
-    void gateway
+    return gateway
       .listTrash()
-      .then((summary) => setTrashBatchCount(summary.batchCount))
+      .then((summary) => {
+        setTrashSummary(summary);
+        setTrashError(null);
+      })
       .catch((e) => {
-        dispatch({ type: "failed", message: errorMessage(e) });
+        setTrashError(errorMessage(e));
       });
   }, [gateway]);
 
   useEffect(() => {
-    loadTrash();
+    void loadTrash();
   }, [loadTrash]);
 
-  // Task 4 wires this to the recoverable Trash drawer; for now the button only
-  // carries the batch count badge.
-  const handleOpenTrash = useCallback(() => {}, []);
+  const handleOpenTrash = useCallback(() => {
+    setTrashOpen(true);
+    setTrashLoading(true);
+    setTrashError(null);
+    void loadTrash().finally(() => setTrashLoading(false));
+  }, [loadTrash]);
+
+  const handleCloseTrash = useCallback(() => {
+    setTrashOpen(false);
+    setTrashError(null);
+  }, []);
 
   const handleCreateNote = useCallback(
     async (
@@ -860,7 +878,7 @@ function App() {
     try {
       await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
       dispatch({ type: "cardsRemoved", ids: state.selection });
-      loadTrash();
+      void loadTrash();
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
@@ -973,7 +991,7 @@ function App() {
       .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
       .then(() => {
         dispatch({ type: "cardsRemoved", ids });
-        loadTrash();
+        void loadTrash();
       })
       .catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -1306,6 +1324,25 @@ function App() {
     if (board) await navigateTo(board.id);
   }, [board, navigateTo]);
 
+  const handleRestoreTrashBatch = useCallback(
+    async (batchId: string) => {
+      setRestoringBatchId(batchId);
+      try {
+        await gateway.restoreTrashBatch(batchId);
+        setRestoringBatchId(null);
+        await loadTrash();
+        // The restored Board subtree/portal may re-enter the open Board or the
+        // Quick Boards rail; reload both to reconcile.
+        await reloadCurrentBoard();
+        loadQuickBoards();
+      } catch (e) {
+        setRestoringBatchId(null);
+        setTrashError(errorMessage(e));
+      }
+    },
+    [gateway, loadTrash, reloadCurrentBoard, loadQuickBoards],
+  );
+
   const handleWorkspaceUndo = useCallback(async () => {
     try {
       if (await dispatcher.undo()) await reloadCurrentBoard();
@@ -1432,7 +1469,7 @@ function App() {
         if (!cancelled && v !== dataVersionRef.current && board) {
           dataVersionRef.current = v;
           void navigateTo(board.id);
-          loadTrash();
+          void loadTrash();
         }
       });
     }, 3000);
@@ -1580,7 +1617,7 @@ function App() {
           onNewLink={handleCreateLink}
           onNewBoard={() => void handleCreateChildBoard()}
           onAddImage={() => void handleCreateImage()}
-          trashBatchCount={trashBatchCount}
+          trashBatchCount={trashSummary?.batchCount ?? 0}
           onOpenTrash={handleOpenTrash}
         />
       }
@@ -1725,6 +1762,16 @@ function App() {
           <CanvasErrorBanner
             message={error}
             onRetry={() => dispatch({ type: "clearError" })}
+          />
+        )}
+        {trashOpen && (
+          <TrashDrawer
+            summary={trashSummary}
+            loading={trashLoading}
+            error={trashError}
+            restoringBatchId={restoringBatchId}
+            onClose={handleCloseTrash}
+            onRestore={(batchId) => void handleRestoreTrashBatch(batchId)}
           />
         )}
         {crossBoardDrag?.phase === "previewing" && crossBoardDrag.ghostCard && (
