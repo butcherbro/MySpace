@@ -655,18 +655,13 @@ function App() {
         return;
       }
 
-      void dispatcher
-        .execute(
-          new MoveCardToBoardCommand(
-            idGenerator.nextId(),
-            cardId,
-            card.boardId,
-            card.frame,
-            card.revision,
-            targetBoardId,
-            { x: 40, y: 40, width: card.frame.width, height: card.frame.height },
-          ),
-        )
+      // Blind drop of a leaf card into a board: it lands in that board's
+      // Unsorted panel (Milanote-style) instead of stacking at the origin.
+      void gateway
+        .moveCardsToBoardUnsorted({
+          targetBoardId,
+          cards: [{ id: cardId, expectedRevision: card.revision }],
+        })
         .then(() => {
           dispatch({ type: "cardsRemoved", ids: [cardId] });
         })
@@ -1057,16 +1052,32 @@ function App() {
       const target = drag.hoverBoardId;
       const overTargetCanvas = drag.pointerBoardId === target;
       if (drag.phase === "previewing" && target && overTargetCanvas) {
-        // Commit: move the dragged cards into the target board's Unsorted panel.
-        const items = drag.cardIds
-          .map((id) => {
-            const card = cardsRef.current.find((c) => c.id === id);
-            return card ? { id, expectedRevision: card.revision } : null;
-          })
-          .filter((x): x is { id: string; expectedRevision: number } => x !== null);
-        if (items.length > 0) {
-          void gateway
-            .moveCardsToBoardUnsorted({ targetBoardId: target, cards: items })
+        // Commit: place the dragged card(s) exactly where the pointer was
+        // released on the target board (screen -> board coordinates).
+        const card = cardsRef.current.find((c) => c.id === drag.cardIds[0]);
+        if (card) {
+          const flow = screenToFlowRef.current;
+          const point = flow
+            ? flow(drag.pointer.x, drag.pointer.y)
+            : { x: 40, y: 40 };
+          const frame = {
+            x: point.x - card.frame.width / 2,
+            y: point.y - card.frame.height / 2,
+            width: card.frame.width,
+            height: card.frame.height,
+          };
+          void dispatcher
+            .execute(
+              new MoveCardToBoardCommand(
+                idGenerator.nextId(),
+                card.id,
+                card.boardId,
+                card.frame,
+                card.revision,
+                target,
+                frame,
+              ),
+            )
             .then(() => {
               dispatch({ type: "cardsRemoved", ids: drag.cardIds });
               setCrossBoardDrag(commitCrossBoardDrag(drag));
@@ -1098,7 +1109,7 @@ function App() {
       return true; // consumed: moved to a portal
     }
     return false;
-  }, [handleCardDroppedOnPortal, handleQuickBoardPin, gateway]);
+  }, [handleCardDroppedOnPortal, handleQuickBoardPin, gateway, dispatcher, idGenerator]);
 
   // Reload the current board (no history push). Used to reconcile UI with the
   // database after undo/redo.

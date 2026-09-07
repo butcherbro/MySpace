@@ -376,7 +376,7 @@ test("dropping a board portal onto another board portal reparents it", async ({ 
   await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
 });
 
-test("dropping a leaf card onto the Home breadcrumb moves it to Home", async ({ page }) => {
+test("dropping a leaf card onto the Home breadcrumb moves it to Home's Unsorted", async ({ page }) => {
   await page.goto("/");
 
   // Create a child board and open it.
@@ -400,9 +400,10 @@ test("dropping a leaf card onto the Home breadcrumb moves it to Home", async ({ 
   // The note leaves the child board.
   await expect(page.getByTestId("note-card")).toHaveCount(0);
 
-  // Navigate Home and confirm the note landed there.
+  // Navigate Home: the note is not on the canvas but in Home's Unsorted panel.
   await homeCrumb.click();
-  await expect(page.getByTestId("note-card")).toHaveCount(1);
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+  await expect(page.getByTestId("unsorted-panel")).toBeVisible();
 });
 
 // --- Copy MySpace Link / Copy File Path ---
