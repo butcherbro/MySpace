@@ -19,7 +19,7 @@ import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
-import { SearchPalette } from "./search/SearchPalette";
+import { SearchBar } from "./search/SearchBar";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -127,9 +127,9 @@ function App() {
   const [trashOpen, setTrashOpen] = useState(false);
   const [restoringBatchId, setRestoringBatchId] = useState<string | null>(null);
 
-  // Search palette: query/debounce/results owned here; rendering/keyboard in
-  // `SearchPalette`. Global scope is the V1 default (see docs/specs/search.md).
-  const [searchOpen, setSearchOpen] = useState(false);
+  // Search: query/debounce/results owned here; rendering/keyboard in
+  // `SearchBar` (always-visible input in the top bar). Global scope is the V1
+  // default (see docs/specs/search.md).
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResultDto[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -304,8 +304,7 @@ function App() {
     if (query.trim() === "") setSearchResults([]);
   }, []);
 
-  const handleSearchClose = useCallback(() => {
-    setSearchOpen(false);
+  const handleSearchClear = useCallback(() => {
     setSearchQuery("");
     setSearchResults([]);
   }, []);
@@ -313,7 +312,7 @@ function App() {
   // Debounced search (150ms) over the whole workspace. No state is set
   // synchronously inside the effect body (see the search spec for the default).
   useEffect(() => {
-    if (!searchOpen || searchQuery.trim() === "") return;
+    if (searchQuery.trim() === "") return;
     const query = searchQuery.trim();
     const timer = setTimeout(() => {
       setSearchLoading(true);
@@ -327,13 +326,7 @@ function App() {
         .finally(() => setSearchLoading(false));
     }, 150);
     return () => clearTimeout(timer);
-  }, [searchOpen, searchQuery, gateway]);
-
-  const handleOpenSearch = useCallback(() => {
-    setSearchOpen(true);
-    setSearchQuery("");
-    setSearchResults([]);
-  }, []);
+  }, [searchQuery, gateway]);
 
   const handleCreateNote = useCallback(
     async (
@@ -1393,11 +1386,11 @@ function App() {
   // card is deferred (see docs/specs/search.md — visual highlight is OPEN).
   const handleSearchSelect = useCallback(
     async (result: SearchResultDto) => {
-      handleSearchClose();
+      handleSearchClear();
       const targetBoardId = result.kind === "board" ? result.entityId : result.boardId;
       await navigateTo(targetBoardId, { pushHistory: true, tabMode: "open" });
     },
-    [handleSearchClose, navigateTo],
+    [handleSearchClear, navigateTo],
   );
 
   const handleWorkspaceUndo = useCallback(async () => {
@@ -1652,14 +1645,11 @@ function App() {
       } else if (e.key.toLowerCase() === "c") {
         e.preventDefault();
         handleCopySelectionImages();
-      } else if (e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        handleOpenSearch();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages, trashOpen, handleCloseTrash, handleOpenSearch]);
+  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages, trashOpen, handleCloseTrash]);
 
   return (
     <AppShell
@@ -1671,11 +1661,20 @@ function App() {
             dropTargetBoardId={dropTargetBoardId}
             onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
           />
-          <UndoRedoControls
-            dispatcher={dispatcher}
-            onUndo={handleWorkspaceUndo}
-            onRedo={handleWorkspaceRedo}
-          />
+          <div className="topbar-actions">
+            <SearchBar
+              query={searchQuery}
+              onQueryChange={handleSearchQueryChange}
+              results={searchResults}
+              loading={searchLoading}
+              onSelect={(result) => void handleSearchSelect(result)}
+            />
+            <UndoRedoControls
+              dispatcher={dispatcher}
+              onUndo={handleWorkspaceUndo}
+              onRedo={handleWorkspaceRedo}
+            />
+          </div>
         </>
       }
       toolRail={
@@ -1839,16 +1838,6 @@ function App() {
             restoringBatchId={restoringBatchId}
             onClose={handleCloseTrash}
             onRestore={(batchId) => void handleRestoreTrashBatch(batchId)}
-          />
-        )}
-        {searchOpen && (
-          <SearchPalette
-            query={searchQuery}
-            onQueryChange={handleSearchQueryChange}
-            results={searchResults}
-            loading={searchLoading}
-            onSelect={(result) => void handleSearchSelect(result)}
-            onClose={handleSearchClose}
           />
         )}
         {crossBoardDrag?.phase === "previewing" && crossBoardDrag.ghostCard && (

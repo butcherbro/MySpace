@@ -1,56 +1,60 @@
-.search-palette {
+.search-bar {
+  position: relative;
+  flex: none;
+  width: 220px;
+}
+
+.search-bar__input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink);
+  font: 400 13px/1 var(--font-ui);
+  outline: none;
+}
+
+.search-bar__input::placeholder {
+  color: var(--ink-tertiary);
+}
+
+.search-bar__input:focus {
+  border-color: var(--edge-focus);
+  box-shadow: 0 0 0 2px var(--focus-halo);
+}
+
+.search-bar__results {
   position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 560px;
-  max-width: calc(100% - 24px);
-  display: flex;
-  flex-direction: column;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 360px;
+  max-height: 360px;
+  overflow-y: auto;
   background: var(--paper-raised);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--radius-menu);
   box-shadow: var(--shadow-menu);
   z-index: 60;
-  overflow: hidden;
 }
 
-.search-palette__input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 12px 14px;
-  border: none;
-  border-bottom: 1px solid var(--edge-subtle);
-  background: transparent;
-  color: var(--ink);
-  font: 400 14px/1.4 var(--font-ui);
-  outline: none;
-}
-
-.search-palette__input::placeholder {
-  color: var(--ink-tertiary);
-}
-
-.search-palette__results {
-  max-height: 360px;
-  overflow-y: auto;
-}
-
-.search-palette__status,
-.search-palette__empty {
+.search-bar__status,
+.search-bar__empty {
   margin: 0;
-  padding: 12px 14px;
+  padding: 10px 12px;
   color: var(--ink-secondary);
   font: 400 13px/1.4 var(--font-ui);
 }
 
-.search-palette__list {
+.search-bar__list {
   list-style: none;
   margin: 0;
   padding: 4px;
 }
 
-.search-palette__item {
+.search-bar__item {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -59,11 +63,11 @@
   cursor: pointer;
 }
 
-.search-palette__item--active {
+.search-bar__item--active {
   background: color-mix(in srgb, var(--edge-focus) 10%, transparent);
 }
 
-.search-palette__kind {
+.search-bar__kind {
   flex: none;
   min-width: 40px;
   padding: 1px 6px;
@@ -75,14 +79,14 @@
   text-transform: capitalize;
 }
 
-.search-palette__body {
+.search-bar__body {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.search-palette__title {
+.search-bar__title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -90,7 +94,7 @@
   color: var(--ink);
 }
 
-.search-palette__excerpt {
+.search-bar__excerpt {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -98,7 +102,7 @@
   color: var(--ink-secondary);
 }
 
-.search-palette__trail {
+.search-bar__trail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -2,8 +2,6 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-left: auto;
-  padding-right: var(--space-2);
 }
 
 .undo-redo-controls__button {

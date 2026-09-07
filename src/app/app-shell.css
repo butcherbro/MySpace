@@ -56,6 +56,16 @@
   height: 100%;
 }
 
+/* Right-aligned command group: search field followed by Undo/Redo. */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-right: var(--space-2);
+  flex: none;
+}
+
 .app-shell__tool-rail {
   grid-column: 1;
   grid-row: 2;
