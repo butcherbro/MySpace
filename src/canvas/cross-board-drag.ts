@@ -25,9 +25,15 @@ export interface CrossBoardDragState {
   phase: CrossBoardDragPhase;
   /** Screen-space pointer position (for the ghost). */
   pointer: { x: number; y: number };
+  /** Snapshot of the dragged card for the ghost (independent of the open board). */
+  ghostCard: { kind: string; width: number; height: number; label: string } | null;
 }
 
-export function createCrossBoardDrag(cardIds: string[], sourceBoardId: string): CrossBoardDragState {
+export function createCrossBoardDrag(
+  cardIds: string[],
+  sourceBoardId: string,
+  ghostCard: CrossBoardDragState["ghostCard"],
+): CrossBoardDragState {
   return {
     cardIds,
     sourceBoardId,
@@ -35,6 +41,7 @@ export function createCrossBoardDrag(cardIds: string[], sourceBoardId: string): 
     pointerBoardId: null,
     phase: "dragging",
     pointer: { x: 0, y: 0 },
+    ghostCard,
   };
 }
 

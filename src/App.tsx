@@ -1097,7 +1097,16 @@ function App() {
     if (!crossBoardDragRef.current) {
       const card = cardsRef.current.find((c) => c.id === e.cardId);
       if (card) {
-        const drag = createCrossBoardDrag([e.cardId], card.boardId);
+        const drag = createCrossBoardDrag(
+          [e.cardId],
+          card.boardId,
+          {
+            kind: card.kind,
+            width: card.frame.width,
+            height: card.frame.height,
+            label: card.kind === "note" ? card.plainText || "Note" : card.kind,
+          },
+        );
         crossBoardDragRef.current = drag;
         setCrossBoardDrag(drag);
       }
@@ -1636,25 +1645,20 @@ function App() {
             onRetry={() => dispatch({ type: "clearError" })}
           />
         )}
-        {crossBoardDrag?.phase === "previewing" &&
-          (() => {
-            const card = state.cards.find((c) => c.id === crossBoardDrag.cardIds[0]);
-            if (!card) return null;
-            return (
-              <div
-                className="cross-board-ghost"
-                data-testid="cross-board-ghost"
-                style={{
-                  left: crossBoardDrag.pointer.x,
-                  top: crossBoardDrag.pointer.y,
-                  width: card.frame.width,
-                  height: card.frame.height,
-                }}
-              >
-                {card.kind === "note" ? card.plainText || "Note" : card.kind}
-              </div>
-            );
-          })()}
+        {crossBoardDrag?.phase === "previewing" && crossBoardDrag.ghostCard && (
+          <div
+            className="cross-board-ghost"
+            data-testid="cross-board-ghost"
+            style={{
+              left: crossBoardDrag.pointer.x,
+              top: crossBoardDrag.pointer.y,
+              width: crossBoardDrag.ghostCard.width,
+              height: crossBoardDrag.ghostCard.height,
+            }}
+          >
+            {crossBoardDrag.ghostCard.label}
+          </div>
+        )}
         {unsortedGhost &&
           (() => {
             const card = state.unsortedCards.find((c) => c.id === unsortedGhost.cardId);
