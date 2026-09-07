@@ -12,8 +12,8 @@ use crate::domain::models::{
     CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata,
     Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
     NoteCardDto, PlaceUnsortedCardInput, PortalTarget, QuickBoardDto, ReorderQuickBoardsInput,
-    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
-    UpdateViewportInput, Viewport,
+    SearchResultDto, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
+    UpdateNoteInput, UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -1705,7 +1705,168 @@ pub fn remove_quick_board(conn: &mut Connection, board_id: &str) -> Result<(), W
     Ok(())
 }
 
-/// Reorders Quick Boards transactionally. `board_ids` is the full new order; it
+/// Maximum Unicode scalar values for a search result title/excerpt.
+const SEARCH_EXCERPT_LIMIT: usize = 120;
+
+/// Maximum search results returned by the V1 read model.
+const SEARCH_RESULT_LIMIT: usize = 50;
+
+fn bound_text(text: &str) -> String {
+    text.trim().chars().take(SEARCH_EXCERPT_LIMIT).collect()
+}
+
+/// Escapes LIKE wildcards in the user query and wraps it in `%…%` so the term is
+/// matched literally and case-insensitively.
+fn like_pattern(query: &str) -> String {
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{}%", escaped)
+}
+
+/// A search hit plus the rank used to order results deterministically.
+struct SearchHit {
+    entity_id: String,
+    kind: &'static str,
+    title: String,
+    excerpt: Option<String>,
+    board_id: String,
+    rank: i64,
+}
+
+/// Searches the workspace (Board titles, Note plain text, Link Card title/URL/
+/// description) and returns a bounded, deterministic result set. This is the V1
+/// default: global scope and a title-before-body ordering; both are documented
+/// in `docs/specs/search.md` and may be refined after agreement.
+pub fn search_workspace(
+    conn: &Connection,
+    query: &str,
+) -> Result<Vec<SearchResultDto>, WorkspaceError> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pattern = like_pattern(query);
+    let mut hits = Vec::<SearchHit>::new();
+
+    // Boards by title (rank 0).
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, title FROM boards
+             WHERE deleted_at IS NULL AND title LIKE ?1 ESCAPE '\\'",
+        )?;
+        let rows = stmt.query_map([&pattern], |row| {
+            Ok(SearchHit {
+                entity_id: row.get(0)?,
+                kind: "board",
+                title: row.get::<_, String>(1)?,
+                excerpt: None,
+                board_id: row.get(0)?,
+                rank: 0,
+            })
+        })?;
+        for r in rows {
+            hits.push(r?);
+        }
+    }
+
+    // Notes by plain text (rank 1).
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, n.plain_text
+             FROM cards c
+             JOIN note_cards n ON n.card_id = c.id
+             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
+             WHERE c.deleted_at IS NULL AND n.plain_text LIKE ?1 ESCAPE '\\'",
+        )?;
+        let rows = stmt.query_map([&pattern], |row| {
+            Ok(SearchHit {
+                entity_id: row.get(0)?,
+                kind: "note",
+                title: bound_text(&row.get::<_, String>(2)?),
+                excerpt: None,
+                board_id: row.get(1)?,
+                rank: 1,
+            })
+        })?;
+        for r in rows {
+            hits.push(r?);
+        }
+    }
+
+    // Link Cards (embed) by title, URL, or description.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, e.title, e.source_url, e.display_url, e.description_plain_text
+             FROM cards c
+             JOIN embed_cards e ON e.card_id = c.id
+             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
+             WHERE c.deleted_at IS NULL AND (
+                 e.title LIKE ?1 ESCAPE '\\' OR
+                 e.source_url LIKE ?1 ESCAPE '\\' OR
+                 e.display_url LIKE ?1 ESCAPE '\\' OR
+                 e.description_plain_text LIKE ?1 ESCAPE '\\'
+             )",
+        )?;
+        let rows = stmt.query_map([&pattern], |row| {
+            let title_raw: Option<String> = row.get(2)?;
+            let source_url: String = row.get(3)?;
+            let display_url: String = row.get(4)?;
+            let description: String = row.get(5)?;
+            let title = title_raw
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| source_url.clone());
+
+            let title_lc = title.to_lowercase();
+            let source_lc = source_url.to_lowercase();
+            let display_lc = display_url.to_lowercase();
+            let q = query.to_lowercase();
+
+            let (rank, excerpt) =
+                if title_lc.contains(&q) || source_lc.contains(&q) || display_lc.contains(&q) {
+                    (0, None)
+                } else {
+                    (2, Some(bound_text(&description)))
+                };
+
+            Ok(SearchHit {
+                entity_id: row.get(0)?,
+                kind: "link",
+                title,
+                excerpt,
+                board_id: row.get(1)?,
+                rank,
+            })
+        })?;
+        for r in rows {
+            hits.push(r?);
+        }
+    }
+
+    // Deterministic ordering: rank first, then title, then entity id.
+    hits.sort_by(|a, b| {
+        a.rank
+            .cmp(&b.rank)
+            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            .then_with(|| a.entity_id.cmp(&b.entity_id))
+    });
+    hits.truncate(SEARCH_RESULT_LIMIT);
+
+    let mut out = Vec::with_capacity(hits.len());
+    for hit in hits {
+        let board_trail = load_breadcrumbs(conn, &hit.board_id)?;
+        out.push(SearchResultDto {
+            entity_id: hit.entity_id,
+            kind: hit.kind.to_string(),
+            title: hit.title,
+            excerpt: hit.excerpt,
+            board_id: hit.board_id,
+            board_trail,
+        });
+    }
+    Ok(out)
+}
 /// must contain exactly the currently-pinned Board ids (no missing/extra ids),
 /// otherwise the operation is rejected without partial writes.
 pub fn reorder_quick_boards(

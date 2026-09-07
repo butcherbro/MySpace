@@ -460,6 +460,21 @@ pub struct TrashSummaryDto {
     pub card_count: i64,
 }
 
+/// A single workspace search result. `kind` is the user-facing kind (`board`,
+/// `note`, or `link` — the `embed` card is reported as `link`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResultDto {
+    pub entity_id: String,
+    pub kind: String,
+    pub title: String,
+    /// A bounded match-context snippet; `None` when the match is in the title.
+    pub excerpt: Option<String>,
+    pub board_id: String,
+    /// The root-first ancestor trail (`Home / … / board_id`).
+    pub board_trail: Vec<Breadcrumb>,
+}
+
 /// A single Link Card to create in a batch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

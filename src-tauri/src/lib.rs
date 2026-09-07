@@ -117,6 +117,7 @@ pub fn run() {
             commands::trash::restore_trash_batch,
             commands::trash::list_trash,
             commands::clipboard::copy_text_command,
+            commands::search::search_workspace,
             commands::quick_boards::list_quick_boards,
             commands::quick_boards::add_quick_board,
             commands::quick_boards::remove_quick_board,

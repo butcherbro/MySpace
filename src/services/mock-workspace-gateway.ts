@@ -21,6 +21,7 @@ import type {
   QuickBoardDto,
   ReorderQuickBoardsInput,
   SaveViewportInput,
+  SearchResultDto,
   SetBoardCoverInput,
   TrashEntryDto,
   TrashSelectionInput,
@@ -475,6 +476,74 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       boardCount: batches.reduce((sum, batch) => sum + batch.boardCount, 0),
       cardCount: batches.reduce((sum, batch) => sum + batch.cardCount, 0),
     });
+  }
+
+  searchWorkspace(query: string): Promise<SearchResultDto[]> {
+    const q = query.trim().toLowerCase();
+    if (!q) return Promise.resolve([]);
+
+    const hits: Array<{ rank: number; result: SearchResultDto }> = [];
+
+    // Boards by title.
+    for (const board of this.boards.values()) {
+      if (board.title.toLowerCase().includes(q)) {
+        hits.push({
+          rank: 0,
+          result: {
+            entityId: board.id,
+            kind: "board",
+            title: board.title,
+            excerpt: null,
+            boardId: board.id,
+            boardTrail: this.buildBreadcrumbs(board.id),
+          },
+        });
+      }
+    }
+
+    for (const card of this.snapshot.cards) {
+      if (card.kind === "note" && card.plainText.toLowerCase().includes(q)) {
+        hits.push({
+          rank: 1,
+          result: {
+            entityId: card.id,
+            kind: "note",
+            title: card.plainText.trim(),
+            excerpt: null,
+            boardId: card.boardId,
+            boardTrail: this.buildBreadcrumbs(card.boardId),
+          },
+        });
+      }
+      if (card.kind === "embed") {
+        const titleMatch = card.title.toLowerCase().includes(q);
+        const urlMatch =
+          card.sourceUrl.toLowerCase().includes(q) || card.displayUrl.toLowerCase().includes(q);
+        const descMatch = card.descriptionPlainText.toLowerCase().includes(q);
+        if (titleMatch || urlMatch || descMatch) {
+          hits.push({
+            rank: titleMatch || urlMatch ? 0 : 2,
+            result: {
+              entityId: card.id,
+              kind: "link",
+              title: card.title || card.sourceUrl,
+              excerpt: titleMatch || urlMatch ? null : card.descriptionPlainText.trim(),
+              boardId: card.boardId,
+              boardTrail: this.buildBreadcrumbs(card.boardId),
+            },
+          });
+        }
+      }
+    }
+
+    hits.sort(
+      (a, b) =>
+        a.rank - b.rank ||
+        a.result.title.toLowerCase().localeCompare(b.result.title.toLowerCase()) ||
+        a.result.entityId.localeCompare(b.result.entityId),
+    );
+
+    return Promise.resolve(hits.slice(0, 50).map((hit) => hit.result));
   }
 
   private moveToTrash(cardIds: Set<string>, boardIds: Set<string>): string {

@@ -173,4 +173,12 @@ describe("TauriWorkspaceGateway", () => {
     expect(invokeMock).toHaveBeenCalledWith("list_trash", {});
     expect(result.batchCount).toBe(0);
   });
+
+  it("calls search_workspace with the query payload", async () => {
+    invokeMock.mockResolvedValue([]);
+    const gw = new TauriWorkspaceGateway();
+    const result = await gw.searchWorkspace("rocket");
+    expect(invokeMock).toHaveBeenCalledWith("search_workspace", { query: "rocket" });
+    expect(result).toEqual([]);
+  });
 });

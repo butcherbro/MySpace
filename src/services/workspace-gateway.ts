@@ -300,6 +300,17 @@ export interface TrashSummaryDto {
   cardCount: number;
 }
 
+/** A single workspace search result. */
+export interface SearchResultDto {
+  entityId: string;
+  kind: "board" | "note" | "link";
+  title: string;
+  /** Bounded match-context snippet; `null` when the match is in the title. */
+  excerpt: string | null;
+  boardId: string;
+  boardTrail: Array<{ id: string; title: string }>;
+}
+
 export interface AddQuickBoardInput {
   boardId: string;
 }
@@ -347,6 +358,7 @@ export interface WorkspaceGateway {
   updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void>;
   trashSelection(input: TrashSelectionInput): Promise<string>;
   listTrash(): Promise<TrashSummaryDto>;
+  searchWorkspace(query: string): Promise<SearchResultDto[]>;
   listQuickBoards(): Promise<QuickBoardDto[]>;
   addQuickBoard(input: AddQuickBoardInput): Promise<void>;
   removeQuickBoard(boardId: string): Promise<void>;

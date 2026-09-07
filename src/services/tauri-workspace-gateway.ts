@@ -22,6 +22,7 @@ import type {
   QuickBoardDto,
   ReorderQuickBoardsInput,
   SaveViewportInput,
+  SearchResultDto,
   SetBoardCoverInput,
   TrashSelectionInput,
   TrashSummaryDto,
@@ -139,6 +140,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   listTrash(): Promise<TrashSummaryDto> {
     return invoke<TrashSummaryDto>("list_trash", {});
+  }
+
+  searchWorkspace(query: string): Promise<SearchResultDto[]> {
+    return invoke<SearchResultDto[]>("search_workspace", { query });
   }
 
   listQuickBoards(): Promise<QuickBoardDto[]> {
