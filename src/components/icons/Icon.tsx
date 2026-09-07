@@ -10,7 +10,8 @@ export type IconName =
   | "search"
   | "undo"
   | "redo"
-  | "bookmark";
+  | "bookmark"
+  | "trash";
 
 interface IconProps {
   name: IconName;
@@ -76,6 +77,15 @@ const ICONS: Record<IconName, () => React.JSX.Element> = {
   bookmark: () => (
     <>
       <path d="M7 5.5h10v13L12 15l-5 3.5z" />
+    </>
+  ),
+  trash: () => (
+    <>
+      <path d="M8.5 5.5h7" />
+      <path d="M9.5 5.5V4.75h5v.75" />
+      <path d="M6.75 7h10.5l-.75 11.5H7.5z" />
+      <path d="M10 10v5.5" />
+      <path d="M14 10v5.5" />
     </>
   ),
 };

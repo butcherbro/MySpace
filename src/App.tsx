@@ -115,6 +115,10 @@ function App() {
   const [quickBoards, setQuickBoards] = useState<QuickBoardDto[]>([]);
   const [quickBoardsCollapsed, setQuickBoardsCollapsed] = useState(false);
 
+  // Recoverable Trash surface: batch count drives the rail badge; the drawer
+  // (Task 4) consumes the same summary via `loadTrash`.
+  const [trashBatchCount, setTrashBatchCount] = useState(0);
+
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
   // Undo/redo over workspace commands (depends only on the stable gateway).
@@ -247,6 +251,26 @@ function App() {
   useEffect(() => {
     loadQuickBoards();
   }, [loadQuickBoards]);
+
+  // Load the recoverable Trash summary. The badge uses only `batch_count`; the
+  // drawer reuses the full summary. Refreshed on startup, after delete/restore,
+  // and on cross-process refresh.
+  const loadTrash = useCallback(() => {
+    void gateway
+      .listTrash()
+      .then((summary) => setTrashBatchCount(summary.batchCount))
+      .catch((e) => {
+        dispatch({ type: "failed", message: errorMessage(e) });
+      });
+  }, [gateway]);
+
+  useEffect(() => {
+    loadTrash();
+  }, [loadTrash]);
+
+  // Task 4 wires this to the recoverable Trash drawer; for now the button only
+  // carries the batch count badge.
+  const handleOpenTrash = useCallback(() => {}, []);
 
   const handleCreateNote = useCallback(
     async (
@@ -836,10 +860,11 @@ function App() {
     try {
       await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
       dispatch({ type: "cardsRemoved", ids: state.selection });
+      loadTrash();
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
-  }, [state.selection, state.cards, dispatcher, idGenerator]);
+  }, [state.selection, state.cards, dispatcher, idGenerator, loadTrash]);
 
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleViewportChanged = useCallback(
@@ -946,11 +971,14 @@ function App() {
     if (items.length === 0) return;
     void dispatcher
       .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
-      .then(() => dispatch({ type: "cardsRemoved", ids }))
+      .then(() => {
+        dispatch({ type: "cardsRemoved", ids });
+        loadTrash();
+      })
       .catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
       });
-  }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator]);
+  }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator, loadTrash]);
 
   // Copy the stable MySpace address for the right-clicked card (or the current
   // board when invoked from a portal/board context). "Copy MySpace Link" is the
@@ -1404,6 +1432,7 @@ function App() {
         if (!cancelled && v !== dataVersionRef.current && board) {
           dataVersionRef.current = v;
           void navigateTo(board.id);
+          loadTrash();
         }
       });
     }, 3000);
@@ -1411,7 +1440,7 @@ function App() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [gateway, board, navigateTo]);
+  }, [gateway, board, navigateTo, loadTrash]);
 
   const handleRenameBoard = useCallback(
     (boardId: string, title: string) => {
@@ -1551,6 +1580,8 @@ function App() {
           onNewLink={handleCreateLink}
           onNewBoard={() => void handleCreateChildBoard()}
           onAddImage={() => void handleCreateImage()}
+          trashBatchCount={trashBatchCount}
+          onOpenTrash={handleOpenTrash}
         />
       }
       rightRail={

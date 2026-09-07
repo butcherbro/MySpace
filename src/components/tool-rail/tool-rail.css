@@ -9,6 +9,37 @@
   box-sizing: border-box;
 }
 
+.tool-rail__group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+
+.tool-rail__bottom {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin-top: auto;
+}
+
+.tool-rail__badge {
+  position: absolute;
+  top: -2px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--edge-focus);
+  color: #fff;
+  font: 600 10px/16px var(--font-ui);
+  text-align: center;
+  pointer-events: none;
+}
+
 .tool-button {
   display: grid;
   grid-template-rows: 20px auto;
