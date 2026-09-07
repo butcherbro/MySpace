@@ -233,3 +233,125 @@ fn trash_selection_rolls_back_on_bad_item() {
     let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
     assert!(snapshot.cards.iter().any(|c| c.id() == "note-ok"));
 }
+
+fn note_input(board_id: &str, id: &str, plain_text: &str) -> CreateNoteInput {
+    CreateNoteInput {
+        id: id.to_string(),
+        board_id: board_id.to_string(),
+        frame: Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 80.0,
+        },
+        z_index: 0,
+        document_json: serde_json::json!({ "type": "doc" }),
+        plain_text: plain_text.to_string(),
+    }
+}
+
+#[test]
+fn list_trash_is_empty_initially() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    assert_eq!(summary.batch_count, 0);
+    assert!(summary.batches.is_empty());
+    assert_eq!(summary.board_count, 0);
+    assert_eq!(summary.card_count, 0);
+}
+
+#[test]
+fn list_trash_reports_one_deleted_note() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "Hello world")).unwrap();
+    trash_service::trash_note(&mut conn, "n1").unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    assert_eq!(summary.batch_count, 1);
+    assert_eq!(summary.board_count, 0);
+    assert_eq!(summary.card_count, 1);
+
+    let batch = &summary.batches[0];
+    assert_eq!(batch.board_count, 0);
+    assert_eq!(batch.card_count, 1);
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].id, "n1");
+    assert_eq!(batch.items[0].kind, "note");
+    assert_eq!(batch.items[0].title, "Hello world");
+}
+
+#[test]
+fn list_trash_reports_mixed_note_and_board_batch() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "keep me")).unwrap();
+    board_service::create_child_board(&mut conn, &child_input(&home, "b1", "p1")).unwrap();
+
+    let batch = trash_service::trash_selection(
+        &mut conn,
+        &TrashSelectionInput {
+            items: vec![
+                TrashItem {
+                    id: "n1".to_string(),
+                    kind: "note".to_string(),
+                },
+                TrashItem {
+                    id: "b1".to_string(),
+                    kind: "board_portal".to_string(),
+                },
+            ],
+        },
+    )
+    .unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    assert_eq!(summary.batch_count, 1);
+    assert_eq!(summary.board_count, 1);
+    // The note card plus the trashed portal card are both in the batch.
+    assert_eq!(summary.card_count, 2);
+
+    let entry = &summary.batches[0];
+    assert_eq!(entry.batch_id, batch);
+    assert_eq!(entry.board_count, 1);
+    assert_eq!(entry.card_count, 2);
+    assert_eq!(entry.items.len(), 2);
+
+    let board_item = entry.items.iter().find(|i| i.kind == "board").unwrap();
+    assert_eq!(board_item.id, "b1");
+    assert_eq!(board_item.title, "Child");
+    let note_item = entry.items.iter().find(|i| i.kind == "note").unwrap();
+    assert_eq!(note_item.id, "n1");
+    assert_eq!(note_item.title, "keep me");
+}
+
+#[test]
+fn list_trash_summarizes_board_subtree_without_duplicate_portal() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    board_service::create_child_board(&mut conn, &child_input(&home, "b1", "p1")).unwrap();
+    board_service::create_child_board(&mut conn, &child_input("b1", "b2", "p2")).unwrap();
+
+    trash_service::trash_board(&mut conn, "b1").unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    assert_eq!(summary.batch_count, 1);
+    assert_eq!(summary.board_count, 2, "b1 and b2 both trashed");
+    // The primary portal p1 (on Home, to b1) and p2 (on b1, to b2) are both
+    // trashed; neither is listed as an item, only counted.
+    assert_eq!(summary.card_count, 2);
+
+    let entry = &summary.batches[0];
+    // Only b1 is a top-level representative; b2 and the portals are summarized.
+    assert_eq!(entry.items.len(), 1);
+    assert_eq!(entry.items[0].id, "b1");
+    assert_eq!(entry.items[0].kind, "board");
+}

@@ -426,6 +426,40 @@ pub struct TrashSelectionInput {
     pub items: Vec<TrashItem>,
 }
 
+/// A single representative top-level item in a Trash batch. A Board or leaf
+/// card that was directly trashed (not merely a descendant swept up with a
+/// parent Board) is shown; descendants are summarized in the batch counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashEntryDto {
+    pub id: String,
+    /// One of `note` | `image` | `embed` | `board`.
+    pub kind: String,
+    pub title: String,
+}
+
+/// One recoverable Trash batch: a single atomic delete operation that may span
+/// a mixed selection or an entire Board subtree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashBatchDto {
+    pub batch_id: String,
+    pub deleted_at: i64,
+    pub items: Vec<TrashEntryDto>,
+    pub board_count: i64,
+    pub card_count: i64,
+}
+
+/// The Trash read model, newest batch first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashSummaryDto {
+    pub batches: Vec<TrashBatchDto>,
+    pub batch_count: i64,
+    pub board_count: i64,
+    pub card_count: i64,
+}
+
 /// A single Link Card to create in a batch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

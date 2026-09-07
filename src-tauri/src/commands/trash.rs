@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::TrashSelectionInput;
+use crate::domain::models::{TrashSelectionInput, TrashSummaryDto};
 use crate::domain::trash_service;
 
 /// The application-wide SQLite connection, guarded so commands can share it.
@@ -50,4 +50,13 @@ pub fn trash_selection(
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     trash_service::trash_selection(&mut conn, &input)
+}
+
+/// Lists recoverable Trash batches (newest first) without mutating data.
+#[tauri::command]
+pub fn list_trash(db: DbState<'_>) -> Result<TrashSummaryDto, WorkspaceError> {
+    let conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    trash_service::list_trash(&conn)
 }

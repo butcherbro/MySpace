@@ -8,7 +8,7 @@
 use rusqlite::{params, Connection, Transaction};
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::TrashSelectionInput;
+use crate::domain::models::{TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto};
 
 use super::super::db;
 
@@ -211,4 +211,206 @@ pub fn restore_trash_batch(conn: &mut Connection, batch_id: &str) -> Result<(), 
 
     tx.commit()?;
     Ok(())
+}
+
+/// Maximum Unicode scalar values for a Trash entry excerpt.
+const EXCERPT_LIMIT: usize = 120;
+/// Maximum number of batches returned by the V1 read model.
+const MAX_BATCHES: usize = 100;
+
+struct TrashedBoard {
+    id: String,
+    parent_board_id: Option<String>,
+    title: String,
+    batch_id: String,
+    deleted_at: i64,
+}
+
+struct TrashedCard {
+    id: String,
+    board_id: String,
+    kind: String,
+    batch_id: String,
+    deleted_at: i64,
+    is_portal: bool,
+    title: String,
+}
+
+fn bound_excerpt(text: &str) -> String {
+    text.trim().chars().take(EXCERPT_LIMIT).collect()
+}
+
+/// Builds the recoverable Trash read model without mutating the workspace.
+/// Batches are ordered newest first; within a batch only directly-trashed
+/// top-level Boards and leaf cards are listed as representative items, while
+/// descendants and the primary portal are summarized in the counts.
+pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> {
+    let mut boards = Vec::<TrashedBoard>::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, parent_board_id, title, trash_batch_id, deleted_at
+             FROM boards WHERE deleted_at IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TrashedBoard {
+                id: row.get(0)?,
+                parent_board_id: row.get(1)?,
+                title: row.get(2)?,
+                batch_id: row.get(3)?,
+                deleted_at: row.get(4)?,
+            })
+        })?;
+        for row in rows {
+            boards.push(row?);
+        }
+    }
+
+    let mut cards = Vec::<TrashedCard>::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, c.kind, c.trash_batch_id, c.deleted_at,
+                    n.plain_text, i.caption_plain_text, e.title, e.source_url, a.file_name
+             FROM cards c
+             LEFT JOIN note_cards n ON n.card_id = c.id
+             LEFT JOIN image_cards i ON i.card_id = c.id
+             LEFT JOIN assets a ON a.id = i.asset_id
+             LEFT JOIN embed_cards e ON e.card_id = c.id
+             WHERE c.deleted_at IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let kind: String = row.get(2)?;
+            let is_portal = kind == "board_portal";
+            let title = if is_portal {
+                String::new()
+            } else {
+                let note_plain: Option<String> = row.get(5)?;
+                let image_caption: Option<String> = row.get(6)?;
+                let embed_title: Option<String> = row.get(7)?;
+                let embed_source: Option<String> = row.get(8)?;
+                let image_file: Option<String> = row.get(9)?;
+                let raw = match kind.as_str() {
+                    "note" => note_plain.unwrap_or_default(),
+                    "image" => image_caption
+                        .filter(|s| !s.trim().is_empty())
+                        .or_else(|| image_file)
+                        .unwrap_or_default(),
+                    "embed" => embed_title
+                        .filter(|s| !s.trim().is_empty())
+                        .or_else(|| embed_source)
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                };
+                bound_excerpt(&raw)
+            };
+            Ok(TrashedCard {
+                id: row.get(0)?,
+                board_id: row.get(1)?,
+                kind,
+                batch_id: row.get(3)?,
+                deleted_at: row.get(4)?,
+                is_portal,
+                title,
+            })
+        })?;
+        for row in rows {
+            cards.push(row?);
+        }
+    }
+
+    // Group rows by batch id preserving insertion order for a stable final sort.
+    let mut batch_ids: Vec<String> = Vec::new();
+    {
+        let mut seen = std::collections::HashSet::new();
+        // Deterministic order: collect board batch ids in query order, then any
+        // card-only batch ids.
+        for b in &boards {
+            if seen.insert(b.batch_id.clone()) {
+                batch_ids.push(b.batch_id.clone());
+            }
+        }
+        for c in &cards {
+            if seen.insert(c.batch_id.clone()) {
+                batch_ids.push(c.batch_id.clone());
+            }
+        }
+    }
+
+    let mut batches = Vec::<TrashBatchDto>::new();
+    for batch_id in &batch_ids {
+        let boards_in_batch: Vec<&TrashedBoard> =
+            boards.iter().filter(|b| &b.batch_id == batch_id).collect();
+        let cards_in_batch: Vec<&TrashedCard> =
+            cards.iter().filter(|c| &c.batch_id == batch_id).collect();
+
+        let deleted_at = boards_in_batch
+            .iter()
+            .map(|b| b.deleted_at)
+            .chain(cards_in_batch.iter().map(|c| c.deleted_at))
+            .max()
+            .unwrap_or(0);
+
+        let board_id_set: std::collections::HashSet<&str> =
+            boards_in_batch.iter().map(|b| b.id.as_str()).collect();
+
+        // A Board is top-level when its parent is not part of the same batch.
+        let mut board_items: Vec<TrashEntryDto> = boards_in_batch
+            .iter()
+            .filter(|b| {
+                b.parent_board_id
+                    .as_deref()
+                    .map(|p| !board_id_set.contains(p))
+                    .unwrap_or(true)
+            })
+            .map(|b| TrashEntryDto {
+                id: b.id.clone(),
+                kind: "board".to_string(),
+                title: bound_excerpt(&b.title),
+            })
+            .collect();
+        board_items.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
+
+        // A leaf card is top-level when its owning Board is not trashed in the
+        // same batch. Portals are never listed (a trashed Board already
+        // represents its primary portal).
+        let mut card_items: Vec<TrashEntryDto> = cards_in_batch
+            .iter()
+            .filter(|c| !c.is_portal && !board_id_set.contains(c.board_id.as_str()))
+            .map(|c| TrashEntryDto {
+                id: c.id.clone(),
+                kind: c.kind.clone(),
+                title: c.title.clone(),
+            })
+            .collect();
+        card_items.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
+
+        let mut items = Vec::with_capacity(board_items.len() + card_items.len());
+        items.extend(board_items);
+        items.extend(card_items);
+
+        batches.push(TrashBatchDto {
+            batch_id: batch_id.clone(),
+            deleted_at,
+            items,
+            board_count: boards_in_batch.len() as i64,
+            card_count: cards_in_batch.len() as i64,
+        });
+    }
+
+    batches.truncate(MAX_BATCHES);
+    batches.sort_by(|a, b| {
+        b.deleted_at
+            .cmp(&a.deleted_at)
+            .then_with(|| b.batch_id.cmp(&a.batch_id))
+    });
+
+    let batch_count = batches.len() as i64;
+    let board_count = batches.iter().map(|b| b.board_count).sum();
+    let card_count = batches.iter().map(|b| b.card_count).sum();
+
+    Ok(TrashSummaryDto {
+        batches,
+        batch_count,
+        board_count,
+        card_count,
+    })
 }
