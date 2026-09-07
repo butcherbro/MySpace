@@ -1614,8 +1614,15 @@ function App() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
-      const inEditor = target && (target.tagName === "TEXTAREA" || target.isContentEditable);
-      if (inEditor) return;
+      // The top-bar search field is a plain <input>, not a Tiptap editor or a
+      // textarea. Backspace/Delete inside it must edit text, not trash canvas
+      // selection, so treat any text-entry control as owning focus.
+      const inTextEntry =
+        target &&
+        (target.tagName === "TEXTAREA" ||
+          target.isContentEditable ||
+          target.tagName === "INPUT");
+      if (inTextEntry) return;
       if (e.key === "Escape") {
         if (trashOpen) {
           e.preventDefault();

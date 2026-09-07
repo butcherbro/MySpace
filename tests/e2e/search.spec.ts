@@ -48,3 +48,21 @@ test("top-bar search navigates to a note's board", async ({ page }) => {
   await expect(page.getByTestId("search-results")).toHaveCount(0);
   await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("");
 });
+
+test("Backspace edits the search field instead of trashing canvas selection", async ({ page }) => {
+  await page.goto("/");
+
+  // Create a note so there is something that could wrongly be deleted.
+  await page.getByRole("button", { name: "New note", exact: true }).click();
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+
+  // Type into the search field and delete one char with Backspace.
+  const search = page.getByRole("searchbox", { name: "Search" });
+  await search.click();
+  await search.fill("abc");
+  await page.keyboard.press("Backspace");
+
+  // The text is edited in place, and the note is untouched.
+  await expect(search).toHaveValue("ab");
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+});
