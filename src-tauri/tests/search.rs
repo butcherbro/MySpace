@@ -253,3 +253,21 @@ fn search_matches_image_caption_and_filename() {
     assert_eq!(by_file.len(), 1);
     assert_eq!(by_file[0].kind, "image");
 }
+
+#[test]
+fn search_matches_cyrillic_case_insensitively() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "Путь мыслителя"))
+        .unwrap();
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n2", "простой текст"))
+        .unwrap();
+
+    // Lowercase query matches uppercase Cyrillic text.
+    let results = workspace_repository::search_workspace(&conn, "путь").unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].kind, "note");
+    assert_eq!(results[0].title, "Путь мыслителя");
+}

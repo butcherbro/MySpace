@@ -1737,12 +1737,11 @@ fn bound_text(text: &str) -> String {
 
 /// Escapes LIKE wildcards in the user query and wraps it in `%…%` so the term is
 /// matched literally and case-insensitively.
-fn like_pattern(query: &str) -> String {
-    let escaped = query
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    format!("%{}%", escaped)
+/// Unicode-aware case-insensitive substring test. SQLite's `LIKE` is only
+/// case-insensitive for ASCII, so Cyrillic (and other non-ASCII) must be matched
+/// in Rust via `to_lowercase`.
+fn contains_query(haystack: &str, query_lower: &str) -> bool {
+    haystack.to_lowercase().contains(query_lower)
 }
 
 /// A search hit plus the rank used to order results deterministically.
@@ -1767,27 +1766,27 @@ pub fn search_workspace(
     if query.is_empty() {
         return Ok(Vec::new());
     }
-    let pattern = like_pattern(query);
+    let q = query.to_lowercase();
     let mut hits = Vec::<SearchHit>::new();
 
     // Boards by title (rank 0).
     {
-        let mut stmt = conn.prepare(
-            "SELECT id, title FROM boards
-             WHERE deleted_at IS NULL AND title LIKE ?1 ESCAPE '\\'",
-        )?;
-        let rows = stmt.query_map([&pattern], |row| {
-            Ok(SearchHit {
-                entity_id: row.get(0)?,
-                kind: "board",
-                title: row.get::<_, String>(1)?,
-                excerpt: None,
-                board_id: row.get(0)?,
-                rank: 0,
-            })
+        let mut stmt = conn.prepare("SELECT id, title FROM boards WHERE deleted_at IS NULL")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
         for r in rows {
-            hits.push(r?);
+            let (id, title) = r?;
+            if contains_query(&title, &q) {
+                hits.push(SearchHit {
+                    entity_id: id.clone(),
+                    kind: "board",
+                    title: bound_text(&title),
+                    excerpt: None,
+                    board_id: id,
+                    rank: 0,
+                });
+            }
         }
     }
 
@@ -1798,20 +1797,27 @@ pub fn search_workspace(
              FROM cards c
              JOIN note_cards n ON n.card_id = c.id
              JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL AND n.plain_text LIKE ?1 ESCAPE '\\'",
+             WHERE c.deleted_at IS NULL",
         )?;
-        let rows = stmt.query_map([&pattern], |row| {
-            Ok(SearchHit {
-                entity_id: row.get(0)?,
-                kind: "note",
-                title: bound_text(&row.get::<_, String>(2)?),
-                excerpt: None,
-                board_id: row.get(1)?,
-                rank: 1,
-            })
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })?;
         for r in rows {
-            hits.push(r?);
+            let (id, board_id, plain_text) = r?;
+            if contains_query(&plain_text, &q) {
+                hits.push(SearchHit {
+                    entity_id: id,
+                    kind: "note",
+                    title: bound_text(&plain_text),
+                    excerpt: None,
+                    board_id,
+                    rank: 1,
+                });
+            }
         }
     }
 
@@ -1823,29 +1829,33 @@ pub fn search_workspace(
              JOIN image_cards i ON i.card_id = c.id
              JOIN assets a ON a.id = i.asset_id
              JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL AND (
-                 i.caption_plain_text LIKE ?1 ESCAPE '\\' OR a.file_name LIKE ?1 ESCAPE '\\'
-             )",
+             WHERE c.deleted_at IS NULL",
         )?;
-        let rows = stmt.query_map([&pattern], |row| {
-            let caption: String = row.get(2)?;
-            let file_name: String = row.get(3)?;
-            let title = if caption.trim().is_empty() {
-                file_name.clone()
-            } else {
-                caption
-            };
-            Ok(SearchHit {
-                entity_id: row.get(0)?,
-                kind: "image",
-                title: bound_text(&title),
-                excerpt: None,
-                board_id: row.get(1)?,
-                rank: 1,
-            })
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
         })?;
         for r in rows {
-            hits.push(r?);
+            let (id, board_id, caption, file_name) = r?;
+            if contains_query(&caption, &q) || contains_query(&file_name, &q) {
+                let title = if caption.trim().is_empty() {
+                    file_name
+                } else {
+                    caption
+                };
+                hits.push(SearchHit {
+                    entity_id: id,
+                    kind: "image",
+                    title: bound_text(&title),
+                    excerpt: None,
+                    board_id,
+                    rank: 1,
+                });
+            }
         }
     }
 
@@ -1856,45 +1866,47 @@ pub fn search_workspace(
              FROM cards c
              JOIN embed_cards e ON e.card_id = c.id
              JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL AND (
-                 e.title LIKE ?1 ESCAPE '\\' OR
-                 e.source_url LIKE ?1 ESCAPE '\\' OR
-                 e.display_url LIKE ?1 ESCAPE '\\' OR
-                 e.description_plain_text LIKE ?1 ESCAPE '\\'
-             )",
+             WHERE c.deleted_at IS NULL",
         )?;
-        let rows = stmt.query_map([&pattern], |row| {
-            let title_raw: Option<String> = row.get(2)?;
-            let source_url: String = row.get(3)?;
-            let display_url: String = row.get(4)?;
-            let description: String = row.get(5)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?;
+        for r in rows {
+            let (id, board_id, title_raw, source_url, display_url, description) = r?;
             let title = title_raw
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or_else(|| source_url.clone());
 
-            let title_lc = title.to_lowercase();
-            let source_lc = source_url.to_lowercase();
-            let display_lc = display_url.to_lowercase();
-            let q = query.to_lowercase();
+            let title_match = contains_query(&title, &q);
+            let source_match = contains_query(&source_url, &q);
+            let display_match = contains_query(&display_url, &q);
+            let desc_match = contains_query(&description, &q);
 
-            let (rank, excerpt) =
-                if title_lc.contains(&q) || source_lc.contains(&q) || display_lc.contains(&q) {
-                    (0, None)
-                } else {
-                    (2, Some(bound_text(&description)))
-                };
+            if !(title_match || source_match || display_match || desc_match) {
+                continue;
+            }
 
-            Ok(SearchHit {
-                entity_id: row.get(0)?,
+            let (rank, excerpt) = if title_match || source_match || display_match {
+                (0, None)
+            } else {
+                (2, Some(bound_text(&description)))
+            };
+
+            hits.push(SearchHit {
+                entity_id: id,
                 kind: "link",
                 title,
                 excerpt,
-                board_id: row.get(1)?,
+                board_id,
                 rank,
-            })
-        })?;
-        for r in rows {
-            hits.push(r?);
+            });
         }
     }
 
