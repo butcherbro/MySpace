@@ -3,18 +3,34 @@
 // A drag that hovers a Board tab opens that board and shows a ghost copy of the
 // dragged card(s) under the cursor. The database is NOT changed until the user
 // releases the pointer on the target board's canvas, at which point the cards
-// are moved into that board's Unsorted panel (Milanote-style). Escape, release
+// are moved (leaf cards into Unsorted, board portals reparented). Escape, release
 // outside the canvas, or pointercancel cancel the drag with no side effects.
 
 export type CrossBoardDragPhase =
   | "dragging" // pointer down on a card, still on the source board
   | "loading-target" // hovered a tab, board is being opened
   | "previewing" // target board open, ghost follows the cursor
-  | "committing" // pointerup on target canvas, moving to Unsorted
+  | "committing" // pointerup on target canvas, moving
   | "cancelled"; // aborted, no side effects
 
+/** A snapshot of one dragged card, captured at drag start. */
+export interface CrossBoardCardSnapshot {
+  cardId: string;
+  kind: string;
+  width: number;
+  height: number;
+  label: string;
+  revision: number;
+  boardId: string;
+  frame: { x: number; y: number; width: number; height: number };
+  /** For board portals: the board the portal leads to. */
+  targetBoardId?: string;
+  /** For board portals: that board's current revision (for reparenting). */
+  boardRevision?: number;
+}
+
 export interface CrossBoardDragState {
-  /** The dragged card ids (single card for now; batch later). */
+  /** The dragged card ids (single card, or a whole multi-selection). */
   cardIds: string[];
   /** The board the cards currently live on. */
   sourceBoardId: string;
@@ -25,37 +41,25 @@ export interface CrossBoardDragState {
   phase: CrossBoardDragPhase;
   /** Screen-space pointer position (for the ghost). */
   pointer: { x: number; y: number };
-  /** Snapshot of the dragged card: for the ghost and for the commit (the card
-   *  is not in the current board's projection once the target opens). */
-  ghostCard: {
-    cardId: string;
-    kind: string;
-    width: number;
-    height: number;
-    label: string;
-    revision: number;
-    boardId: string;
-    frame: { x: number; y: number; width: number; height: number };
-    /** For board portals: the board the portal leads to. */
-    targetBoardId?: string;
-    /** For board portals: that board's current revision (for reparenting). */
-    boardRevision?: number;
-  } | null;
+  /** Snapshots of every dragged card (for the group commit). */
+  cards: CrossBoardCardSnapshot[];
+  /** The representative card for the ghost (== cards[0], or null). */
+  ghostCard: CrossBoardCardSnapshot | null;
 }
 
 export function createCrossBoardDrag(
-  cardIds: string[],
+  cards: CrossBoardCardSnapshot[],
   sourceBoardId: string,
-  ghostCard: CrossBoardDragState["ghostCard"],
 ): CrossBoardDragState {
   return {
-    cardIds,
+    cardIds: cards.map((c) => c.cardId),
     sourceBoardId,
     hoverBoardId: null,
     pointerBoardId: null,
     phase: "dragging",
     pointer: { x: 0, y: 0 },
-    ghostCard,
+    cards,
+    ghostCard: cards[0] ?? null,
   };
 }
 

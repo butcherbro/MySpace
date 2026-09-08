@@ -21,7 +21,7 @@ const ghost = {
 
 describe("cross-board drag state machine", () => {
   it("starts in dragging on the source board", () => {
-    const s = createCrossBoardDrag(["note-1"], "home", ghost);
+    const s = createCrossBoardDrag([ghost], "home");
     expect(s.phase).toBe("dragging");
     expect(s.sourceBoardId).toBe("home");
     expect(s.hoverBoardId).toBeNull();
@@ -29,14 +29,14 @@ describe("cross-board drag state machine", () => {
   });
 
   it("moving updates the pointer and the board under it", () => {
-    let s = createCrossBoardDrag(["note-1"], "home", ghost);
+    let s = createCrossBoardDrag([ghost], "home");
     s = moveCrossBoardDrag(s, { x: 100, y: 200 }, "board-b");
     expect(s.pointer).toEqual({ x: 100, y: 200 });
     expect(s.pointerBoardId).toBe("board-b");
   });
 
   it("hovering a tab enters loading-target once", () => {
-    let s = createCrossBoardDrag(["note-1"], "home", ghost);
+    let s = createCrossBoardDrag([ghost], "home");
     s = hoverCrossBoardTab(s, "board-b");
     expect(s.hoverBoardId).toBe("board-b");
     expect(s.phase).toBe("loading-target");
@@ -46,20 +46,20 @@ describe("cross-board drag state machine", () => {
   });
 
   it("target loaded moves to previewing (ghost)", () => {
-    let s = createCrossBoardDrag(["note-1"], "home", ghost);
+    let s = createCrossBoardDrag([ghost], "home");
     s = hoverCrossBoardTab(s, "board-b");
     s = targetBoardLoaded(s);
     expect(s.phase).toBe("previewing");
   });
 
   it("commit moves to committing; cancel moves to cancelled", () => {
-    let s = createCrossBoardDrag(["note-1"], "home", ghost);
+    let s = createCrossBoardDrag([ghost], "home");
     s = hoverCrossBoardTab(s, "board-b");
     s = targetBoardLoaded(s);
     s = commitCrossBoardDrag(s);
     expect(s.phase).toBe("committing");
 
-    const c = cancelCrossBoardDrag(createCrossBoardDrag(["note-1"], "home", ghost));
+    const c = cancelCrossBoardDrag(createCrossBoardDrag([ghost], "home"));
     expect(c.phase).toBe("cancelled");
   });
 });

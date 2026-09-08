@@ -897,7 +897,8 @@ function App() {
 
       const leafCards = cards.filter((c) => c.kind !== "board_portal");
       const portals = cards.filter(
-        (c): c is BoardPortalDto => c.kind === "board_portal",
+        (c): c is BoardPortalDto =>
+          c.kind === "board_portal" && c.target.id !== targetBoardId,
       );
 
       if (leafCards.length > 0) {
@@ -1295,22 +1296,22 @@ function App() {
     if (!prev || prev.phase === "cancelled" || prev.phase === "committing") {
       const card = cardsRef.current.find((c) => c.id === e.cardId);
       if (card) {
-        const drag = createCrossBoardDrag(
-          groupIds,
-          card.boardId,
-          {
-            cardId: card.id,
-            kind: card.kind,
-            width: card.frame.width,
-            height: card.frame.height,
-            label: card.kind === "note" ? card.plainText || "Note" : card.kind,
-            revision: card.revision,
-            boardId: card.boardId,
-            frame: { ...card.frame },
-            targetBoardId: card.kind === "board_portal" ? card.target.id : undefined,
-            boardRevision: card.kind === "board_portal" ? card.target.boardRevision : undefined,
-          },
-        );
+        const snapshots = groupIds
+          .map((id) => cardsRef.current.find((c) => c.id === id))
+          .filter((c): c is CardDto => Boolean(c))
+          .map((c) => ({
+            cardId: c.id,
+            kind: c.kind,
+            width: c.frame.width,
+            height: c.frame.height,
+            label: c.kind === "note" ? c.plainText || "Note" : c.kind,
+            revision: c.revision,
+            boardId: c.boardId,
+            frame: { ...c.frame },
+            targetBoardId: c.kind === "board_portal" ? c.target.id : undefined,
+            boardRevision: c.kind === "board_portal" ? c.target.boardRevision : undefined,
+          }));
+        const drag = createCrossBoardDrag(snapshots, card.boardId);
         crossBoardDragRef.current = drag;
         setCrossBoardDrag(drag);
       }
@@ -1402,6 +1403,71 @@ function App() {
             width: gc.width,
             height: gc.height,
           };
+
+          // Group move onto a tab: every leaf card goes into the target's
+          // Unsorted panel as one batch; any board portals reparent one by one.
+          if (drag.cardIds.length > 1) {
+            const leafSanps = drag.cards.filter((c) => c.kind !== "board_portal");
+            const portals = drag.cards.filter(
+              (c): c is (typeof drag.cards)[number] & { targetBoardId: string; boardRevision: number } =>
+                c.kind === "board_portal" && c.targetBoardId !== undefined && c.boardRevision !== undefined && c.targetBoardId !== target,
+            );
+
+            const finish = () => {
+              setCrossBoardDrag(commitCrossBoardDrag(drag));
+              crossBoardDragRef.current = null;
+              void navigateTo(target, { tabMode: "sync" });
+            };
+
+            if (leafSanps.length > 0) {
+              // Refresh each card's revision (a draft save may have bumped it
+              // after drag start) before the batch move, mirroring the single
+              // leaf-card path.
+              void Promise.all(
+                leafSanps.map((c) =>
+                  gateway
+                    .readCard(c.cardId)
+                    .then((fresh) => ({
+                      id: c.cardId,
+                      expectedRevision:
+                        fresh && "revision" in fresh
+                          ? (fresh as { revision: number }).revision
+                          : c.revision,
+                    }))
+                    .catch(() => ({ id: c.cardId, expectedRevision: c.revision })),
+                ),
+              )
+                .then((items) => gateway.moveCardsToBoardUnsorted({ targetBoardId: target, cards: items }))
+                .then(finish)
+                .catch((err) => {
+                  dispatch({ type: "failed", message: errorMessage(err) });
+                  setCrossBoardDrag(cancelCrossBoardDrag(drag));
+                  crossBoardDragRef.current = null;
+                });
+            } else {
+              finish();
+            }
+
+            for (const portal of portals) {
+              void dispatcher
+                .execute(
+                  new MoveBoardCommand(
+                    idGenerator.nextId(),
+                    portal.targetBoardId,
+                    portal.boardId,
+                    portal.frame,
+                    target,
+                    { x: 40, y: 40, width: portal.frame.width, height: portal.frame.height },
+                    portal.boardRevision,
+                    portal.revision,
+                  ),
+                )
+                .catch((err) => {
+                  dispatch({ type: "failed", message: errorMessage(err) });
+                });
+            }
+            return true; // consumed
+          }
 
           // A board portal reparents its underlying board (moveBoard), not the
           // leaf-card move path. Reuse the same MoveBoardCommand as a portal
