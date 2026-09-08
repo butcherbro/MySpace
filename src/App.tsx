@@ -133,6 +133,8 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResultDto[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [cardFocus, setCardFocus] = useState<{ cardId: string; token: number } | null>(null);
+  const cardFocusTokenRef = useRef(0);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -1382,13 +1384,16 @@ function App() {
   );
 
   // Open the result's board. A Board result navigates to itself; a Note/Link
-  // result navigates to its containing board. Selecting/centering the exact
-  // card is deferred (see docs/specs/search.md — visual highlight is OPEN).
+  // result navigates to its containing board and focuses the card (center +
+  // select) once it is rendered.
   const handleSearchSelect = useCallback(
     async (result: SearchResultDto) => {
       handleSearchClear();
       const targetBoardId = result.kind === "board" ? result.entityId : result.boardId;
       await navigateTo(targetBoardId, { pushHistory: true, tabMode: "open" });
+      if (result.kind !== "board") {
+        setCardFocus({ cardId: result.entityId, token: ++cardFocusTokenRef.current });
+      }
     },
     [handleSearchClear, navigateTo],
   );
@@ -1886,6 +1891,7 @@ function App() {
             viewport={viewport}
             viewportResetToken={boardOpenRevision}
             editingCardId={state.editingCardId}
+            focusRequest={cardFocus}
             onScreenToFlowReady={(fn) => {
               screenToFlowRef.current = fn;
             }}

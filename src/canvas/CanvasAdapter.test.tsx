@@ -5,6 +5,8 @@ import { CanvasAdapter } from "./CanvasAdapter";
 import type { CanvasCard } from "./canvas-types";
 
 const setViewport = vi.fn();
+const setCenter = vi.fn();
+const getZoom = vi.fn(() => 1);
 const reactFlowProps: unknown[] = [];
 const backgroundProps: Array<{
   variant?: string;
@@ -46,6 +48,8 @@ vi.mock("@xyflow/react", async () => {
       onInit?: (instance: {
         setViewport: typeof setViewport;
         screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number };
+        setCenter: typeof setCenter;
+        getZoom: typeof getZoom;
       }) => void;
     }) => {
       useEffect(() => {
@@ -53,6 +57,8 @@ vi.mock("@xyflow/react", async () => {
         onInit?.({
           setViewport,
           screenToFlowPosition: (point) => point,
+          setCenter,
+          getZoom,
         });
       });
 
@@ -275,6 +281,27 @@ describe("CanvasAdapter", () => {
 
     renderContent("hello", 2);
     expect(screen.getByTestId("card-a")).toHaveTextContent("hello");
+  });
+
+  it("centers and selects a requested focus card", () => {
+    setCenter.mockClear();
+    getZoom.mockClear();
+    const onSelectionChanged = vi.fn();
+
+    render(
+      <CanvasAdapter
+        cards={cards}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        viewportResetToken={1}
+        focusRequest={{ cardId: "a", token: 1 }}
+        events={{ onSelectionChanged }}
+        renderCard={(card) => <span data-testid={`card-${card.id}`}>{card.id}</span>}
+      />,
+    );
+
+    // Card "a" is at (0,0,200,80), so its center is (100,40).
+    expect(setCenter).toHaveBeenCalledWith(100, 40, { zoom: 1, duration: 0 });
+    expect(onSelectionChanged).toHaveBeenCalledWith({ ids: ["a"] });
   });
 
   it("renders the Milanote-calibrated desk dot grid", () => {

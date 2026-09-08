@@ -36,10 +36,12 @@ test("top-bar search navigates to a note's board", async ({ page }) => {
   await page.getByRole("searchbox", { name: "Search" }).fill("needle phrase");
   await expect(page.getByText("needle phrase for search")).toBeVisible();
 
-  // Selecting it navigates to the child board and reveals the note.
+  // Selecting it navigates to the child board, reveals the note, and selects it.
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("note-card")).toHaveCount(1);
   await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
+  await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
+  await expect(page.locator('.canvas-card-frame[data-selected="true"]')).toHaveCount(1);
 
   // Escape clears the field and hides the dropdown.
   await page.getByRole("searchbox", { name: "Search" }).fill("needle phrase");

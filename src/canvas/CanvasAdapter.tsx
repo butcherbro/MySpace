@@ -31,6 +31,8 @@ interface CanvasAdapterProps {
   editingCardId?: string | null;
   /** Exposes a screen->board coordinate converter (used for file drops). */
   onScreenToFlowReady?: (fn: (x: number, y: number) => { x: number; y: number }) => void;
+  /** Imperative focus request: center + select a card after a board loads. */
+  focusRequest?: { cardId: string; token: number } | null;
 }
 
 type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"] };
@@ -74,10 +76,13 @@ export function CanvasAdapter({
   renderCard,
   editingCardId = null,
   onScreenToFlowReady,
+  focusRequest = null,
 }: CanvasAdapterProps) {
   const flowRef = useRef<{
     setViewport: (viewport: CanvasViewport) => void;
     screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number };
+    setCenter: (x: number, y: number, options?: { zoom?: number; duration?: number }) => void;
+    getZoom: () => number;
   } | null>(null);
   const viewportRef = useRef(viewport);
   const [nodes, setNodes] = useState<Node<CardNodeData>[]>(() =>
@@ -215,6 +220,25 @@ export function CanvasAdapter({
     // нужно переустанавливать императивно.
     flowRef.current?.setViewport(viewportRef.current);
   }, [viewportResetToken]);
+
+  // Imperative focus: when the parent requests a card (e.g. a search result),
+  // center the viewport on it and mark it selected. Waits for the node to exist
+  // (the board may still be loading), and applies once per request token.
+  const lastAppliedFocusTokenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focusRequest) return;
+    if (lastAppliedFocusTokenRef.current === focusRequest.token) return;
+    const flow = flowRef.current;
+    const node = nodesRef.current.find((n) => n.id === focusRequest.cardId);
+    if (!flow || !node) return;
+
+    lastAppliedFocusTokenRef.current = focusRequest.token;
+    const cx = node.position.x + (node.width ?? 0) / 2;
+    const cy = node.position.y + (node.height ?? 0) / 2;
+    flow.setCenter(cx, cy, { zoom: flow.getZoom(), duration: 0 });
+    setNodes((prev) => prev.map((n) => ({ ...n, selected: n.id === focusRequest.cardId })));
+    events.onSelectionChanged?.({ ids: [focusRequest.cardId] });
+  }, [focusRequest, nodes, events]);
 
   // Returns the portal card whose frame is covered most by the dragged card, or
   // null when no portal is overlapped enough. Using surface overlap (instead of
