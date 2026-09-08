@@ -12,11 +12,12 @@ import {
 } from "./canvas/cross-board-drag";
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
-import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand } from "./commands/card-commands";
+import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand, SetNoteColorCommand } from "./commands/card-commands";
 import { CreateChildBoardCommand, MoveBoardCommand, RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import type { NoteEditorCommands } from "./editor/editor-commands";
 import type { TextColorId } from "./editor/text-color";
+import type { NoteColorId } from "./cards/note/note-color";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
@@ -114,6 +115,12 @@ function App() {
       ? state.selection[0]
       : null);
   const noteToolMode = activeNoteId !== null;
+  const activeNote = activeNoteId
+    ? (state.cards.find((c) => c.id === activeNoteId && c.kind === "note") as
+        | NoteCardDto
+        | undefined)
+    : undefined;
+  const noteColor = (activeNote?.colorToken as NoteColorId | undefined) ?? "default";
 
   // Browser-style navigation history. Initialized lazily once Home is known.
   const historyRef = useRef<BoardHistory | null>(null);
@@ -369,6 +376,7 @@ function App() {
         revision: 1,
         documentJson: plainTextToDocument(""),
         plainText: "",
+        colorToken: "default",
       };
       try {
         await dispatcher.execute(
@@ -1479,6 +1487,23 @@ function App() {
     noteCommandsRef.current?.setTextColor(color);
   }, []);
 
+  const handleNoteColor = useCallback(
+    (color: NoteColorId) => {
+      const note = activeNote;
+      if (!note) return;
+      const prevColor = (note.colorToken as NoteColorId) ?? "default";
+      void dispatcher
+        .execute(new SetNoteColorCommand(idGenerator.nextId(), note.id, color, prevColor))
+        .then(() => {
+          dispatch({ type: "noteColorChanged", id: note.id, colorToken: color });
+        })
+        .catch((err) => {
+          dispatch({ type: "failed", message: errorMessage(err) });
+        });
+    },
+    [activeNote, dispatcher, idGenerator],
+  );
+
   const handleBackToCreate = useCallback(() => {
     dispatch({ type: "editingStopped" });
     dispatch({ type: "selectionChanged", ids: [] });
@@ -1789,6 +1814,8 @@ function App() {
           onBackToCreate={handleBackToCreate}
           textColor={textColor}
           onTextColor={handleTextColor}
+          noteColor={noteColor}
+          onNoteColor={handleNoteColor}
         />
       }
       rightRail={

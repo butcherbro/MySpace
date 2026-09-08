@@ -24,6 +24,26 @@
     0 0 0 4px var(--focus-halo);
 }
 
+/* Note background color presets (semantic ids -> design tokens). */
+.note-card--yellow {
+  background: var(--note-yellow);
+}
+.note-card--pink {
+  background: var(--note-rose);
+}
+.note-card--lavender {
+  background: var(--note-lilac);
+}
+.note-card--blue {
+  background: var(--note-blue);
+}
+.note-card--green {
+  background: var(--note-green);
+}
+.note-card--gray {
+  background: var(--note-gray);
+}
+
 .note-card::after {
   content: "";
   position: absolute;

@@ -24,6 +24,7 @@ import type {
   SaveViewportInput,
   SearchResultDto,
   SetBoardCoverInput,
+  SetNoteColorInput,
   TrashSelectionInput,
   TrashSummaryDto,
   UpdateEmbedDescriptionInput,
@@ -176,6 +177,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   removeBoardCover(boardId: string): Promise<void> {
     return invoke<void>("remove_board_cover", { boardId });
+  }
+
+  setNoteColor(input: SetNoteColorInput): Promise<void> {
+    return invoke<void>("set_note_color", { input });
   }
 
   moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void> {

@@ -86,6 +86,25 @@
   --swatch: var(--text-gray);
 }
 
+.color-swatch--note-yellow {
+  --swatch: var(--note-yellow);
+}
+.color-swatch--note-pink {
+  --swatch: var(--note-rose);
+}
+.color-swatch--note-lavender {
+  --swatch: var(--note-lilac);
+}
+.color-swatch--note-blue {
+  --swatch: var(--note-blue);
+}
+.color-swatch--note-green {
+  --swatch: var(--note-green);
+}
+.color-swatch--note-gray {
+  --swatch: var(--note-gray);
+}
+
 .tool-rail__badge {
   position: absolute;
   top: -2px;

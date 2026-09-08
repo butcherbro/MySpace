@@ -23,6 +23,7 @@ import type {
   SaveViewportInput,
   SearchResultDto,
   SetBoardCoverInput,
+  SetNoteColorInput,
   TrashEntryDto,
   TrashSelectionInput,
   TrashSummaryDto,
@@ -115,6 +116,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       revision: 1,
       documentJson: input.documentJson,
       plainText: input.plainText,
+      colorToken: "default",
     };
     this.snapshot.cards.push(card);
     return Promise.resolve();
@@ -701,6 +703,16 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         c.kind === "board_portal" && c.target.id === boardId,
     );
     if (portal) portal.target.coverAsset = null;
+    return Promise.resolve();
+  }
+
+  setNoteColor(input: SetNoteColorInput): Promise<void> {
+    const card = this.snapshot.cards.find(
+      (c): c is Extract<(typeof this.snapshot.cards)[number], { kind: "note" }> =>
+        c.kind === "note" && c.id === input.id,
+    );
+    if (!card) return Promise.reject(new Error(`note not found: ${input.id}`));
+    card.colorToken = input.colorToken;
     return Promise.resolve();
   }
 

@@ -22,6 +22,7 @@ function note(id: string, x = 0): NoteCardDto {
     revision: 1,
     documentJson: { type: "doc" },
     plainText: "",
+    colorToken: "default",
   };
 }
 

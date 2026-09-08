@@ -17,6 +17,8 @@ function renderRail(overrides: Partial<React.ComponentProps<typeof ToolRail>> = 
     onBackToCreate: vi.fn(),
     textColor: "default" as const,
     onTextColor: vi.fn(),
+    noteColor: "default" as const,
+    onNoteColor: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<ToolRail {...props} />) };
@@ -97,6 +99,8 @@ describe("ToolRail", () => {
         onBackToCreate={vi.fn()}
         textColor="default"
         onTextColor={vi.fn()}
+        noteColor="default"
+        onNoteColor={vi.fn()}
       />,
     );
 

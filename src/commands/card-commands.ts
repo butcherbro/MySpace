@@ -1,6 +1,7 @@
 // Card-specific workspace commands.
 
 import type { Frame, WorkspaceGateway } from "../services/workspace-gateway";
+import type { NoteColorId } from "../cards/note/note-color";
 import type { WorkspaceCommand } from "./workspace-command";
 
 interface MovedCard {
@@ -122,6 +123,33 @@ export class MoveCardToBoardCommand implements WorkspaceCommand {
       frame: this.sourceFrame,
     });
     this.currentRevision += 1;
+  }
+
+  mergeWith(): WorkspaceCommand<unknown> | null {
+    return null;
+  }
+}
+
+/** Sets a note card's background color preset. `undo` restores the previous color. */
+export class SetNoteColorCommand implements WorkspaceCommand {
+  id: string;
+  label = "Change note color";
+
+  constructor(
+    id: string,
+    private cardId: string,
+    private nextColor: NoteColorId,
+    private prevColor: NoteColorId,
+  ) {
+    this.id = id;
+  }
+
+  async execute(gateway: WorkspaceGateway): Promise<void> {
+    await gateway.setNoteColor({ id: this.cardId, colorToken: this.nextColor });
+  }
+
+  async undo(gateway: WorkspaceGateway): Promise<void> {
+    await gateway.setNoteColor({ id: this.cardId, colorToken: this.prevColor });
   }
 
   mergeWith(): WorkspaceCommand<unknown> | null {

@@ -55,6 +55,8 @@ export interface NoteCardDto {
   revision: number;
   documentJson: unknown;
   plainText: string;
+  /** Semantic background-color preset id (`default`, `yellow`, …). */
+  colorToken: string;
 }
 
 export interface BoardPortalDto {
@@ -332,6 +334,11 @@ export interface SetBoardCoverInput {
   assetId: string;
 }
 
+export interface SetNoteColorInput {
+  id: string;
+  colorToken: string;
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -371,6 +378,7 @@ export interface WorkspaceGateway {
   importClipboardImage(): Promise<AssetDto>;
   setBoardCover(input: SetBoardCoverInput): Promise<void>;
   removeBoardCover(boardId: string): Promise<void>;
+  setNoteColor(input: SetNoteColorInput): Promise<void>;
   moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void>;
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void>;
 }

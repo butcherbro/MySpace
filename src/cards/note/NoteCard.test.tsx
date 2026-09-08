@@ -45,6 +45,7 @@ function makeNote(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
       content: [{ type: "paragraph", content: [{ type: "text", text: "hello" }] }],
     },
     plainText: "hello",
+    colorToken: "default",
     ...overrides,
   };
 }

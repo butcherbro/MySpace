@@ -1,5 +1,6 @@
 import { ToolButton } from "./ToolButton";
 import { TEXT_COLOR_OPTIONS, type TextColorId } from "../../editor/text-color";
+import { NOTE_COLOR_OPTIONS, type NoteColorId } from "../../cards/note/note-color";
 import "./tool-rail.css";
 
 export type ToolRailMode = "create" | "note";
@@ -22,6 +23,10 @@ interface ToolRailProps {
   textColor: TextColorId;
   /** Apply a text color (or default). */
   onTextColor: (color: TextColorId) => void;
+  /** The active note's background color (preset id). */
+  noteColor: NoteColorId;
+  /** Apply a note background color (or default). */
+  onNoteColor: (color: NoteColorId) => void;
 }
 
 /**
@@ -42,6 +47,8 @@ export function ToolRail({
   onBackToCreate,
   textColor,
   onTextColor,
+  noteColor,
+  onNoteColor,
 }: ToolRailProps) {
   return (
     <div className="tool-rail" role="toolbar" aria-label="Tools">
@@ -76,6 +83,25 @@ export function ToolRail({
                   aria-pressed={textColor === option.id}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => onTextColor(option.id)}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="tool-rail__section" aria-label="Note color">
+            <span className="tool-rail__section-label">Note</span>
+            <div className="tool-rail__swatches">
+              {NOTE_COLOR_OPTIONS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`color-swatch color-swatch--note-${option.id}${
+                    noteColor === option.id ? " color-swatch--active" : ""
+                  }`}
+                  title={option.label}
+                  aria-label={option.label}
+                  aria-pressed={noteColor === option.id}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => onNoteColor(option.id)}
                 />
               ))}
             </div>

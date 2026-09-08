@@ -44,6 +44,7 @@ export type CurrentBoardAction =
   | { type: "unsortedCardPlaced"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardMovedToUnsorted"; id: string }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
+  | { type: "noteColorChanged"; id: string; colorToken: string }
   | { type: "cardsRemoved"; ids: string[] }
   | { type: "boardRenamed"; boardId: string; title: string }
   | { type: "selectionChanged"; ids: string[] }
@@ -187,6 +188,16 @@ export function reducer(
         cards: state.cards.map((c) =>
           c.id === action.id
             ? { ...c, revision: action.revision, frame: action.frame }
+            : c,
+        ),
+      };
+
+    case "noteColorChanged":
+      return {
+        ...state,
+        cards: state.cards.map((c) =>
+          c.id === action.id && c.kind === "note"
+            ? { ...c, colorToken: action.colorToken }
             : c,
         ),
       };

@@ -31,6 +31,7 @@
   --note-blue: #dcecf2;
   --note-green: #dfead9;
   --note-lilac: #e8dff0;
+  --note-gray: #e9ebea;
 
   --text-blue: #2563eb;
   --text-green: #16a34a;
@@ -78,6 +79,8 @@
     --ink-secondary: #c8ceca;
     --ink-tertiary: #99a19c;
     --ink-muted: #6f7873;
+
+    --note-gray: #262b28;
 
     --text-blue: #60a5fa;
     --text-green: #4ade80;

@@ -99,9 +99,12 @@ export function NoteCard({
 
   return (
     <div
-      className={`note-card ${editing ? "note-card--editing" : ""}`}
+      className={`note-card ${editing ? "note-card--editing" : ""}${
+        note.colorToken && note.colorToken !== "default" ? ` note-card--${note.colorToken}` : ""
+      }`}
       data-testid="note-card"
       data-kind="note"
+      data-color={note.colorToken}
       data-editing={editing ? "true" : "false"}
       data-saving={saving ? "true" : "false"}
       data-error={error ? "true" : "false"}

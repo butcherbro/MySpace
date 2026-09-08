@@ -14,6 +14,7 @@ function note(id: string, text = "hello"): CardDto {
     revision: 1,
     documentJson: { type: "doc" },
     plainText: text,
+    colorToken: "default",
   };
 }
 
