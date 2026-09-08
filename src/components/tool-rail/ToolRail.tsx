@@ -9,8 +9,9 @@ interface ToolRailProps {
   mode: ToolRailMode;
   onNewNote: () => void;
   onNewLink: () => void;
-  onNewBoard: () => void;
   onAddImage: () => void;
+  /** Begin dragging a new board out of the rail (client coords). */
+  onNewBoardDragStart?: (clientX: number, clientY: number) => void;
   trashBatchCount: number;
   onOpenTrash: () => void;
   /** Toggle bold on the active note's editor. */
@@ -38,7 +39,6 @@ export function ToolRail({
   mode,
   onNewNote,
   onNewLink,
-  onNewBoard,
   onAddImage,
   trashBatchCount,
   onOpenTrash,
@@ -49,6 +49,7 @@ export function ToolRail({
   onTextColor,
   noteColor,
   onNoteColor,
+  onNewBoardDragStart,
 }: ToolRailProps) {
   return (
     <div className="tool-rail" role="toolbar" aria-label="Tools">
@@ -111,7 +112,16 @@ export function ToolRail({
         <div className="tool-rail__group">
           <ToolButton icon="note" label="New note" visibleLabel="Note" onClick={onNewNote} />
           <ToolButton icon="link" label="New link" visibleLabel="Link" onClick={onNewLink} />
-          <ToolButton icon="board" label="New board" visibleLabel="Board" onClick={onNewBoard} />
+          <ToolButton
+            icon="board"
+            label="New board"
+            visibleLabel="Board"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              onNewBoardDragStart?.(event.clientX, event.clientY);
+            }}
+          />
           <ToolButton icon="image" label="Add image" visibleLabel="Image" onClick={onAddImage} />
         </div>
       )}

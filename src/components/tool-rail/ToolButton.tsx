@@ -4,7 +4,7 @@ interface ToolButtonProps {
   icon: IconName;
   label: string;
   visibleLabel: string;
-  onClick: () => void;
+  onClick?: () => void;
   /** Marks the button as active (e.g. Bold is on at the caret). */
   active?: boolean;
   /** Optional mousedown handler (e.g. keep editor focus for formatting tools). */

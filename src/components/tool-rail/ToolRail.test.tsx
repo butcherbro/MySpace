@@ -8,7 +8,7 @@ function renderRail(overrides: Partial<React.ComponentProps<typeof ToolRail>> = 
     mode: "create" as const,
     onNewNote: vi.fn(),
     onNewLink: vi.fn(),
-    onNewBoard: vi.fn(),
+    onNewBoardDragStart: vi.fn(),
     onAddImage: vi.fn(),
     trashBatchCount: 0,
     onOpenTrash: vi.fn(),
@@ -90,7 +90,6 @@ describe("ToolRail", () => {
         mode="create"
         onNewNote={vi.fn()}
         onNewLink={vi.fn()}
-        onNewBoard={vi.fn()}
         onAddImage={vi.fn()}
         trashBatchCount={3}
         onOpenTrash={vi.fn()}

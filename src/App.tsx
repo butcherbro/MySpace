@@ -525,58 +525,114 @@ function App() {
     [state.unsortedCards, gateway, cleanupUnsortedDrag],
   );
 
-  const handleCreateChildBoard = useCallback(async () => {
-    if (!board) return;
-    const boardId = idGenerator.nextId();
-    const portalCardId = idGenerator.nextId();
-    // Place the new board near the visible viewport center so it never lands
-    // far down the board outside the current view.
-    const flow = screenToFlowRef.current;
-    const center = flow
-      ? flow(window.innerWidth * 0.5, window.innerHeight * 0.5)
-      : { x: 200, y: 120 };
-    // Cascade a little so successive boards do not stack exactly on each other,
-    // while staying in the visible viewport.
-    const offset = (state.cards.length % 5) * 24;
-    const frame = {
-      x: center.x - 60 + offset,
-      y: center.y - 56 + offset,
-      width: 120,
-      height: 112,
-    };
-    const portal: BoardPortalDto = {
-      kind: "board_portal",
-      id: portalCardId,
-      boardId: board.id,
-      frame,
-      zIndex: 0,
-      revision: 1,
-      target: {
-        id: boardId,
-        boardRevision: 1,
-        title: "New Board",
-        colorToken: "terracotta",
-        symbol: null,
-        childBoardCount: 0,
-        childCardCount: 0,
-        coverAsset: null,
-      },
-    };
-    try {
-      await dispatcher.execute(
-        new CreateChildBoardCommand(idGenerator.nextId(), {
-          parentBoardId: board.id,
-          boardId,
-          portalCardId,
-          frame: portal.frame,
+  const handleCreateChildBoard = useCallback(
+    async (position?: { x: number; y: number }) => {
+      if (!board) return;
+      const boardId = idGenerator.nextId();
+      const portalCardId = idGenerator.nextId();
+      let frame;
+      if (position) {
+        frame = { x: position.x, y: position.y, width: 120, height: 112 };
+      } else {
+        // Place the new board near the visible viewport center so it never lands
+        // far down the board outside the current view.
+        const flow = screenToFlowRef.current;
+        const center = flow
+          ? flow(window.innerWidth * 0.5, window.innerHeight * 0.5)
+          : { x: 200, y: 120 };
+        const offset = (state.cards.length % 5) * 24;
+        frame = {
+          x: center.x - 60 + offset,
+          y: center.y - 56 + offset,
+          width: 120,
+          height: 112,
+        };
+      }
+      const portal: BoardPortalDto = {
+        kind: "board_portal",
+        id: portalCardId,
+        boardId: board.id,
+        frame,
+        zIndex: 0,
+        revision: 1,
+        target: {
+          id: boardId,
+          boardRevision: 1,
           title: "New Board",
-        }),
-      );
-      dispatch({ type: "cardAdded", card: portal });
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
+          colorToken: "terracotta",
+          symbol: null,
+          childBoardCount: 0,
+          childCardCount: 0,
+          coverAsset: null,
+        },
+      };
+      try {
+        await dispatcher.execute(
+          new CreateChildBoardCommand(idGenerator.nextId(), {
+            parentBoardId: board.id,
+            boardId,
+            portalCardId,
+            frame: portal.frame,
+            title: "New Board",
+          }),
+        );
+        dispatch({ type: "cardAdded", card: portal });
+      } catch (e) {
+        dispatch({ type: "failed", message: errorMessage(e) });
+      }
+    },
+    [board, dispatcher, idGenerator, state.cards.length],
+  );
+
+  // Drag-to-create a new Board out of the rail: on release over the canvas, the
+  // board is created at the drop point; a plain click still creates in view.
+  const boardCreateGhostRef = useRef<{ x: number; y: number } | null>(null);
+  const [boardCreateGhost, setBoardCreateGhost] = useState<{ x: number; y: number } | null>(null);
+  const boardDragMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
+  const boardDragUpRef = useRef<((e: PointerEvent) => void) | null>(null);
+
+  const cleanupBoardCreationDrag = useCallback(() => {
+    if (boardDragMoveRef.current) {
+      window.removeEventListener("pointermove", boardDragMoveRef.current);
+      boardDragMoveRef.current = null;
     }
-  }, [board, dispatcher, idGenerator, state.cards.length]);
+    if (boardDragUpRef.current) {
+      window.removeEventListener("pointerup", boardDragUpRef.current);
+      boardDragUpRef.current = null;
+    }
+    boardCreateGhostRef.current = null;
+    setBoardCreateGhost(null);
+  }, []);
+
+  const handleBoardCreationDragStart = useCallback(
+    (clientX: number, clientY: number) => {
+      boardCreateGhostRef.current = { x: clientX, y: clientY };
+      setBoardCreateGhost({ x: clientX, y: clientY });
+      let moved = false;
+      const move = (e: PointerEvent) => {
+        moved = true;
+        boardCreateGhostRef.current = { x: e.clientX, y: e.clientY };
+        setBoardCreateGhost({ x: e.clientX, y: e.clientY });
+      };
+      const up = (e: PointerEvent) => {
+        cleanupBoardCreationDrag();
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const overCanvas = Boolean(el?.closest?.('[data-testid="canvas"]'));
+        if (!overCanvas) {
+          if (!moved) void handleCreateChildBoard();
+          return;
+        }
+        const flow = screenToFlowRef.current;
+        const point = flow ? flow(e.clientX, e.clientY) : { x: 200, y: 120 };
+        void handleCreateChildBoard({ x: point.x - 60, y: point.y - 56 });
+      };
+      boardDragMoveRef.current = move;
+      boardDragUpRef.current = up;
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    },
+    [cleanupBoardCreationDrag, handleCreateChildBoard],
+  );
 
   // Imports an image and creates a card at the given board coordinates. Shared
   // by the file picker (button) and native drag-drop.
@@ -1994,7 +2050,7 @@ function App() {
           mode={noteToolMode ? "note" : "create"}
           onNewNote={() => void handleCreateNote()}
           onNewLink={handleCreateLink}
-          onNewBoard={() => void handleCreateChildBoard()}
+          onNewBoardDragStart={handleBoardCreationDragStart}
           onAddImage={() => void handleCreateImage()}
           trashBatchCount={trashSummary?.batchCount ?? 0}
           onOpenTrash={handleOpenTrash}
@@ -2212,6 +2268,20 @@ function App() {
               </div>
             );
           })()}
+        {boardCreateGhost && (
+          <div
+            className="cross-board-ghost"
+            data-testid="board-create-ghost"
+            style={{
+              left: boardCreateGhost.x,
+              top: boardCreateGhost.y,
+              width: 120,
+              height: 112,
+            }}
+          >
+            New Board
+          </div>
+        )}
         <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
           <CanvasAdapter
             cards={canvasCards}
