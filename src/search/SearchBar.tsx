@@ -26,6 +26,25 @@ function trailLabel(result: SearchResultDto): string {
   return result.boardTrail.map((crumb) => crumb.title).join(" / ");
 }
 
+function formatRelativeTime(millis: number): string {
+  if (!millis) return "";
+  const diff = Date.now() - millis;
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return "только что";
+  if (minutes < 60) return `${minutes} мин.`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ч.`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "вчера";
+  if (days < 7) return `${days} дн.`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks} нед.`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} мес.`;
+  const years = Math.floor(days / 365);
+  return `${years} г.`;
+}
+
 /**
  * The always-visible search field in the top bar (right of breadcrumbs, left of
  * Undo/Redo). Results are grouped by board (cover/icon/acronym + path + count),
@@ -157,6 +176,9 @@ export function SearchBar({ query, onQueryChange, results, loading, onSelect }: 
                                 <HighlightedText text={result.excerpt} query={query} />
                               </span>
                             )}
+                          </span>
+                          <span className="search-bar__time">
+                            {formatRelativeTime(result.createdAt)}
                           </span>
                         </li>
                       ))}

@@ -1735,8 +1735,36 @@ fn bound_text(text: &str) -> String {
     text.trim().chars().take(SEARCH_EXCERPT_LIMIT).collect()
 }
 
-/// Escapes LIKE wildcards in the user query and wraps it in `%…%` so the term is
-/// matched literally and case-insensitively.
+/// Returns a bounded context snippet centered on the first case-insensitive
+/// match of `query`, with ellipses where text is trimmed. Falls back to the
+/// start of the text when there is no match.
+fn search_excerpt(text: &str, query: &str) -> String {
+    let lower = text.to_lowercase();
+    let q = query.to_lowercase();
+    let Some(byte_start) = lower.find(&q) else {
+        return bound_text(text);
+    };
+
+    let chars: Vec<char> = text.chars().collect();
+    let match_char_start = text[..byte_start].chars().count();
+    let match_char_len = q.chars().count();
+
+    let context_start = match_char_start.saturating_sub(40);
+    let context_end = (match_char_start + match_char_len + 40).min(chars.len());
+
+    let mut out = String::new();
+    if context_start > 0 {
+        out.push('…');
+    }
+    for ch in &chars[context_start..context_end] {
+        out.push(*ch);
+    }
+    if context_end < chars.len() {
+        out.push('…');
+    }
+    out.trim().to_string()
+}
+
 /// Unicode-aware case-insensitive substring test. SQLite's `LIKE` is only
 /// case-insensitive for ASCII, so Cyrillic (and other non-ASCII) must be matched
 /// in Rust via `to_lowercase`.
@@ -1753,6 +1781,7 @@ struct SearchHit {
     board_id: String,
     rank: i64,
     thumbnail_asset: Option<AssetDto>,
+    created_at: i64,
 }
 
 /// Searches the workspace (Board titles, Note plain text, Link Card title/URL/
@@ -1773,30 +1802,35 @@ pub fn search_workspace(
     // Boards by title (rank 0).
     {
         let mut stmt = conn.prepare(
-            "SELECT b.id, b.title,
+            "SELECT b.id, b.title, b.created_at,
                     ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
              FROM boards b
              LEFT JOIN assets ca ON ca.id = b.cover_asset_id
              WHERE b.deleted_at IS NULL",
         )?;
         let rows = stmt.query_map([], |row| {
-            let cover = if row.get::<_, Option<String>>(2)?.is_some() {
+            let cover = if row.get::<_, Option<String>>(3)?.is_some() {
                 Some(AssetDto {
-                    id: row.get(2)?,
-                    file_name: row.get(3)?,
-                    mime_type: row.get(4)?,
-                    width: row.get(5)?,
-                    height: row.get(6)?,
-                    size_bytes: row.get(7)?,
-                    file_path: row.get(8)?,
+                    id: row.get(3)?,
+                    file_name: row.get(4)?,
+                    mime_type: row.get(5)?,
+                    width: row.get(6)?,
+                    height: row.get(7)?,
+                    size_bytes: row.get(8)?,
+                    file_path: row.get(9)?,
                 })
             } else {
                 None
             };
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, cover))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                cover,
+            ))
         })?;
         for r in rows {
-            let (id, title, cover) = r?;
+            let (id, title, created_at, cover) = r?;
             if contains_query(&title, &q) {
                 hits.push(SearchHit {
                     entity_id: id.clone(),
@@ -1806,6 +1840,7 @@ pub fn search_workspace(
                     board_id: id,
                     rank: 0,
                     thumbnail_asset: cover,
+                    created_at,
                 });
             }
         }
@@ -1814,7 +1849,7 @@ pub fn search_workspace(
     // Notes by plain text (rank 1).
     {
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, n.plain_text
+            "SELECT c.id, c.board_id, n.plain_text, c.created_at
              FROM cards c
              JOIN note_cards n ON n.card_id = c.id
              JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
@@ -1825,19 +1860,21 @@ pub fn search_workspace(
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
             ))
         })?;
         for r in rows {
-            let (id, board_id, plain_text) = r?;
+            let (id, board_id, plain_text, created_at) = r?;
             if contains_query(&plain_text, &q) {
                 hits.push(SearchHit {
                     entity_id: id,
                     kind: "note",
-                    title: bound_text(&plain_text),
+                    title: search_excerpt(&plain_text, query),
                     excerpt: None,
                     board_id,
                     rank: 1,
                     thumbnail_asset: None,
+                    created_at,
                 });
             }
         }
@@ -1846,7 +1883,7 @@ pub fn search_workspace(
     // Image cards by caption or file name (rank 1).
     {
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, i.caption_plain_text,
+            "SELECT c.id, c.board_id, i.caption_plain_text, c.created_at,
                     a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path
              FROM cards c
              JOIN image_cards i ON i.card_id = c.id
@@ -1856,23 +1893,24 @@ pub fn search_workspace(
         )?;
         let rows = stmt.query_map([], |row| {
             let thumb = AssetDto {
-                id: row.get(3)?,
-                file_name: row.get(4)?,
-                mime_type: row.get(5)?,
-                width: row.get(6)?,
-                height: row.get(7)?,
-                size_bytes: row.get(8)?,
-                file_path: row.get(9)?,
+                id: row.get(4)?,
+                file_name: row.get(5)?,
+                mime_type: row.get(6)?,
+                width: row.get(7)?,
+                height: row.get(8)?,
+                size_bytes: row.get(9)?,
+                file_path: row.get(10)?,
             };
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
                 thumb,
             ))
         })?;
         for r in rows {
-            let (id, board_id, caption, thumb) = r?;
+            let (id, board_id, caption, created_at, thumb) = r?;
             let file_name = thumb.file_name.clone();
             if contains_query(&caption, &q) || contains_query(&file_name, &q) {
                 let title = if caption.trim().is_empty() {
@@ -1883,11 +1921,12 @@ pub fn search_workspace(
                 hits.push(SearchHit {
                     entity_id: id,
                     kind: "image",
-                    title: bound_text(&title),
+                    title: search_excerpt(&title, query),
                     excerpt: None,
                     board_id,
                     rank: 1,
                     thumbnail_asset: Some(thumb),
+                    created_at,
                 });
             }
         }
@@ -1898,7 +1937,8 @@ pub fn search_workspace(
         let mut stmt = conn.prepare(
             "SELECT c.id, c.board_id, e.title, e.source_url, e.display_url, e.description_plain_text,
                     pa.id, pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
-                    fa.id, fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
+                    fa.id, fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path,
+                    c.created_at
              FROM cards c
              JOIN embed_cards e ON e.card_id = c.id
              JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
@@ -1941,10 +1981,12 @@ pub fn search_workspace(
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
                 preview.or(favicon),
+                row.get::<_, i64>(20)?,
             ))
         })?;
         for r in rows {
-            let (id, board_id, title_raw, source_url, display_url, description, thumb) = r?;
+            let (id, board_id, title_raw, source_url, display_url, description, thumb, created_at) =
+                r?;
             let title = title_raw
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or_else(|| source_url.clone());
@@ -1961,7 +2003,7 @@ pub fn search_workspace(
             let (rank, excerpt) = if title_match || source_match || display_match {
                 (0, None)
             } else {
-                (2, Some(bound_text(&description)))
+                (2, Some(search_excerpt(&description, query)))
             };
 
             hits.push(SearchHit {
@@ -1972,6 +2014,7 @@ pub fn search_workspace(
                 board_id,
                 rank,
                 thumbnail_asset: thumb,
+                created_at,
             });
         }
     }
@@ -2020,6 +2063,7 @@ pub fn search_workspace(
             board_symbol,
             board_cover_asset,
             thumbnail_asset: hit.thumbnail_asset,
+            created_at: hit.created_at,
         });
     }
     Ok(out)

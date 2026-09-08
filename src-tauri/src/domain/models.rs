@@ -507,6 +507,8 @@ pub struct SearchResultDto {
     /// Thumbnail for the matched entity itself: image asset, link preview/
     /// favicon, or board cover.
     pub thumbnail_asset: Option<AssetDto>,
+    /// Entity creation time (unix millis) for the relative-time label.
+    pub created_at: i64,
 }
 
 /// A single Link Card to create in a batch.

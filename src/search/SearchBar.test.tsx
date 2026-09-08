@@ -16,6 +16,7 @@ const results: SearchResultDto[] = [
     boardSymbol: null,
     boardCoverAsset: null,
     thumbnailAsset: null,
+    createdAt: 0,
   },
   {
     entityId: "b1",
@@ -31,6 +32,7 @@ const results: SearchResultDto[] = [
     boardSymbol: null,
     boardCoverAsset: null,
     thumbnailAsset: null,
+    createdAt: 0,
   },
 ];
 

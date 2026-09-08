@@ -544,6 +544,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
             boardTrail: this.buildBreadcrumbs(board.id),
             ...identity(board.id),
             thumbnailAsset: board.coverAsset ?? null,
+            createdAt: Date.now(),
           },
         });
       }
@@ -562,6 +563,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
             boardTrail: this.buildBreadcrumbs(card.boardId),
             ...identity(card.boardId),
             thumbnailAsset: null,
+            createdAt: Date.now(),
           },
         });
       }
@@ -580,6 +582,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
               boardTrail: this.buildBreadcrumbs(card.boardId),
               ...identity(card.boardId),
               thumbnailAsset: card.asset,
+              createdAt: Date.now(),
             },
           });
         }
@@ -601,6 +604,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
               boardTrail: this.buildBreadcrumbs(card.boardId),
               ...identity(card.boardId),
               thumbnailAsset: card.previewAsset ?? card.faviconAsset,
+              createdAt: Date.now(),
             },
           });
         }

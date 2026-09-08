@@ -329,6 +329,8 @@ export interface SearchResultDto {
   boardCoverAsset: AssetDto | null;
   /** Thumbnail for the matched entity itself (image/link preview/board cover). */
   thumbnailAsset: AssetDto | null;
+  /** Entity creation time (unix millis). */
+  createdAt: number;
 }
 
 export interface AddQuickBoardInput {
