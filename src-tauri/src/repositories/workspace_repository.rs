@@ -12,8 +12,8 @@ use crate::domain::models::{
     CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata,
     Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
     NoteCardDto, PlaceUnsortedCardInput, PortalTarget, QuickBoardDto, ReorderQuickBoardsInput,
-    SearchResultDto, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
-    UpdateNoteInput, UpdateViewportInput, Viewport,
+    SearchResultDto, SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
+    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -174,7 +174,7 @@ fn load_cards(
     {
         let mut stmt = conn.prepare(
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    n.document_json, n.plain_text
+                    n.document_json, n.plain_text, n.color_token
              FROM cards c
              JOIN note_cards n ON n.card_id = c.id
              WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
@@ -197,6 +197,7 @@ fn load_cards(
                 revision: row.get(7)?,
                 document_json,
                 plain_text: row.get(9)?,
+                color_token: row.get(10)?,
             }))
         })?;
 
@@ -426,7 +427,7 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
         "note" => {
             conn.query_row(
                 "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                        n.document_json, n.plain_text
+                        n.document_json, n.plain_text, n.color_token
                  FROM cards c
                  JOIN note_cards n ON n.card_id = c.id
                  WHERE c.id = ?1 AND c.deleted_at IS NULL",
@@ -448,6 +449,7 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                         revision: row.get(7)?,
                         document_json,
                         plain_text: row.get(9)?,
+                        color_token: row.get(10)?,
                     }))
                 },
             )
@@ -712,6 +714,24 @@ pub fn update_note(conn: &mut Connection, input: &UpdateNoteInput) -> Result<(),
     )?;
 
     tx.commit()?;
+    Ok(())
+}
+
+/// Sets a note card's background color preset. This is orthogonal to text
+/// content: it does NOT bump the card revision (so it never conflicts with a
+/// concurrent text autosave) and it never touches `document_json`.
+pub fn set_note_color(
+    conn: &mut Connection,
+    input: &SetNoteColorInput,
+) -> Result<(), WorkspaceError> {
+    let changed = conn.execute(
+        "UPDATE note_cards SET color_token = ?1 WHERE card_id = ?2
+         AND EXISTS (SELECT 1 FROM cards WHERE id = ?2 AND kind = 'note' AND deleted_at IS NULL)",
+        params![input.color_token, input.id],
+    )?;
+    if changed == 0 {
+        return Err(WorkspaceError::NotFound(input.id.clone()));
+    }
     Ok(())
 }
 

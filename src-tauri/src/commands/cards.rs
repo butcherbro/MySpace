@@ -9,7 +9,8 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     CardDto, ConvertNoteToEmbedInput, CreateImageCardInput, CreateNoteInput, EmbedCardDto,
     MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, PlaceUnsortedCardInput,
-    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
+    SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
+    UpdateNoteInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -44,6 +45,15 @@ pub fn update_note(db: DbState<'_>, input: UpdateNoteInput) -> Result<(), Worksp
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::update_note(&mut conn, &input)
+}
+
+/// Sets a note card's background color preset (does not bump revision).
+#[tauri::command]
+pub fn set_note_color(db: DbState<'_>, input: SetNoteColorInput) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::set_note_color(&mut conn, &input)
 }
 
 /// Updates an image card's caption, bumping its revision.

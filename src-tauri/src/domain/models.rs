@@ -75,6 +75,8 @@ pub struct NoteCardDto {
     pub revision: i64,
     pub document_json: Value,
     pub plain_text: String,
+    /// Semantic background-color preset id (`default`, `yellow`, …).
+    pub color_token: String,
 }
 
 /// A board portal card.
@@ -199,6 +201,16 @@ pub struct UpdateNoteInput {
     pub expected_revision: i64,
     pub document_json: Value,
     pub plain_text: String,
+}
+
+/// Input for setting a note card's background color preset. Does not bump the
+/// card revision (color is orthogonal to text content and must not conflict
+/// with text autosave).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetNoteColorInput {
+    pub id: String,
+    pub color_token: String,
 }
 
 /// Input for moving/resizing a card (note or portal) and bumping its revision.
