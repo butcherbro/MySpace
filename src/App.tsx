@@ -23,6 +23,7 @@ import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
 import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
+import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
 import { SearchBar } from "./search/SearchBar";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
@@ -2105,110 +2106,49 @@ function App() {
             onClose={() => setUnsortedOpen(false)}
           />
         )}
-        {contextMenu && (
-          <div
-            className="context-menu"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            data-testid="context-menu"
-          >
-            <button
-              type="button"
-              className="context-menu__item"
-              onClick={() => {
-                setContextMenu(null);
-                void handleCopyLink();
-              }}
-            >
-              Copy MySpace Link
-            </button>
-            {state.cards.find((c) => c.kind === "image" && c.id === contextMenu.cardId) && (
-              <button
-                type="button"
-                className="context-menu__item"
-                onClick={() => {
-                  setContextMenu(null);
-                  void handleCopyFilePath();
-                }}
-              >
-                Copy File Path
-              </button>
-            )}
-            {state.cards.find((c) => c.kind === "image" && c.id === contextMenu.cardId) && (
-              <button
-                type="button"
-                className="context-menu__item"
-                onClick={() => {
-                  setContextMenu(null);
-                  handleCopySelectionImages();
-                }}
-              >
-                Copy Image
-              </button>
-            )}
-            {state.cards.find((c) => c.kind === "board_portal" && c.id === contextMenu.cardId) && (
-              <>
-                <button
-                  type="button"
-                  className="context-menu__item"
-                  onClick={() => {
-                    setContextMenu(null);
-                    void handleSetCoverFromClipboard();
-                  }}
-                >
-                  Set Cover from Clipboard
-                </button>
-                <button
-                  type="button"
-                  className="context-menu__item"
-                  onClick={() => {
-                    setContextMenu(null);
-                    void handleChooseCover();
-                  }}
-                >
-                  Choose Cover…
-                </button>
-                {state.cards.find(
-                  (c) =>
-                    c.kind === "board_portal" &&
-                    c.id === contextMenu.cardId &&
-                    c.target.coverAsset !== null,
-                ) && (
-                  <button
-                    type="button"
-                    className="context-menu__item"
-                    onClick={() => {
-                      setContextMenu(null);
-                      void handleRemoveCover();
-                    }}
-                  >
-                    Remove Cover
-                  </button>
-                )}
-              </>
-            )}
-            <button type="button" className="context-menu__item" onClick={handleContextDelete}>
-              Delete
-            </button>
-          </div>
-        )}
-        {contextMenu && <div className="context-menu__backdrop" onClick={() => setContextMenu(null)} />}
+        {contextMenu &&
+          (() => {
+            const card = state.cards.find((c) => c.id === contextMenu.cardId);
+            const isImage = card?.kind === "image";
+            const isPortal = card?.kind === "board_portal";
+            const actions: ContextMenuAction[] = [
+              { id: "copy-link", label: "Copy MySpace Link", onSelect: () => void handleCopyLink() },
+            ];
+            if (isImage) {
+              actions.push(
+                { id: "copy-file-path", label: "Copy File Path", onSelect: () => void handleCopyFilePath() },
+                { id: "copy-image", label: "Copy Image", onSelect: handleCopySelectionImages },
+              );
+            }
+            if (isPortal) {
+              actions.push(
+                { id: "set-cover-clipboard", label: "Set Cover from Clipboard", onSelect: () => void handleSetCoverFromClipboard() },
+                { id: "choose-cover", label: "Choose Cover…", onSelect: () => void handleChooseCover() },
+              );
+              if ((card as BoardPortalDto).target.coverAsset !== null) {
+                actions.push({ id: "remove-cover", label: "Remove Cover", onSelect: () => void handleRemoveCover() });
+              }
+            }
+            actions.push({ id: "delete", label: "Delete", onSelect: handleContextDelete });
+            return (
+              <ContextMenu
+                x={contextMenu.x}
+                y={contextMenu.y}
+                actions={actions}
+                onClose={() => setContextMenu(null)}
+              />
+            );
+          })()}
         {paneContextMenu && (
-          <div
-            className="context-menu"
-            style={{ left: paneContextMenu.x, top: paneContextMenu.y }}
-            data-testid="pane-context-menu"
-          >
-            <button
-              type="button"
-              className="context-menu__item"
-              onClick={() => void handleCopyBoardLink()}
-            >
-              Copy MySpace Link
-            </button>
-          </div>
-        )}
-        {paneContextMenu && (
-          <div className="context-menu__backdrop" onClick={() => setPaneContextMenu(null)} />
+          <ContextMenu
+            x={paneContextMenu.x}
+            y={paneContextMenu.y}
+            actions={[
+              { id: "copy-board-link", label: "Copy MySpace Link", onSelect: () => void handleCopyBoardLink() },
+            ]}
+            onClose={() => setPaneContextMenu(null)}
+            testId="pane-context-menu"
+          />
         )}
         {error && (
           <CanvasErrorBanner

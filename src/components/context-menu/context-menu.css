@@ -1,0 +1,32 @@
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 140px;
+  background: var(--paper-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-menu);
+  box-shadow: var(--shadow-menu);
+  padding: 4px;
+}
+
+.context-menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.context-menu__item:hover {
+  background: color-mix(in srgb, var(--desk) 60%, transparent);
+}
+
+.context-menu__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
