@@ -36,7 +36,7 @@
   max-width: calc(100vw - 32px);
   max-height: min(70vh, 640px);
   overflow-y: auto;
-  background: var(--paper-raised);
+  background: var(--desk);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--radius-menu);
   box-shadow: var(--shadow-menu);
