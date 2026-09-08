@@ -2,20 +2,22 @@
 
 ## Status
 
-Draft for agreement. This document is the product and interaction source of truth for the
-mandatory V1 Search palette. It extends Task 11 of
-`docs/plans/2026-09-04-spatial-workspace-interface.md`. The three scope decisions marked
-**Open** below are intentionally NOT guessed; they must be agreed before schema/index work
-starts.
+**Accepted.** This document is the product and interaction source of truth for the V1 Search
+surface. The three previously-open decisions are resolved below.
 
 ## Product intent
 
-The user already keeps real material on Home and nested Boards. Search is the primary way
-to relocate that material without walking the breadcrumb tree. It must answer "where is
-that note / link / board?" and take the user to it in one action. It is a palette, not a
-permanent sidebar (see the locked visual decisions).
+The user keeps real material on Home and nested Boards. Search is the primary way to
+relocate that material without walking the breadcrumb tree: it answers "where is that
+note / link / board?" and takes the user there in one action.
 
-## Scope of indexed content (fixed)
+## Scope (decided)
+
+**Global.** Search spans the entire workspace (all Boards). The `boardTrail` on every
+result shows where each hit lives, so a single result list stays navigable without a
+board-scoped mode.
+
+## Scope of indexed content
 
 V1 indexes exactly these fields, nothing more:
 
@@ -31,102 +33,78 @@ tags, and any external filesystem content.
 
 Trashed entities (non-null `deleted_at`) are never returned.
 
-## Result contract (application-level, not raw SQLite rows)
+## Result contract
 
 ```ts
-interface SearchResult {
+interface SearchResultDto {
   entityId: string;
   kind: "board" | "note" | "link";
   title: string;
   excerpt: string | null;
   boardId: string;
   boardTrail: Array<{ id: string; title: string }>;
+  boardColorToken: string;
+  boardSymbol: string | null;
+  boardCoverAsset: AssetDto | null;
 }
 ```
 
-- `kind` is the user-facing kind. A Link Card (`embed`) is reported as `"link"`.
-- `title` is the primary display line: Note `plain_text` excerpt, Link `title` (fallback
-  `source_url`), Board `title`.
-- `excerpt` is a bounded match-context snippet; `null` when the match is the title itself.
-- `boardId` is the board that contains the entity (for Boards, `boardId === entityId`).
-- `boardTrail` is `Home / … / boardId` so a result can be shown with its location even if
-  the search is not board-scoped.
+- `kind` is user-facing; a Link Card (`embed`) is reported as `"link"`.
+- `title`: Note `plain_text` excerpt; Link `title` (fallback `source_url`); Board `title`.
+- `excerpt` is a bounded match-context snippet; `null` when the match is in the title.
+- `boardColorToken` / `boardSymbol` / `boardCoverAsset` let the UI group results under a
+  board header rendered with the shared `BoardIdentityThumbnail` (cover → icon → acronym).
 
-## Query behavior (fixed)
+## Query behavior
 
-- Case-insensitive substring match using indexed/escaped `LIKE` over the authoritative
-  derived `plain_text`, Link `title`/`source_url`/`description_plain_text`, and Board
-  `title`.
-- Empty query returns nothing (do not dump the whole workspace).
-- Results are bounded (V1 limit 50).
-- Stable ordering (see **Open — ranking** below; until agreed, the only fixed rule is
-  deterministic tie-breaking by `entityId`).
+- Case-insensitive substring match using `LIKE` (escaped, literal query) over the
+  authoritative fields. No RegExp, no FTS at current scale.
+- Empty query returns nothing.
+- Results bounded (limit 50).
 
-No FTS until measurements show `LIKE` is insufficient at real scale.
+## Ranking (decided)
 
-## Result activation (fixed)
+Deterministic order, applied by the backend:
 
-On selecting a **Note** or **Link** result:
+1. title/URL matches sort before body matches (board/link-title rank 0, note rank 1,
+   link-description rank 2);
+2. then `title` (case-insensitive);
+3. then `entityId` as a stable tie-breaker.
 
-1. Load the entity's Board snapshot.
+No recency or weighted score in V1.
+
+## Result activation (decided)
+
+On selecting a **Note** or **Link**:
+
+1. Navigate to the entity's Board (opens/activates a tab).
 2. Center the viewport on the card.
-3. Select the card.
-4. Apply a transient focus pulse.
-5. Leave edit mode off until the user clicks the Note.
+3. Select the card (existing selection ring).
 
-On selecting a **Board** result: navigate to that Board's last-saved viewport (opening a
-board tab like breadcrumb navigation).
+On selecting a **Board**: navigate to that Board (tab like breadcrumb navigation).
 
-## Palette interaction (fixed)
+**No focus pulse/animation** — center + selection is the accepted highlight (decided).
 
-- `Command-K` opens the palette; focus lands in the query input.
-- 150 ms debounce before querying.
-- Keyboard navigation (up/down/enter) and `Escape` to close.
-- Grouped presentation with the `boardTrail` shown per result.
-- `560px` surface below the top bar, clamped to the window, canvas visible behind a light
-  non-blocking scrim. No permanent search sidebar.
+## Highlight
 
-## Open questions (must agree before implementation)
+Matches are highlighted in the result snippets and inside the matched card. This is
+UI-only state: `HighlightedText` for plain text and a transient ProseMirror decoration
+for the editor. It is never written into `documentJson`, never persisted, and never
+bumps a revision. It clears on query change, clear, close, or selecting a result that no
+longer matches the previous query.
 
-1. **Scope — global or current board?**
-   - Global: search all Boards in the workspace.
-   - Current board: search only the open Board.
-   - Hybrid (e.g. current board first, then a "Search all boards" affordance) is possible
-     but must be decided, not assumed.
-2. **Ranking rules.**
-   - Options include: title/prefix match first, then body match; recency (most-recently
-     updated first); alphabetical; or a small weighted score. Until decided, only
-     deterministic tie-breaking by `entityId` is fixed.
-3. **Visual highlight of the found card.**
-   - Whether to flash, outline, or pulse the card, and for how long, is not decided. The
-     acceptance test should assert the selected-and-visible state, not a specific
-     animation, until this is agreed.
+## Interaction
 
-## Current implementation default (shipped before final agreement)
+- A persistent search field lives in the top bar's right command group (before Undo/Redo).
+- Typing shows a grouped dropdown (board header with thumbnail/path/count, matching
+  substrings highlighted).
+- 150 ms debounce; Up/Down/Enter/Escape; `Escape` clears the field.
 
-The backend/gateway and palette were shipped with these defaults so development can
-continue while the architect is rate-limited. They remain overrideable and are not a
-commitment:
+## Acceptance
 
-- **Scope**: global (the `boardTrail` contract already implies global).
-- **Ranking**: title/URL match before body match, then title, then `entityId`.
-- **Activation**: on select, navigate to the result's Board. Selecting/centering the exact
-  card and any focus pulse are still open and not yet implemented.
-
-## Files (proposed, for implementation after agreement)
-
-- Create: `src/search/search-types.ts`, `src/search/SearchPalette.tsx`,
-  `src/search/search-palette.css`, `src/search/SearchPalette.test.tsx`
-- Modify: `src/services/workspace-gateway.ts`, `src/services/mock-workspace-gateway.ts`,
-  `src/services/tauri-workspace-gateway.ts`, `src-tauri/src/repositories/workspace_repository.rs`,
-  `src-tauri/src/commands/`, `src/navigation/TopNavigationBar.tsx`, `src/App.tsx`,
-  `src/state/current-board-store.ts`, `src/canvas/CanvasAdapter.tsx`,
-  `tests/e2e/canvas-smoke.spec.ts`
-
-## Acceptance (after agreement)
-
-- Create a Note with distinctive text, open Search with `Command-K`, choose it, and verify
-  the Note becomes selected and visible.
+- Create a Note with distinctive text, search it, choose it, verify the Note is selected
+  and visible.
 - A Link is found by `title`, `URL`, and `description`.
-- A Board is found by `title` and navigates to its last viewport.
+- A Board is found by `title` and navigates to it.
 - Trashed entities never appear.
+- Matches are highlighted; clearing the query removes the highlight.
