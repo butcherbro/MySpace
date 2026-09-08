@@ -9,6 +9,7 @@
 import Link from "@tiptap/extension-link";
 import StarterKit from "@tiptap/starter-kit";
 import { SearchHighlightExtension } from "./search-highlight";
+import { TextColor } from "./text-color";
 
 export function createEditorExtensions() {
   return [
@@ -35,5 +36,6 @@ export function createEditorExtensions() {
       linkOnPaste: true,
     }),
     SearchHighlightExtension,
+    TextColor,
   ];
 }

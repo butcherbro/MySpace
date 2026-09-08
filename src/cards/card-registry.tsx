@@ -7,6 +7,7 @@
 import type { ReactNode } from "react";
 import type { CardDto } from "../services/workspace-gateway";
 import type { NoteEditorCommands } from "../editor/editor-commands";
+import type { TextColorId } from "../editor/text-color";
 import { BoardPortalCard } from "./board/BoardPortalCard";
 import { NoteCard } from "./note/NoteCard";
 import { ImageCard } from "./image/ImageCard";
@@ -47,6 +48,8 @@ export interface CardRenderContext {
   onNoteCommands: (commands: NoteEditorCommands | null) => void;
   /** Called with the active note's bold-active state. */
   onNoteBoldStateChange: (active: boolean) => void;
+  /** Called with the active note's text color. */
+  onNoteTextColorChange: (color: TextColorId) => void;
 }
 
 /** Renders a persisted card into the canvas. */
@@ -64,6 +67,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         highlightQuery={ctx.highlightQuery}
         onCommandsReady={ctx.onNoteCommands}
         onBoldStateChange={ctx.onNoteBoldStateChange}
+        onTextColorChange={ctx.onNoteTextColorChange}
       />
     );
   }

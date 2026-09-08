@@ -32,6 +32,12 @@
   --note-green: #dfead9;
   --note-lilac: #e8dff0;
 
+  --text-blue: #2563eb;
+  --text-green: #16a34a;
+  --text-orange: #ea580c;
+  --text-red: #dc2626;
+  --text-gray: #6b7280;
+
   --danger: #b42318;
   --danger-surface: #fef3f2;
 
@@ -72,6 +78,12 @@
     --ink-secondary: #c8ceca;
     --ink-tertiary: #99a19c;
     --ink-muted: #6f7873;
+
+    --text-blue: #60a5fa;
+    --text-green: #4ade80;
+    --text-orange: #fb923c;
+    --text-red: #f87171;
+    --text-gray: #9ca3af;
 
     --edge-subtle: rgba(255, 255, 255, 0.08);
     --edge-strong: rgba(255, 255, 255, 0.14);

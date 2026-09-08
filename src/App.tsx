@@ -16,6 +16,7 @@ import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand } from "./c
 import { CreateChildBoardCommand, MoveBoardCommand, RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import type { NoteEditorCommands } from "./editor/editor-commands";
+import type { TextColorId } from "./editor/text-color";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
@@ -150,6 +151,7 @@ function App() {
   // Contextual note rail: the active note's editor command surface + bold state.
   const noteCommandsRef = useRef<NoteEditorCommands | null>(null);
   const [boldActive, setBoldActive] = useState(false);
+  const [textColor, setTextColor] = useState<TextColorId>("default");
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -1428,8 +1430,16 @@ function App() {
     setBoldActive(active);
   }, []);
 
+  const handleNoteTextColorChange = useCallback((color: TextColorId) => {
+    setTextColor(color);
+  }, []);
+
   const handleBold = useCallback(() => {
     noteCommandsRef.current?.toggleBold();
+  }, []);
+
+  const handleTextColor = useCallback((color: TextColorId) => {
+    noteCommandsRef.current?.setTextColor(color);
   }, []);
 
   const handleBackToCreate = useCallback(() => {
@@ -1740,6 +1750,8 @@ function App() {
           onBold={handleBold}
           boldActive={boldActive}
           onBackToCreate={handleBackToCreate}
+          textColor={textColor}
+          onTextColor={handleTextColor}
         />
       }
       rightRail={
@@ -1976,6 +1988,7 @@ function App() {
                 highlightQuery,
                 onNoteCommands: handleNoteCommands,
                 onNoteBoldStateChange: handleNoteBoldStateChange,
+                onNoteTextColorChange: handleNoteTextColorChange,
               });
             }}
           />

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import type { NoteEditorCommands } from "../../editor/editor-commands";
+import type { TextColorId } from "../../editor/text-color";
 import type { NoteCardDto } from "../../services/workspace-gateway";
 import "./note-card.css";
 
@@ -25,6 +26,8 @@ interface NoteCardProps {
   onCommandsReady?: (commands: NoteEditorCommands | null) => void;
   /** Called with the current bold-active state. */
   onBoldStateChange?: (active: boolean) => void;
+  /** Called with the current text color. */
+  onTextColorChange?: (color: TextColorId) => void;
 }
 
 /**
@@ -43,6 +46,7 @@ export function NoteCard({
   highlightQuery = "",
   onCommandsReady,
   onBoldStateChange,
+  onTextColorChange,
 }: NoteCardProps) {
   const { draft, saving, error, handleChange, handleBlur, handleFinalize } = useDocumentDraft({
     id: note.id,
@@ -119,6 +123,7 @@ export function NoteCard({
         highlightQuery={highlightQuery}
         onCommandsReady={onCommandsReady}
         onBoldStateChange={onBoldStateChange}
+        onTextColorChange={onTextColorChange}
       />
       {saving && <div className="note-card__status note-card__status--saving">Saving…</div>}
       {error && <div className="note-card__status note-card__status--error">{error}</div>}

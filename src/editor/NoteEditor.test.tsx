@@ -122,4 +122,20 @@ describe("NoteEditor", () => {
     );
     expect(box.commands).toBeNull();
   });
+
+  it("reports the active text color and accepts a setTextColor call", () => {
+    const box: { commands: NoteEditorCommands | null } = { commands: null };
+    render(
+      <NoteEditor
+        document={doc}
+        editable={true}
+        onChange={vi.fn()}
+        onCommandsReady={(c) => {
+          box.commands = c;
+        }}
+      />,
+    );
+    expect(box.commands?.getTextColor()).toBe("default");
+    expect(() => box.commands?.setTextColor("blue")).not.toThrow();
+  });
 });

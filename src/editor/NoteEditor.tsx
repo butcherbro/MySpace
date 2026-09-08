@@ -5,6 +5,7 @@ import { openExternalUrl } from "../services/url-opener";
 import { classifyLinkConversion } from "../cards/link/link-conversion";
 import { setSearchHighlight } from "./search-highlight";
 import type { NoteEditorCommands } from "./editor-commands";
+import type { TextColorId } from "./text-color";
 import "./note-editor.css";
 
 interface NoteEditorProps {
@@ -24,6 +25,8 @@ interface NoteEditorProps {
   onCommandsReady?: (commands: NoteEditorCommands | null) => void;
   /** Called with the current bold-active state whenever it changes. */
   onBoldStateChange?: (active: boolean) => void;
+  /** Called with the current text color whenever it changes. */
+  onTextColorChange?: (color: TextColorId) => void;
 }
 
 /**
@@ -40,6 +43,7 @@ export function NoteEditor({
   highlightQuery = "",
   onCommandsReady,
   onBoldStateChange,
+  onTextColorChange,
 }: NoteEditorProps) {
   const editor = useEditor({
     extensions: createEditorExtensions(),
@@ -103,19 +107,34 @@ export function NoteEditor({
         editor.chain().focus().toggleBold().run();
       },
       isBoldActive: () => editor.isActive("bold"),
+      setTextColor: (color) => {
+        if (color === "default") {
+          editor.chain().focus().unsetMark("textColor").run();
+        } else {
+          editor.chain().focus().setMark("textColor", { color }).run();
+        }
+      },
+      getTextColor: () => {
+        const color = editor.getAttributes("textColor").color as TextColorId | null | undefined;
+        return color ?? "default";
+      },
     });
   }, [editor, editable, onCommandsReady]);
 
-  // Report bold-active state changes (selection/caret move or toggle).
+  // Report formatting state (bold + text color) changes.
   useEffect(() => {
     if (!editor || !editable) return;
-    const handler = () => onBoldStateChange?.(editor.isActive("bold"));
+    const handler = () => {
+      onBoldStateChange?.(editor.isActive("bold"));
+      const color = editor.getAttributes("textColor").color as TextColorId | null | undefined;
+      onTextColorChange?.(color ?? "default");
+    };
     editor.on("selectionUpdate", handler);
     handler();
     return () => {
       editor.off("selectionUpdate", handler);
     };
-  }, [editor, editable, onBoldStateChange]);
+  }, [editor, editable, onBoldStateChange, onTextColorChange]);
 
   // In display mode (not editing), a click on an inline link should open it in
   // the OS browser and must NOT bubble up into React Flow as a drag or an
