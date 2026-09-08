@@ -88,14 +88,16 @@ export function BoardPortalCard({
       </div>
 
       {renaming ? (
-        <input
+        <textarea
           className="board-portal-card__title-input"
           value={titleText}
           autoFocus
+          onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => setTitleText(e.target.value)}
           onBlur={commitRename}
+          rows={1}
           onKeyDown={(e) => {
-            if (e.key === "Enter") {
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               commitRename();
             } else if (e.key === "Escape") {
@@ -110,6 +112,7 @@ export function BoardPortalCard({
           className="board-portal-card__title"
           onDoubleClick={(e) => {
             e.stopPropagation();
+            setTitleText(portal.target.title);
             setRenaming(true);
           }}
         >

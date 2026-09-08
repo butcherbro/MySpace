@@ -55,14 +55,14 @@
 
 .board-portal-card__title {
   width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: center;
   font-size: 12px;
   line-height: 1.2;
   font-weight: 600;
   color: var(--ink, #34403e);
+  text-align: center;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Do not clip the board name: it may overflow the tile rather than hide. */
 }
 
 .board-portal-card__title-input {
@@ -78,6 +78,8 @@
   background: var(--paper-raised, rgba(255, 255, 255, 0.92));
   outline: none;
   color: inherit;
+  resize: none;
+  overflow: hidden;
 }
 
 .board-portal-card__title-input:focus {

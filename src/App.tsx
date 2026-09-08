@@ -529,11 +529,26 @@ function App() {
     if (!board) return;
     const boardId = idGenerator.nextId();
     const portalCardId = idGenerator.nextId();
+    // Place the new board near the visible viewport center so it never lands
+    // far down the board outside the current view.
+    const flow = screenToFlowRef.current;
+    const center = flow
+      ? flow(window.innerWidth * 0.5, window.innerHeight * 0.5)
+      : { x: 200, y: 120 };
+    // Cascade a little so successive boards do not stack exactly on each other,
+    // while staying in the visible viewport.
+    const offset = (state.cards.length % 5) * 24;
+    const frame = {
+      x: center.x - 60 + offset,
+      y: center.y - 56 + offset,
+      width: 120,
+      height: 112,
+    };
     const portal: BoardPortalDto = {
       kind: "board_portal",
       id: portalCardId,
       boardId: board.id,
-      frame: { x: 100, y: 100 + state.cards.length * 24, width: 120, height: 112 },
+      frame,
       zIndex: 0,
       revision: 1,
       target: {
