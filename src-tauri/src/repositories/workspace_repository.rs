@@ -1853,9 +1853,30 @@ pub fn search_workspace(
     });
     hits.truncate(SEARCH_RESULT_LIMIT);
 
+    // Fetch each board's identity once, so results carry the same cover/icon/
+    // acronym fallback as the rest of the UI (no duplicated identity logic).
+    let mut identity_cache: std::collections::HashMap<
+        String,
+        (String, Option<String>, Option<AssetDto>),
+    > = std::collections::HashMap::new();
+    for hit in &hits {
+        if identity_cache.contains_key(&hit.board_id) {
+            continue;
+        }
+        let summary = load_board_summary(conn, &hit.board_id)?;
+        identity_cache.insert(
+            hit.board_id.clone(),
+            (summary.color_token, summary.symbol, summary.cover_asset),
+        );
+    }
+
     let mut out = Vec::with_capacity(hits.len());
     for hit in hits {
         let board_trail = load_breadcrumbs(conn, &hit.board_id)?;
+        let (board_color_token, board_symbol, board_cover_asset) = identity_cache
+            .get(&hit.board_id)
+            .cloned()
+            .unwrap_or((String::new(), None, None));
         out.push(SearchResultDto {
             entity_id: hit.entity_id,
             kind: hit.kind.to_string(),
@@ -1863,6 +1884,9 @@ pub fn search_workspace(
             excerpt: hit.excerpt,
             board_id: hit.board_id,
             board_trail,
+            board_color_token,
+            board_symbol,
+            board_cover_asset,
         });
     }
     Ok(out)

@@ -32,9 +32,10 @@ test("top-bar search navigates to a note's board", async ({ page }) => {
   await page.getByTestId("breadcrumbs").getByRole("button", { name: "Home" }).click();
   await expect(page.getByTestId("note-card")).toHaveCount(0);
 
-  // Type into the always-visible search field; the result dropdown appears.
+  // Type into the always-visible search field; the result dropdown appears with
+  // the matching phrase highlighted.
   await page.getByRole("searchbox", { name: "Search" }).fill("needle phrase");
-  await expect(page.getByText("needle phrase for search")).toBeVisible();
+  await expect(page.locator(".search-bar__title mark")).toHaveText("needle phrase");
 
   // Selecting it navigates to the child board, reveals the note, and selects it.
   await page.keyboard.press("Enter");

@@ -309,6 +309,10 @@ export interface SearchResultDto {
   excerpt: string | null;
   boardId: string;
   boardTrail: Array<{ id: string; title: string }>;
+  /** The board's visual identity, for grouping results under a board. */
+  boardColorToken: string;
+  boardSymbol: string | null;
+  boardCoverAsset: AssetDto | null;
 }
 
 export interface AddQuickBoardInput {

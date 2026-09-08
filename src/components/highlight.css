@@ -1,0 +1,12 @@
+.search-highlight {
+  background: #ffe58f;
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+  /* Never persist: this is a transient UI-only marker. */
+  text-decoration: none;
+}
+
+mark.search-highlight {
+  background: #ffe58f;
+}

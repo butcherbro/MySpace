@@ -482,6 +482,15 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     const q = query.trim().toLowerCase();
     if (!q) return Promise.resolve([]);
 
+    const identity = (boardId: string) => {
+      const board = this.boards.get(boardId);
+      return {
+        boardColorToken: board?.colorToken ?? "ink",
+        boardSymbol: board?.symbol ?? null,
+        boardCoverAsset: board?.coverAsset ?? null,
+      };
+    };
+
     const hits: Array<{ rank: number; result: SearchResultDto }> = [];
 
     // Boards by title.
@@ -496,6 +505,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
             excerpt: null,
             boardId: board.id,
             boardTrail: this.buildBreadcrumbs(board.id),
+            ...identity(board.id),
           },
         });
       }
@@ -512,6 +522,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
             excerpt: null,
             boardId: card.boardId,
             boardTrail: this.buildBreadcrumbs(card.boardId),
+            ...identity(card.boardId),
           },
         });
       }
@@ -530,6 +541,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
               excerpt: titleMatch || urlMatch ? null : card.descriptionPlainText.trim(),
               boardId: card.boardId,
               boardTrail: this.buildBreadcrumbs(card.boardId),
+              ...identity(card.boardId),
             },
           });
         }

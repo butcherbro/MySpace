@@ -473,6 +473,11 @@ pub struct SearchResultDto {
     pub board_id: String,
     /// The root-first ancestor trail (`Home / … / board_id`).
     pub board_trail: Vec<Breadcrumb>,
+    /// The board's visual identity, so results can be grouped and shown with the
+    /// same cover/icon/acronym fallback as everywhere else in the UI.
+    pub board_color_token: String,
+    pub board_symbol: Option<String>,
+    pub board_cover_asset: Option<AssetDto>,
 }
 
 /// A single Link Card to create in a batch.
