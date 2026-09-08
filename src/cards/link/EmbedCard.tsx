@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { EmbedCardDto } from "../../services/workspace-gateway";
+import { HighlightedText } from "../../components/HighlightedText";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { openExternalUrl } from "../../services/url-opener";
@@ -15,6 +16,8 @@ interface EmbedCardProps {
   onContextMenu: (cardId: string, x: number, y: number) => void;
   /** Retry a failed metadata fetch without changing the source URL. */
   onRetryMetadata: (cardId: string) => void;
+  /** Transient search phrase to highlight (UI-only; never persisted). */
+  highlightQuery?: string;
 }
 
 /**
@@ -23,7 +26,14 @@ interface EmbedCardProps {
  * source line, and an editable rich-text description body. The preview image
  * and favicon render when present (Slice B populates them).
  */
-export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMetadata }: EmbedCardProps) {
+export function EmbedCard({
+  embed,
+  onUpdate,
+  onResize,
+  onContextMenu,
+  onRetryMetadata,
+  highlightQuery = "",
+}: EmbedCardProps) {
   const [editing, setEditing] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const lastAutoSizeRequest = useRef<string | null>(null);
@@ -143,7 +153,7 @@ export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMet
             />
           )}
           <span className="link-card__url" title={embed.sourceUrl}>
-            {embed.displayUrl}
+            <HighlightedText text={embed.displayUrl} query={highlightQuery} />
           </span>
         </div>
 
@@ -158,7 +168,7 @@ export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMet
             void openExternalUrl(embed.sourceUrl);
           }}
         >
-          {embed.title}
+          <HighlightedText text={embed.title} query={highlightQuery} />
         </a>
 
         {embed.metadataStatus === "failed" && (
@@ -191,10 +201,20 @@ export function EmbedCard({ embed, onUpdate, onResize, onContextMenu, onRetryMet
           }}
         >
           {editing ? (
-            <NoteEditor document={draft} editable onChange={handleChange} onBlur={handleBlur} />
+            <NoteEditor
+              document={draft}
+              editable
+              onChange={handleChange}
+              onBlur={handleBlur}
+              highlightQuery={highlightQuery}
+            />
           ) : (
             <div className="link-card__description-display">
-              {embed.descriptionPlainText || "Add notes…"}
+              {embed.descriptionPlainText ? (
+                <HighlightedText text={embed.descriptionPlainText} query={highlightQuery} />
+              ) : (
+                "Add notes…"
+              )}
             </div>
           )}
         </div>

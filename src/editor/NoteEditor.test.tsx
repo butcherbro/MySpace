@@ -67,4 +67,34 @@ describe("NoteEditor", () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" });
     expect(onFinalize).not.toHaveBeenCalled();
   });
+
+  it("renders a transient highlight without firing onChange", () => {
+    const onChange = vi.fn();
+    const { container, rerender } = render(
+      <NoteEditor document={doc} editable={false} onChange={onChange} highlightQuery="" />,
+    );
+    const initialCalls = onChange.mock.calls.length;
+
+    rerender(
+      <NoteEditor document={doc} editable={false} onChange={onChange} highlightQuery="hell" />,
+    );
+
+    const mark = container.querySelector(".search-highlight");
+    expect(mark).not.toBeNull();
+    expect(mark?.textContent).toBe("hell");
+    // The meta-only highlight transaction must not emit `update`/`onChange`.
+    expect(onChange.mock.calls.length).toBe(initialCalls);
+  });
+
+  it("clears the transient highlight when the query becomes empty", () => {
+    const { container, rerender } = render(
+      <NoteEditor document={doc} editable={false} onChange={vi.fn()} highlightQuery="hell" />,
+    );
+    expect(container.querySelector(".search-highlight")).not.toBeNull();
+
+    rerender(
+      <NoteEditor document={doc} editable={false} onChange={vi.fn()} highlightQuery="" />,
+    );
+    expect(container.querySelector(".search-highlight")).toBeNull();
+  });
 });

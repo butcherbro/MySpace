@@ -33,6 +33,8 @@ interface CanvasAdapterProps {
   onScreenToFlowReady?: (fn: (x: number, y: number) => { x: number; y: number }) => void;
   /** Imperative focus request: center + select a card after a board loads. */
   focusRequest?: { cardId: string; token: number } | null;
+  /** Transient search phrase, used only to force card re-render for highlight. */
+  highlightQuery?: string;
 }
 
 type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"] };
@@ -77,6 +79,7 @@ export function CanvasAdapter({
   editingCardId = null,
   onScreenToFlowReady,
   focusRequest = null,
+  highlightQuery = "",
 }: CanvasAdapterProps) {
   const flowRef = useRef<{
     setViewport: (viewport: CanvasViewport) => void;
@@ -133,7 +136,7 @@ export function CanvasAdapter({
         return `${c.id}:${c.kind}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}` +
           (portal ? `:${portal.portalTitle ?? ""}:${portal.portalCoverAssetId ?? ""}` : "");
       })
-      .join("|") + `#edit:${editingCardId ?? ""}`;
+      .join("|") + `#edit:${editingCardId ?? ""}` + `#highlight:${highlightQuery}`;
   const [lastKey, setLastKey] = useState(cardsKey);
 
   if (cardsKey !== lastKey) {

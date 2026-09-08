@@ -135,6 +135,7 @@ function App() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [cardFocus, setCardFocus] = useState<{ cardId: string; token: number } | null>(null);
   const cardFocusTokenRef = useRef(0);
+  const [highlightQuery, setHighlightQuery] = useState("");
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -304,6 +305,8 @@ function App() {
   const handleSearchQueryChange = useCallback((query: string) => {
     setSearchQuery(query);
     if (query.trim() === "") setSearchResults([]);
+    // Any edit to the search phrase invalidates a previous on-board highlight.
+    setHighlightQuery("");
   }, []);
 
   const handleSearchClear = useCallback(() => {
@@ -1388,14 +1391,16 @@ function App() {
   // select) once it is rendered.
   const handleSearchSelect = useCallback(
     async (result: SearchResultDto) => {
+      const query = searchQuery.trim();
       handleSearchClear();
       const targetBoardId = result.kind === "board" ? result.entityId : result.boardId;
       await navigateTo(targetBoardId, { pushHistory: true, tabMode: "open" });
       if (result.kind !== "board") {
         setCardFocus({ cardId: result.entityId, token: ++cardFocusTokenRef.current });
       }
+      setHighlightQuery(query);
     },
-    [handleSearchClear, navigateTo],
+    [handleSearchClear, navigateTo, searchQuery],
   );
 
   const handleWorkspaceUndo = useCallback(async () => {
@@ -1892,6 +1897,7 @@ function App() {
             viewportResetToken={boardOpenRevision}
             editingCardId={state.editingCardId}
             focusRequest={cardFocus}
+            highlightQuery={highlightQuery}
             onScreenToFlowReady={(fn) => {
               screenToFlowRef.current = fn;
             }}
@@ -1929,6 +1935,7 @@ function App() {
                 onResizeImage: handleResizeNote,
                 onResizeEmbed: handleResizeNote,
                 highlightedPortalId,
+                highlightQuery,
               });
             }}
           />

@@ -18,6 +18,8 @@ interface NoteCardProps {
   onContextMenu: (cardId: string, x: number, y: number) => void;
   /** Persist a manual resize (width/height in CSS px). */
   onResize: (id: string, width: number, height: number) => void;
+  /** Transient search phrase to highlight (UI-only; never persisted). */
+  highlightQuery?: string;
 }
 
 /**
@@ -33,6 +35,7 @@ export function NoteCard({
   onFinalize,
   onContextMenu,
   onResize,
+  highlightQuery = "",
 }: NoteCardProps) {
   const { draft, saving, error, handleChange, handleBlur, handleFinalize } = useDocumentDraft({
     id: note.id,
@@ -106,6 +109,7 @@ export function NoteCard({
         onFinalize={() => {
           void handleFinalize();
         }}
+        highlightQuery={highlightQuery}
       />
       {saving && <div className="note-card__status note-card__status--saving">Saving…</div>}
       {error && <div className="note-card__status note-card__status--error">{error}</div>}

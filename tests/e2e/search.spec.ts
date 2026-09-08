@@ -43,13 +43,16 @@ test("top-bar search navigates to a note's board", async ({ page }) => {
   await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
   await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
   await expect(page.locator('.canvas-card-frame[data-selected="true"]')).toHaveCount(1);
+  // The matched phrase is highlighted inside the note (transient UI state).
+  await expect(page.locator(".note-card .search-highlight")).toHaveText("needle phrase");
 
-  // Escape clears the field and hides the dropdown.
+  // Escape clears the field and removes the on-board highlight.
   await page.getByRole("searchbox", { name: "Search" }).fill("needle phrase");
   await expect(page.getByTestId("search-results")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("search-results")).toHaveCount(0);
   await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("");
+  await expect(page.locator(".note-card .search-highlight")).toHaveCount(0);
 });
 
 test("Backspace edits the search field instead of trashing canvas selection", async ({ page }) => {

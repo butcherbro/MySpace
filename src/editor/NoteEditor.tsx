@@ -3,6 +3,7 @@ import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import { createEditorExtensions } from "./editor-extensions";
 import { openExternalUrl } from "../services/url-opener";
 import { classifyLinkConversion } from "../cards/link/link-conversion";
+import { setSearchHighlight } from "./search-highlight";
 import "./note-editor.css";
 
 interface NoteEditorProps {
@@ -16,6 +17,8 @@ interface NoteEditorProps {
   onBlur?: () => void;
   /** Called when Enter should finalize a bare-URL note instead of inserting a line. */
   onFinalize?: () => void;
+  /** Transient search phrase to highlight (UI-only; never persisted). */
+  highlightQuery?: string;
 }
 
 /**
@@ -23,7 +26,14 @@ interface NoteEditorProps {
  * (and future cards) talk to `NoteEditor` via a `document` + `onChange`
  * contract, so Tiptap types never leak outside this file.
  */
-export function NoteEditor({ document, editable, onChange, onBlur, onFinalize }: NoteEditorProps) {
+export function NoteEditor({
+  document,
+  editable,
+  onChange,
+  onBlur,
+  onFinalize,
+  highlightQuery = "",
+}: NoteEditorProps) {
   const editor = useEditor({
     extensions: createEditorExtensions(),
     content: document as JSONContent,
@@ -48,6 +58,15 @@ export function NoteEditor({ document, editable, onChange, onBlur, onFinalize }:
       }
     }
   }, [document, editor]);
+
+  // Apply (or clear) the transient highlight. This dispatches a meta-only
+  // transaction, so `onUpdate`/`onChange` never fire and the document is never
+  // rewritten. The plugin itself is registered at editor creation via the
+  // extension list, so no state-replacing `registerPlugin` call happens here.
+  useEffect(() => {
+    if (!editor) return;
+    setSearchHighlight(editor, highlightQuery);
+  }, [editor, highlightQuery]);
 
   // Keep the editable flag in sync with the external prop. `useEditor` only
   // applies `editable` at creation time, so toggling it after mount requires an

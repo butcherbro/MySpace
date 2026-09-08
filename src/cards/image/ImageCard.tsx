@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ImageCardDto } from "../../services/workspace-gateway";
+import { HighlightedText } from "../../components/HighlightedText";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import "./image-card.css";
@@ -12,6 +13,8 @@ interface ImageCardProps {
   onResize: (id: string, width: number, height: number) => void;
   /** Request a context menu (right-click). */
   onContextMenu: (cardId: string, x: number, y: number) => void;
+  /** Transient search phrase to highlight (UI-only; never persisted). */
+  highlightQuery?: string;
 }
 
 /**
@@ -20,7 +23,13 @@ interface ImageCardProps {
  * caption opens it for editing. The caption draft lifecycle is shared with notes
  * via `useDocumentDraft`.
  */
-export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCardProps) {
+export function ImageCard({
+  image,
+  onUpdate,
+  onResize,
+  onContextMenu,
+  highlightQuery = "",
+}: ImageCardProps) {
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState(false);
   const hasCaption = image.captionPlainText.trim().length > 0;
@@ -136,10 +145,15 @@ export function ImageCard({ image, onUpdate, onResize, onContextMenu }: ImageCar
             editable
             onChange={handleChange}
             onBlur={handleBlur}
+            highlightQuery={highlightQuery}
           />
         ) : (
           <div className="image-card__caption-display">
-            {hasCaption ? image.captionPlainText : "Add caption…"}
+            {hasCaption ? (
+              <HighlightedText text={image.captionPlainText} query={highlightQuery} />
+            ) : (
+              "Add caption…"
+            )}
           </div>
         )}
       </div>

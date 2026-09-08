@@ -40,6 +40,8 @@ export interface CardRenderContext {
   onResizeEmbed: (id: string, width: number, height: number) => void;
   /** The portal currently being hovered during a card drag, if any. */
   highlightedPortalId: string | null;
+  /** Transient search phrase to highlight inside cards (UI-only). */
+  highlightQuery: string;
 }
 
 /** Renders a persisted card into the canvas. */
@@ -54,6 +56,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         onFinalize={ctx.onFinalizeNote}
         onContextMenu={ctx.onContextMenu}
         onResize={ctx.onResizeNote}
+        highlightQuery={ctx.highlightQuery}
       />
     );
   }
@@ -65,6 +68,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         onUpdate={ctx.onUpdateImageCaption}
         onResize={ctx.onResizeImage}
         onContextMenu={ctx.onContextMenu}
+        highlightQuery={ctx.highlightQuery}
       />
     );
   }
@@ -77,6 +81,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         onResize={ctx.onResizeEmbed}
         onContextMenu={ctx.onContextMenu}
         onRetryMetadata={ctx.onRetryEmbedMetadata}
+        highlightQuery={ctx.highlightQuery}
       />
     );
   }
