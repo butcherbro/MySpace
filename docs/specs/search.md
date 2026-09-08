@@ -25,11 +25,11 @@ V1 indexes exactly these fields, nothing more:
 |---|---|
 | Note | authoritative `plain_text` |
 | Link Card (`embed`) | `title`, `source_url` (and `display_url`), `description_plain_text` |
+| Image | caption `caption_plain_text`, asset `file_name` |
 | Board | `title` |
 
-Explicitly out of scope for V1: image captions and image filenames, Board Portal tiles,
-asset file contents, full-text over `document_json` beyond the derived `plain_text`,
-tags, and any external filesystem content.
+Explicitly out of scope for V1: asset file contents, full-text over `document_json`
+beyond the derived `plain_text`, tags, and any external filesystem content.
 
 Trashed entities (non-null `deleted_at`) are never returned.
 

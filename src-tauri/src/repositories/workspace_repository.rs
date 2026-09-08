@@ -1815,6 +1815,40 @@ pub fn search_workspace(
         }
     }
 
+    // Image cards by caption or file name (rank 1).
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, i.caption_plain_text, a.file_name
+             FROM cards c
+             JOIN image_cards i ON i.card_id = c.id
+             JOIN assets a ON a.id = i.asset_id
+             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
+             WHERE c.deleted_at IS NULL AND (
+                 i.caption_plain_text LIKE ?1 ESCAPE '\\' OR a.file_name LIKE ?1 ESCAPE '\\'
+             )",
+        )?;
+        let rows = stmt.query_map([&pattern], |row| {
+            let caption: String = row.get(2)?;
+            let file_name: String = row.get(3)?;
+            let title = if caption.trim().is_empty() {
+                file_name.clone()
+            } else {
+                caption
+            };
+            Ok(SearchHit {
+                entity_id: row.get(0)?,
+                kind: "image",
+                title: bound_text(&title),
+                excerpt: None,
+                board_id: row.get(1)?,
+                rank: 1,
+            })
+        })?;
+        for r in rows {
+            hits.push(r?);
+        }
+    }
+
     // Link Cards (embed) by title, URL, or description.
     {
         let mut stmt = conn.prepare(

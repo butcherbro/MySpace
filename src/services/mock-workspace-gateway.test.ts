@@ -45,7 +45,14 @@ describe("MockWorkspaceGateway", () => {
     expect(summary.boardCount).toBe(0);
     expect(summary.batches[0].batchId).toBe(batchId);
     expect(summary.batches[0].items).toEqual([
-      { id: "n1", kind: "note", title: "Remember to ship" },
+      {
+        id: "n1",
+        kind: "note",
+        title: "Remember to ship",
+        thumbnailAsset: null,
+        colorToken: null,
+        symbol: null,
+      },
     ]);
   });
 
@@ -125,5 +132,19 @@ describe("MockWorkspaceGateway", () => {
     expect(links).toHaveLength(1);
     expect(links[0].kind).toBe("link");
     expect(links[0].excerpt).toBe("A useful example");
+
+    // Image search by caption/file name.
+    await gateway.createImageCard({
+      id: "img-1",
+      boardId: "home",
+      frame: { x: 0, y: 200, width: 320, height: 240 },
+      zIndex: 0,
+      assetId: "asset-1",
+      captionJson: { type: "doc" },
+      captionPlainText: "Screenshot of dashboard",
+    });
+    const images = await gateway.searchWorkspace("dashboard");
+    expect(images).toHaveLength(1);
+    expect(images[0].kind).toBe("image");
   });
 });

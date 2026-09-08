@@ -317,7 +317,7 @@ export interface EmptyTrashResult {
 /** A single workspace search result. */
 export interface SearchResultDto {
   entityId: string;
-  kind: "board" | "note" | "link";
+  kind: "board" | "note" | "link" | "image";
   title: string;
   /** Bounded match-context snippet; `null` when the match is in the title. */
   excerpt: string | null;

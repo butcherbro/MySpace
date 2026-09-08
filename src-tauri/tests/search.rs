@@ -4,7 +4,8 @@
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::board_service;
 use myspace_lib::domain::models::{
-    CreateChildBoardInput, CreateLinkBatchInput, CreateNoteInput, Frame, LinkBatchItem,
+    CreateChildBoardInput, CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame,
+    LinkBatchItem,
 };
 use myspace_lib::domain::trash_service;
 use myspace_lib::repositories::workspace_repository;
@@ -207,4 +208,48 @@ fn search_orders_title_matches_before_body_matches() {
     // The board (title match) sorts before the note (body match).
     assert_eq!(results[0].kind, "board");
     assert_eq!(results[1].kind, "note");
+}
+
+#[test]
+fn search_matches_image_caption_and_filename() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    // Insert a minimal asset row + a card referencing it with a caption.
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+         VALUES ('img-1', 'img-1.png', 'image/png', 'screenshot-final.png', NULL, NULL, 0, 0)",
+        [],
+    )
+    .unwrap();
+    workspace_repository::create_image_card(
+        &mut conn,
+        &CreateImageCardInput {
+            id: "ic1".to_string(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 240.0,
+            },
+            z_index: 0,
+            asset_id: "img-1".to_string(),
+            caption_json: serde_json::json!({ "type": "doc" }),
+            caption_plain_text: "Screenshot of dashboard".to_string(),
+        },
+    )
+    .unwrap();
+
+    // By caption.
+    let by_caption = workspace_repository::search_workspace(&conn, "dashboard").unwrap();
+    assert_eq!(by_caption.len(), 1);
+    assert_eq!(by_caption[0].kind, "image");
+    assert_eq!(by_caption[0].title, "Screenshot of dashboard");
+
+    // By file name.
+    let by_file = workspace_repository::search_workspace(&conn, "screenshot-final").unwrap();
+    assert_eq!(by_file.len(), 1);
+    assert_eq!(by_file[0].kind, "image");
 }

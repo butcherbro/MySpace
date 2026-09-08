@@ -563,6 +563,24 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           },
         });
       }
+      if (card.kind === "image") {
+        const captionMatch = card.captionPlainText.toLowerCase().includes(q);
+        const fileMatch = card.asset.fileName.toLowerCase().includes(q);
+        if (captionMatch || fileMatch) {
+          hits.push({
+            rank: 1,
+            result: {
+              entityId: card.id,
+              kind: "image",
+              title: card.captionPlainText.trim() || card.asset.fileName,
+              excerpt: null,
+              boardId: card.boardId,
+              boardTrail: this.buildBreadcrumbs(card.boardId),
+              ...identity(card.boardId),
+            },
+          });
+        }
+      }
       if (card.kind === "embed") {
         const titleMatch = card.title.toLowerCase().includes(q);
         const urlMatch =
