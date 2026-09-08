@@ -114,3 +114,21 @@
 - A reactive Redo button exposed an older hidden contract bug: move commands reused their initial optimistic revision after Undo, and create commands attempted a duplicate insert instead of restoring their soft-deleted entity.
 - Every move command now advances its owned expected revisions only after each successful direction. Create commands retain the Trash batch returned by Undo and restore that batch on Redo.
 - The dispatcher must peek before an asynchronous Undo/Redo and move the command between stacks only after success; otherwise a failed durable mutation silently destroys history.
+
+## 2026-09-08 — Group move snapshots, not live cards; and refresh revisions before batch commit
+
+- Cross-board drag must carry a snapshot of every dragged card captured at drag
+  start. After the target board opens, the live `state.cards` projection already
+  points at the target board, so resolving the group from `cardsRef` at commit
+  time finds nothing and silently drops the group.
+- Consequence: the drag state machine owns `cards` (full snapshots: id/kind/revision/
+  boardId/frame + board-portal target info), and `ghostCard` is just `cards[0]` for
+  rendering.
+- A leaf batch move must refresh each card's revision via `readCard` immediately
+  before `move_cards_to_board_unsorted`; a draft save on blur can bump revisions after
+  drag start and otherwise reject the whole batch as stale.
+- `elementFromPoint` on a dropped board portal resolves the dragged node itself
+  (it follows the cursor), so portal drops must be resolved in the canvas by frame
+  overlap (`portalAtPoint`), not by `data-board-drop-id` hit-testing.
+- `set_note_color` must NOT bump the card revision: color is orthogonal to text, and
+  bumping it races the text autosave's `expected_revision` on the same card.

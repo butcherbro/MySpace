@@ -10,6 +10,18 @@
   `docs/specs/search.md`; three scope decisions (global vs current board,
   ranking, highlight) are OPEN and must be agreed before implementation.
 
+### 2026-09-08 — Search UX + contextual note rail + group move (architect slices 1–4)
+
+- [x] Search: highlight matches in snippets, group results by board (cover/icon/
+  acronym + path + count), top-bar search field, navigation + center + select,
+  and transient in-card highlight (Tiptap decoration, not persisted).
+- [x] Contextual note rail (`create`/`note` modes) with Bold, text color, and note
+  background color. Note color = semantic preset persisted in the backend
+  (migration `0011`, `set_note_color`), does not bump the text revision.
+- [x] Group move: a dragged multi-selection moves together onto a board portal,
+  breadcrumb, or board tab (leaf cards -> Unsorted batch; boards reparent).
+  Commit range `7bf3f71..d1eff45`.
+
 - [x] Add real Link Card metadata enrichment with bounded HTTP, YouTube/Open Graph support, and persisted fallback states.
 - [x] Cache preview and favicon files as managed assets.
 - [x] Auto-grow enriched Link Cards so preview, title, and description are visible without manual resize.
