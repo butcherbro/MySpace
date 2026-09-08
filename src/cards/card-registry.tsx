@@ -6,6 +6,7 @@
 
 import type { ReactNode } from "react";
 import type { CardDto } from "../services/workspace-gateway";
+import type { NoteEditorCommands } from "../editor/editor-commands";
 import { BoardPortalCard } from "./board/BoardPortalCard";
 import { NoteCard } from "./note/NoteCard";
 import { ImageCard } from "./image/ImageCard";
@@ -42,6 +43,10 @@ export interface CardRenderContext {
   highlightedPortalId: string | null;
   /** Transient search phrase to highlight inside cards (UI-only). */
   highlightQuery: string;
+  /** Called with the active note's editing command surface (or null). */
+  onNoteCommands: (commands: NoteEditorCommands | null) => void;
+  /** Called with the active note's bold-active state. */
+  onNoteBoldStateChange: (active: boolean) => void;
 }
 
 /** Renders a persisted card into the canvas. */
@@ -57,6 +62,8 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         onContextMenu={ctx.onContextMenu}
         onResize={ctx.onResizeNote}
         highlightQuery={ctx.highlightQuery}
+        onCommandsReady={ctx.onNoteCommands}
+        onBoldStateChange={ctx.onNoteBoldStateChange}
       />
     );
   }

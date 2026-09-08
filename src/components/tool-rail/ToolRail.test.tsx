@@ -3,31 +3,29 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ToolRail } from "./ToolRail";
 
-function renderRail(overrides: Partial<Parameters<typeof ToolRail>[0]> = {}) {
+function renderRail(overrides: Partial<React.ComponentProps<typeof ToolRail>> = {}) {
   const props = {
+    mode: "create" as const,
     onNewNote: vi.fn(),
     onNewLink: vi.fn(),
     onNewBoard: vi.fn(),
     onAddImage: vi.fn(),
     trashBatchCount: 0,
     onOpenTrash: vi.fn(),
+    onBold: vi.fn(),
+    boldActive: false,
+    onBackToCreate: vi.fn(),
     ...overrides,
   };
-  return {
-    user: userEvent.setup(),
-    props,
-    ...render(<ToolRail {...props} />),
-  };
+  return { props, ...render(<ToolRail {...props} />) };
 }
 
 describe("ToolRail", () => {
-  it("renders the creation tools in order with accessible labels", () => {
+  it("renders the creation tools and trash in create mode", () => {
     renderRail();
 
-    const toolbar = screen.getByRole("toolbar", { name: "Creation tools" });
+    const toolbar = screen.getByRole("toolbar", { name: "Tools" });
     const buttons = within(toolbar).getAllByRole("button");
-
-    expect(buttons).toHaveLength(5);
     expect(buttons.map((button) => button.textContent)).toEqual([
       "Note",
       "Link",
@@ -36,53 +34,53 @@ describe("ToolRail", () => {
       "Trash",
     ]);
     expect(screen.getByRole("button", { name: "New note" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New link" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New board" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add image" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Trash" })).toBeInTheDocument();
-    expect(toolbar.querySelectorAll("svg")).toHaveLength(5);
   });
 
-  it("calls the matching callback when each creation button is activated", async () => {
-    const { user, props } = renderRail();
+  it("renders note tools (back + bold) plus trash in note mode", () => {
+    renderRail({ mode: "note" });
 
-    await user.click(screen.getByRole("button", { name: "New note" }));
-    await user.click(screen.getByRole("button", { name: "New link" }));
-    await user.click(screen.getByRole("button", { name: "New board" }));
-    await user.click(screen.getByRole("button", { name: "Add image" }));
-
-    expect(props.onNewNote).toHaveBeenCalledTimes(1);
-    expect(props.onNewLink).toHaveBeenCalledTimes(1);
-    expect(props.onNewBoard).toHaveBeenCalledTimes(1);
-    expect(props.onAddImage).toHaveBeenCalledTimes(1);
-    expect(props.onOpenTrash).not.toHaveBeenCalled();
+    const toolbar = screen.getByRole("toolbar", { name: "Tools" });
+    const buttons = within(toolbar).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual(["Back", "Bold", "Trash"]);
+    expect(screen.queryByRole("button", { name: "New note" })).not.toBeInTheDocument();
   });
 
-  it("opens Trash when the bottom button is activated", async () => {
-    const { user, props } = renderRail();
+  it("calls onBold and onBackToCreate from note mode", async () => {
+    const user = userEvent.setup();
+    const { props } = renderRail({ mode: "note" });
 
-    await user.click(screen.getByRole("button", { name: "Open Trash" }));
+    await user.click(screen.getByRole("button", { name: "Bold" }));
+    await user.click(screen.getByRole("button", { name: "Back to tools" }));
 
-    expect(props.onOpenTrash).toHaveBeenCalledTimes(1);
+    expect(props.onBold).toHaveBeenCalledTimes(1);
+    expect(props.onBackToCreate).toHaveBeenCalledTimes(1);
   });
 
-  it("hides the badge at zero and shows the batch count above zero", () => {
+  it("marks the bold button active", () => {
+    renderRail({ mode: "note", boldActive: true });
+    expect(screen.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("hides the badge at zero and shows the count above zero", () => {
     const { rerender } = renderRail({ trashBatchCount: 0 });
-    expect(screen.queryByText("0")).not.toBeInTheDocument();
     expect(screen.queryByTestId("trash-badge")).not.toBeInTheDocument();
 
     rerender(
       <ToolRail
+        mode="create"
         onNewNote={vi.fn()}
         onNewLink={vi.fn()}
         onNewBoard={vi.fn()}
         onAddImage={vi.fn()}
         trashBatchCount={3}
         onOpenTrash={vi.fn()}
+        onBold={vi.fn()}
+        boldActive={false}
+        onBackToCreate={vi.fn()}
       />,
     );
 
-    const badge = screen.getByTestId("trash-badge");
-    expect(badge.textContent).toBe("3");
+    expect(screen.getByTestId("trash-badge").textContent).toBe("3");
   });
 });

@@ -4,6 +4,7 @@ import { createEditorExtensions } from "./editor-extensions";
 import { openExternalUrl } from "../services/url-opener";
 import { classifyLinkConversion } from "../cards/link/link-conversion";
 import { setSearchHighlight } from "./search-highlight";
+import type { NoteEditorCommands } from "./editor-commands";
 import "./note-editor.css";
 
 interface NoteEditorProps {
@@ -19,6 +20,10 @@ interface NoteEditorProps {
   onFinalize?: () => void;
   /** Transient search phrase to highlight (UI-only; never persisted). */
   highlightQuery?: string;
+  /** Called with the editing command surface (or null when leaving edit mode). */
+  onCommandsReady?: (commands: NoteEditorCommands | null) => void;
+  /** Called with the current bold-active state whenever it changes. */
+  onBoldStateChange?: (active: boolean) => void;
 }
 
 /**
@@ -33,6 +38,8 @@ export function NoteEditor({
   onBlur,
   onFinalize,
   highlightQuery = "",
+  onCommandsReady,
+  onBoldStateChange,
 }: NoteEditorProps) {
   const editor = useEditor({
     extensions: createEditorExtensions(),
@@ -81,6 +88,34 @@ export function NoteEditor({
       editor?.commands.focus();
     }
   }, [editor, editable]);
+
+  // Expose a Tiptap-free command surface while editing, and clear it on exit.
+  useEffect(() => {
+    if (!editor) return;
+    if (!editable) {
+      onCommandsReady?.(null);
+      return;
+    }
+    onCommandsReady?.({
+      toggleBold: () => {
+        // `focus()` re-establishes the caret/selection before the command, so a
+        // rail button click never collapses the user's selection.
+        editor.chain().focus().toggleBold().run();
+      },
+      isBoldActive: () => editor.isActive("bold"),
+    });
+  }, [editor, editable, onCommandsReady]);
+
+  // Report bold-active state changes (selection/caret move or toggle).
+  useEffect(() => {
+    if (!editor || !editable) return;
+    const handler = () => onBoldStateChange?.(editor.isActive("bold"));
+    editor.on("selectionUpdate", handler);
+    handler();
+    return () => {
+      editor.off("selectionUpdate", handler);
+    };
+  }, [editor, editable, onBoldStateChange]);
 
   // In display mode (not editing), a click on an inline link should open it in
   // the OS browser and must NOT bubble up into React Flow as a drag or an

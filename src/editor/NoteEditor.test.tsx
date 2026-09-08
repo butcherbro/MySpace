@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { NoteEditor } from "./NoteEditor";
+import type { NoteEditorCommands } from "./editor-commands";
 
 const doc = {
   type: "doc",
@@ -96,5 +97,29 @@ describe("NoteEditor", () => {
       <NoteEditor document={doc} editable={false} onChange={vi.fn()} highlightQuery="" />,
     );
     expect(container.querySelector(".search-highlight")).toBeNull();
+  });
+
+  it("exposes a Tiptap-free command surface while editing and clears it on exit", () => {
+    const box: { commands: NoteEditorCommands | null } = { commands: null };
+    const { rerender } = render(
+      <NoteEditor
+        document={doc}
+        editable={true}
+        onChange={vi.fn()}
+        onCommandsReady={(c) => {
+          box.commands = c;
+        }}
+      />,
+    );
+    expect(box.commands).not.toBeNull();
+    expect(typeof box.commands?.toggleBold).toBe("function");
+    expect(typeof box.commands?.isBoldActive).toBe("function");
+
+    rerender(
+      <NoteEditor document={doc} editable={false} onChange={vi.fn()} onCommandsReady={(c) => {
+        box.commands = c;
+      }} />,
+    );
+    expect(box.commands).toBeNull();
   });
 });

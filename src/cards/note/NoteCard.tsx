@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { useDocumentDraft } from "../../editor/use-document-draft";
+import type { NoteEditorCommands } from "../../editor/editor-commands";
 import type { NoteCardDto } from "../../services/workspace-gateway";
 import "./note-card.css";
 
@@ -20,6 +21,10 @@ interface NoteCardProps {
   onResize: (id: string, width: number, height: number) => void;
   /** Transient search phrase to highlight (UI-only; never persisted). */
   highlightQuery?: string;
+  /** Called with the editing command surface (or null when leaving edit mode). */
+  onCommandsReady?: (commands: NoteEditorCommands | null) => void;
+  /** Called with the current bold-active state. */
+  onBoldStateChange?: (active: boolean) => void;
 }
 
 /**
@@ -36,6 +41,8 @@ export function NoteCard({
   onContextMenu,
   onResize,
   highlightQuery = "",
+  onCommandsReady,
+  onBoldStateChange,
 }: NoteCardProps) {
   const { draft, saving, error, handleChange, handleBlur, handleFinalize } = useDocumentDraft({
     id: note.id,
@@ -110,6 +117,8 @@ export function NoteCard({
           void handleFinalize();
         }}
         highlightQuery={highlightQuery}
+        onCommandsReady={onCommandsReady}
+        onBoldStateChange={onBoldStateChange}
       />
       {saving && <div className="note-card__status note-card__status--saving">Saving…</div>}
       {error && <div className="note-card__status note-card__status--error">{error}</div>}

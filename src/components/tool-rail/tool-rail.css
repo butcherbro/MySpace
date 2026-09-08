@@ -75,6 +75,11 @@
   box-shadow: 0 0 0 3px var(--focus-halo);
 }
 
+.tool-button--active {
+  background: color-mix(in srgb, var(--edge-focus) 16%, transparent);
+  color: var(--ink);
+}
+
 .tool-button__icon {
   width: 20px;
   height: 20px;

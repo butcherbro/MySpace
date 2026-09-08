@@ -15,6 +15,7 @@ import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand } from "./commands/card-commands";
 import { CreateChildBoardCommand, MoveBoardCommand, RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
+import type { NoteEditorCommands } from "./editor/editor-commands";
 import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
@@ -104,6 +105,15 @@ function App() {
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
 
+  // The contextual rail shows note tools when exactly one Note is active:
+  // either it is being edited, or it is the single selected card.
+  const activeNoteId = state.editingCardId
+    ?? (state.selection.length === 1 &&
+        state.cards.find((c) => c.id === state.selection[0])?.kind === "note"
+      ? state.selection[0]
+      : null);
+  const noteToolMode = activeNoteId !== null;
+
   // Browser-style navigation history. Initialized lazily once Home is known.
   const historyRef = useRef<BoardHistory | null>(null);
 
@@ -136,6 +146,10 @@ function App() {
   const [cardFocus, setCardFocus] = useState<{ cardId: string; token: number } | null>(null);
   const cardFocusTokenRef = useRef(0);
   const [highlightQuery, setHighlightQuery] = useState("");
+
+  // Contextual note rail: the active note's editor command surface + bold state.
+  const noteCommandsRef = useRef<NoteEditorCommands | null>(null);
+  const [boldActive, setBoldActive] = useState(false);
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
@@ -1403,6 +1417,26 @@ function App() {
     [handleSearchClear, navigateTo, searchQuery],
   );
 
+  // The contextual note rail: command bridge + bold state come from the active
+  // note's editor (Tiptap-free contract).
+  const handleNoteCommands = useCallback((commands: NoteEditorCommands | null) => {
+    noteCommandsRef.current = commands;
+    if (!commands) setBoldActive(false);
+  }, []);
+
+  const handleNoteBoldStateChange = useCallback((active: boolean) => {
+    setBoldActive(active);
+  }, []);
+
+  const handleBold = useCallback(() => {
+    noteCommandsRef.current?.toggleBold();
+  }, []);
+
+  const handleBackToCreate = useCallback(() => {
+    dispatch({ type: "editingStopped" });
+    dispatch({ type: "selectionChanged", ids: [] });
+  }, []);
+
   const handleWorkspaceUndo = useCallback(async () => {
     try {
       if (await dispatcher.undo()) await reloadCurrentBoard();
@@ -1696,12 +1730,16 @@ function App() {
       }
       toolRail={
         <ToolRail
+          mode={noteToolMode ? "note" : "create"}
           onNewNote={() => void handleCreateNote()}
           onNewLink={handleCreateLink}
           onNewBoard={() => void handleCreateChildBoard()}
           onAddImage={() => void handleCreateImage()}
           trashBatchCount={trashSummary?.batchCount ?? 0}
           onOpenTrash={handleOpenTrash}
+          onBold={handleBold}
+          boldActive={boldActive}
+          onBackToCreate={handleBackToCreate}
         />
       }
       rightRail={
@@ -1936,6 +1974,8 @@ function App() {
                 onResizeEmbed: handleResizeNote,
                 highlightedPortalId,
                 highlightQuery,
+                onNoteCommands: handleNoteCommands,
+                onNoteBoldStateChange: handleNoteBoldStateChange,
               });
             }}
           />

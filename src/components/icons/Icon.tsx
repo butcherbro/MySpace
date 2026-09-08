@@ -11,7 +11,8 @@ export type IconName =
   | "undo"
   | "redo"
   | "bookmark"
-  | "trash";
+  | "trash"
+  | "bold";
 
 interface IconProps {
   name: IconName;
@@ -86,6 +87,13 @@ const ICONS: Record<IconName, () => React.JSX.Element> = {
       <path d="M6.75 7h10.5l-.75 11.5H7.5z" />
       <path d="M10 10v5.5" />
       <path d="M14 10v5.5" />
+    </>
+  ),
+  bold: () => (
+    <>
+      <path d="M8 5h4a2.5 2.5 0 0 1 0 5H8z" />
+      <path d="M8 10h5a2.5 2.5 0 0 1 0 5H8z" />
+      <path d="M8 5v10" />
     </>
   ),
 };
