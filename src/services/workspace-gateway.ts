@@ -302,6 +302,13 @@ export interface TrashSummaryDto {
   cardCount: number;
 }
 
+/** Result of permanently emptying the Trash. */
+export interface EmptyTrashResult {
+  boardCount: number;
+  cardCount: number;
+  orphanAssetCount: number;
+}
+
 /** A single workspace search result. */
 export interface SearchResultDto {
   entityId: string;
@@ -369,6 +376,7 @@ export interface WorkspaceGateway {
   updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void>;
   trashSelection(input: TrashSelectionInput): Promise<string>;
   listTrash(): Promise<TrashSummaryDto>;
+  emptyTrash(confirmation: string): Promise<EmptyTrashResult>;
   searchWorkspace(query: string): Promise<SearchResultDto[]>;
   listQuickBoards(): Promise<QuickBoardDto[]>;
   addQuickBoard(input: AddQuickBoardInput): Promise<void>;

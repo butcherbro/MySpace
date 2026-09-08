@@ -10,6 +10,7 @@ import type {
   CreateImageCardInput,
   CreateNoteInput,
   EmbedCardDto,
+  EmptyTrashResult,
   EnrichEmbedMetadataInput,
   ImportAssetInput,
   MoveBoardInput,
@@ -492,6 +493,20 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       boardCount: batches.reduce((sum, batch) => sum + batch.boardCount, 0),
       cardCount: batches.reduce((sum, batch) => sum + batch.cardCount, 0),
     });
+  }
+
+  emptyTrash(confirmation: string): Promise<EmptyTrashResult> {
+    if (confirmation !== "EMPTY") {
+      return Promise.reject(new Error("type EMPTY to confirm"));
+    }
+    let boardCount = 0;
+    let cardCount = 0;
+    for (const batch of this.trashBatches.values()) {
+      boardCount += batch.boards.length;
+      cardCount += batch.cards.length;
+    }
+    this.trashBatches.clear();
+    return Promise.resolve({ boardCount, cardCount, orphanAssetCount: 0 });
   }
 
   searchWorkspace(query: string): Promise<SearchResultDto[]> {

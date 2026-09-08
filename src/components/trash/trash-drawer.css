@@ -50,6 +50,51 @@
   padding: 12px 14px;
 }
 
+.trash-drawer__footer {
+  border-top: 1px solid var(--edge-subtle);
+  padding: 10px 14px;
+}
+
+.trash-drawer__empty {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--danger);
+  font: 500 12px/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.trash-drawer__empty:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.trash-drawer__empty:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.empty-trash-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.2);
+  z-index: 90;
+}
+
+.empty-trash-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 91;
+  pointer-events: none;
+}
+
+.empty-trash-overlay > * {
+  pointer-events: auto;
+}
+
 .trash-drawer__status,
 .trash-drawer__empty {
   color: var(--ink-secondary);

@@ -22,6 +22,7 @@ import { TrashSelectionCommand } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
+import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
 import { SearchBar } from "./search/SearchBar";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
@@ -145,6 +146,9 @@ function App() {
   const [trashError, setTrashError] = useState<string | null>(null);
   const [trashOpen, setTrashOpen] = useState(false);
   const [restoringBatchId, setRestoringBatchId] = useState<string | null>(null);
+  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
+  const [emptyTrashBusy, setEmptyTrashBusy] = useState(false);
+  const [emptyTrashError, setEmptyTrashError] = useState<string | null>(null);
 
   // Search: query/debounce/results owned here; rendering/keyboard in
   // `SearchBar` (always-visible input in the top bar). Global scope is the V1
@@ -1587,6 +1591,25 @@ function App() {
     [gateway, loadTrash, reloadCurrentBoard, loadQuickBoards],
   );
 
+  const handleEmptyTrash = useCallback(
+    async (confirmation: string) => {
+      setEmptyTrashBusy(true);
+      setEmptyTrashError(null);
+      try {
+        await gateway.emptyTrash(confirmation);
+        setEmptyTrashBusy(false);
+        setEmptyTrashOpen(false);
+        await loadTrash();
+        await reloadCurrentBoard();
+        loadQuickBoards();
+      } catch (e) {
+        setEmptyTrashBusy(false);
+        setEmptyTrashError(errorMessage(e));
+      }
+    },
+    [gateway, loadTrash, reloadCurrentBoard, loadQuickBoards],
+  );
+
   // Open the result's board. A Board result navigates to itself; a Note/Link
   // result navigates to its containing board and focuses the card (center +
   // select) once it is rendered.
@@ -2109,7 +2132,27 @@ function App() {
             restoringBatchId={restoringBatchId}
             onClose={handleCloseTrash}
             onRestore={(batchId) => void handleRestoreTrashBatch(batchId)}
+            onEmptyTrash={() => {
+              setEmptyTrashError(null);
+              setEmptyTrashOpen(true);
+            }}
           />
+        )}
+        {emptyTrashOpen && (
+          <>
+            <div className="empty-trash-backdrop" onClick={() => setEmptyTrashOpen(false)} />
+            <div className="empty-trash-overlay">
+              <EmptyTrashDialog
+                batchCount={trashSummary?.batchCount ?? 0}
+                boardCount={trashSummary?.boardCount ?? 0}
+                cardCount={trashSummary?.cardCount ?? 0}
+                busy={emptyTrashBusy}
+                error={emptyTrashError}
+                onConfirm={(typed) => void handleEmptyTrash(typed)}
+                onCancel={() => setEmptyTrashOpen(false)}
+              />
+            </div>
+          </>
         )}
         {crossBoardDrag?.phase === "previewing" && crossBoardDrag.ghostCard && (
           <div

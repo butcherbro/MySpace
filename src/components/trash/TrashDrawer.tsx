@@ -8,6 +8,8 @@ interface TrashDrawerProps {
   restoringBatchId: string | null;
   onClose: () => void;
   onRestore: (batchId: string) => void;
+  /** Open the empty-Trash confirmation dialog. */
+  onEmptyTrash?: () => void;
 }
 
 function formatDeletedAt(millis: number): string {
@@ -36,9 +38,11 @@ export function TrashDrawer({
   restoringBatchId,
   onClose,
   onRestore,
+  onEmptyTrash = () => {},
 }: TrashDrawerProps) {
   const empty = !loading && !error && summary && summary.batches.length === 0;
   const populated = !loading && !error && summary && summary.batches.length > 0;
+  const hasBatches = summary ? summary.batchCount > 0 : false;
 
   return (
     <div className="trash-drawer" role="dialog" aria-label="Trash" data-testid="trash-drawer">
@@ -105,6 +109,16 @@ export function TrashDrawer({
           </ul>
         )}
       </div>
+      <footer className="trash-drawer__footer">
+        <button
+          type="button"
+          className="trash-drawer__empty"
+          onClick={onEmptyTrash}
+          disabled={!hasBatches}
+        >
+          Empty Trash…
+        </button>
+      </footer>
     </div>
   );
 }

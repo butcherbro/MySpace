@@ -11,6 +11,7 @@ import type {
   CreateImageCardInput,
   CreateNoteInput,
   EmbedCardDto,
+  EmptyTrashResult,
   EnrichEmbedMetadataInput,
   ImportAssetInput,
   MoveBoardInput,
@@ -141,6 +142,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   listTrash(): Promise<TrashSummaryDto> {
     return invoke<TrashSummaryDto>("list_trash", {});
+  }
+
+  emptyTrash(confirmation: string): Promise<EmptyTrashResult> {
+    return invoke<EmptyTrashResult>("empty_trash", { confirmation });
   }
 
   searchWorkspace(query: string): Promise<SearchResultDto[]> {
