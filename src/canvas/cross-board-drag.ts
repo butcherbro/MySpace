@@ -36,6 +36,10 @@ export interface CrossBoardDragState {
     revision: number;
     boardId: string;
     frame: { x: number; y: number; width: number; height: number };
+    /** For board portals: the board the portal leads to. */
+    targetBoardId?: string;
+    /** For board portals: that board's current revision (for reparenting). */
+    boardRevision?: number;
   } | null;
 }
 

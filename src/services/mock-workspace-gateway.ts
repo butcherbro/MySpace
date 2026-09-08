@@ -188,11 +188,25 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (!board) {
       return Promise.reject(new Error(`board not found: ${input.boardId}`));
     }
+    if (board.revision !== input.expectedBoardRevision) {
+      return Promise.reject(
+        new Error(
+          `stale revision for board ${input.boardId}: expected ${input.expectedBoardRevision}, actual ${board.revision}`,
+        ),
+      );
+    }
     const portal = this.snapshot.cards.find(
       (c) => c.kind === "board_portal" && c.target.id === input.boardId,
     );
     if (!portal || portal.kind !== "board_portal") {
       return Promise.reject(new Error(`portal not found for board: ${input.boardId}`));
+    }
+    if (portal.revision !== input.expectedPortalRevision) {
+      return Promise.reject(
+        new Error(
+          `stale revision for portal ${portal.id}: expected ${input.expectedPortalRevision}, actual ${portal.revision}`,
+        ),
+      );
     }
     board.parentBoardId = input.targetParentBoardId;
     board.revision += 1;

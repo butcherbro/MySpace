@@ -1227,6 +1227,8 @@ function App() {
             revision: card.revision,
             boardId: card.boardId,
             frame: { ...card.frame },
+            targetBoardId: card.kind === "board_portal" ? card.target.id : undefined,
+            boardRevision: card.kind === "board_portal" ? card.target.boardRevision : undefined,
           },
         );
         crossBoardDragRef.current = drag;
@@ -1297,8 +1299,12 @@ function App() {
         hoverTimerRef.current = null;
       }
       const target = drag.hoverBoardId;
-      const overTargetCanvas = drag.pointerBoardId === target;
-      if (drag.phase === "previewing" && target && overTargetCanvas) {
+      // A board portal dropped onto a tab reparents the board even if the
+      // pointer is still over the tab (not yet on the canvas). The tab itself
+      // is the target.
+      const isBoardPortal = drag.ghostCard?.kind === "board_portal";
+      const overTab = drag.pointerBoardId === target || isBoardPortal;
+      if (drag.phase === "previewing" && target && overTab) {
         // Consume the session immediately so a duplicated drag-end call (React
         // Flow onNodeDragStop + our window pointerup) cannot commit twice.
         crossBoardDragRef.current = null;
@@ -1314,6 +1320,37 @@ function App() {
             width: gc.width,
             height: gc.height,
           };
+
+          // A board portal reparents its underlying board (moveBoard), not the
+          // leaf-card move path. Reuse the same MoveBoardCommand as a portal
+          // dropped onto another portal on the canvas.
+          if (gc.kind === "board_portal" && gc.targetBoardId && gc.boardRevision !== undefined) {
+            void dispatcher
+              .execute(
+                new MoveBoardCommand(
+                  idGenerator.nextId(),
+                  gc.targetBoardId,
+                  gc.boardId,
+                  gc.frame,
+                  target,
+                  frame,
+                  gc.boardRevision,
+                  gc.revision,
+                ),
+              )
+              .then(() => {
+                setCrossBoardDrag(commitCrossBoardDrag(drag));
+                crossBoardDragRef.current = null;
+                void navigateTo(target, { tabMode: "sync" });
+              })
+              .catch((err) => {
+                dispatch({ type: "failed", message: errorMessage(err) });
+                setCrossBoardDrag(cancelCrossBoardDrag(drag));
+                crossBoardDragRef.current = null;
+              });
+            return true; // consumed
+          }
+
           // The card's revision may have moved since drag start (e.g. a draft
           // save on blur); read the current revision before committing.
           void gateway
