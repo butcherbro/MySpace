@@ -5,13 +5,13 @@ import "./tool-rail.css";
 
 export type ToolRailMode = "create" | "note";
 
+export type CreationTool = "note" | "link" | "board";
+
 interface ToolRailProps {
   mode: ToolRailMode;
-  onNewNote: () => void;
-  onNewLink: () => void;
   onAddImage: () => void;
-  /** Begin dragging a new board out of the rail (client coords). */
-  onNewBoardDragStart?: (clientX: number, clientY: number) => void;
+  /** Begin dragging a creation tool out of the rail (client coords). */
+  onCreationDragStart?: (kind: CreationTool, clientX: number, clientY: number) => void;
   trashBatchCount: number;
   onOpenTrash: () => void;
   /** Toggle bold on the active note's editor. */
@@ -37,8 +37,6 @@ interface ToolRailProps {
  */
 export function ToolRail({
   mode,
-  onNewNote,
-  onNewLink,
   onAddImage,
   trashBatchCount,
   onOpenTrash,
@@ -49,7 +47,7 @@ export function ToolRail({
   onTextColor,
   noteColor,
   onNoteColor,
-  onNewBoardDragStart,
+  onCreationDragStart,
 }: ToolRailProps) {
   return (
     <div className="tool-rail" role="toolbar" aria-label="Tools">
@@ -110,8 +108,26 @@ export function ToolRail({
         </div>
       ) : (
         <div className="tool-rail__group">
-          <ToolButton icon="note" label="New note" visibleLabel="Note" onClick={onNewNote} />
-          <ToolButton icon="link" label="New link" visibleLabel="Link" onClick={onNewLink} />
+          <ToolButton
+            icon="note"
+            label="New note"
+            visibleLabel="Note"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              onCreationDragStart?.("note", event.clientX, event.clientY);
+            }}
+          />
+          <ToolButton
+            icon="link"
+            label="New link"
+            visibleLabel="Link"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              onCreationDragStart?.("link", event.clientX, event.clientY);
+            }}
+          />
           <ToolButton
             icon="board"
             label="New board"
@@ -119,7 +135,7 @@ export function ToolRail({
             onMouseDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();
-              onNewBoardDragStart?.(event.clientX, event.clientY);
+              onCreationDragStart?.("board", event.clientX, event.clientY);
             }}
           />
           <ToolButton icon="image" label="Add image" visibleLabel="Image" onClick={onAddImage} />

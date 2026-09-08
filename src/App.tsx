@@ -63,6 +63,8 @@ import {
   reducer,
 } from "./state/current-board-store";
 
+type ToolKind = "note" | "link" | "board";
+
 function App() {
   const gateway: WorkspaceGateway = useMemo(() => createGateway(), []);
   const idGenerator: IdGenerator = useMemo(() => new UuidV7Generator(), []);
@@ -423,9 +425,12 @@ function App() {
     [board, dispatcher, idGenerator, notes.length],
   );
 
-  const handleCreateLink = useCallback(() => {
-    void handleCreateNote(undefined, { startEditing: true });
-  }, [handleCreateNote]);
+  const handleCreateLink = useCallback(
+    (position?: { x: number; y: number }) => {
+      void handleCreateNote(position, { startEditing: true });
+    },
+    [handleCreateNote],
+  );
 
   // Distribute one Unsorted card onto the canvas at a free cascading slot.
   const handlePlaceUnsortedCard = useCallback(
@@ -584,54 +589,62 @@ function App() {
     [board, dispatcher, idGenerator, state.cards.length],
   );
 
-  // Drag-to-create a new Board out of the rail: on release over the canvas, the
-  // board is created at the drop point; a plain click still creates in view.
-  const boardCreateGhostRef = useRef<{ x: number; y: number } | null>(null);
-  const [boardCreateGhost, setBoardCreateGhost] = useState<{ x: number; y: number } | null>(null);
-  const boardDragMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
-  const boardDragUpRef = useRef<((e: PointerEvent) => void) | null>(null);
+  // Drag-to-create a tool out of the rail: on release over the canvas, the item
+  // is created at the drop point; a plain click still creates in the default
+  // location. Handles Note, Link, and Board (Image uses a file picker).
+  const createGhostRef = useRef<{ x: number; y: number; kind: ToolKind } | null>(null);
+  const [createGhost, setCreateGhost] = useState<{ x: number; y: number; kind: ToolKind } | null>(null);
+  const createDragMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
+  const createDragUpRef = useRef<((e: PointerEvent) => void) | null>(null);
 
-  const cleanupBoardCreationDrag = useCallback(() => {
-    if (boardDragMoveRef.current) {
-      window.removeEventListener("pointermove", boardDragMoveRef.current);
-      boardDragMoveRef.current = null;
+  const cleanupCreationDrag = useCallback(() => {
+    if (createDragMoveRef.current) {
+      window.removeEventListener("pointermove", createDragMoveRef.current);
+      createDragMoveRef.current = null;
     }
-    if (boardDragUpRef.current) {
-      window.removeEventListener("pointerup", boardDragUpRef.current);
-      boardDragUpRef.current = null;
+    if (createDragUpRef.current) {
+      window.removeEventListener("pointerup", createDragUpRef.current);
+      createDragUpRef.current = null;
     }
-    boardCreateGhostRef.current = null;
-    setBoardCreateGhost(null);
+    createGhostRef.current = null;
+    setCreateGhost(null);
   }, []);
 
-  const handleBoardCreationDragStart = useCallback(
-    (clientX: number, clientY: number) => {
-      boardCreateGhostRef.current = { x: clientX, y: clientY };
-      setBoardCreateGhost({ x: clientX, y: clientY });
+  const handleCreationDragStart = useCallback(
+    (kind: ToolKind, clientX: number, clientY: number) => {
+      createGhostRef.current = { x: clientX, y: clientY, kind };
+      setCreateGhost({ x: clientX, y: clientY, kind });
       let moved = false;
       const move = (e: PointerEvent) => {
         moved = true;
-        boardCreateGhostRef.current = { x: e.clientX, y: e.clientY };
-        setBoardCreateGhost({ x: e.clientX, y: e.clientY });
+        createGhostRef.current = { x: e.clientX, y: e.clientY, kind };
+        setCreateGhost({ x: e.clientX, y: e.clientY, kind });
       };
       const up = (e: PointerEvent) => {
-        cleanupBoardCreationDrag();
+        cleanupCreationDrag();
         const el = document.elementFromPoint(e.clientX, e.clientY);
         const overCanvas = Boolean(el?.closest?.('[data-testid="canvas"]'));
-        if (!overCanvas) {
-          if (!moved) void handleCreateChildBoard();
-          return;
-        }
         const flow = screenToFlowRef.current;
         const point = flow ? flow(e.clientX, e.clientY) : { x: 200, y: 120 };
-        void handleCreateChildBoard({ x: point.x - 60, y: point.y - 56 });
+        if (!overCanvas) {
+          // Plain click on the rail falls back to the default placement.
+          if (!moved) {
+            if (kind === "note") void handleCreateNote();
+            else if (kind === "link") void handleCreateLink();
+            else if (kind === "board") void handleCreateChildBoard();
+          }
+          return;
+        }
+        if (kind === "note") void handleCreateNote({ x: point.x - 120, y: point.y - 60 });
+        else if (kind === "link") void handleCreateLink({ x: point.x - 120, y: point.y - 60 });
+        else if (kind === "board") void handleCreateChildBoard({ x: point.x - 60, y: point.y - 56 });
       };
-      boardDragMoveRef.current = move;
-      boardDragUpRef.current = up;
+      createDragMoveRef.current = move;
+      createDragUpRef.current = up;
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [cleanupBoardCreationDrag, handleCreateChildBoard],
+    [cleanupCreationDrag, handleCreateNote, handleCreateLink, handleCreateChildBoard],
   );
 
   // Imports an image and creates a card at the given board coordinates. Shared
@@ -2048,9 +2061,7 @@ function App() {
       toolRail={
         <ToolRail
           mode={noteToolMode ? "note" : "create"}
-          onNewNote={() => void handleCreateNote()}
-          onNewLink={handleCreateLink}
-          onNewBoardDragStart={handleBoardCreationDragStart}
+          onCreationDragStart={handleCreationDragStart}
           onAddImage={() => void handleCreateImage()}
           trashBatchCount={trashSummary?.batchCount ?? 0}
           onOpenTrash={handleOpenTrash}
@@ -2268,18 +2279,18 @@ function App() {
               </div>
             );
           })()}
-        {boardCreateGhost && (
+        {createGhost && (
           <div
             className="cross-board-ghost"
-            data-testid="board-create-ghost"
+            data-testid="create-ghost"
             style={{
-              left: boardCreateGhost.x,
-              top: boardCreateGhost.y,
-              width: 120,
-              height: 112,
+              left: createGhost.x,
+              top: createGhost.y,
+              width: createGhost.kind === "board" ? 120 : 240,
+              height: createGhost.kind === "board" ? 112 : 120,
             }}
           >
-            New Board
+            {createGhost.kind === "board" ? "New Board" : createGhost.kind === "link" ? "New Link" : "New Note"}
           </div>
         )}
         <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
