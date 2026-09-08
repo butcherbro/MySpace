@@ -4,12 +4,20 @@ pub mod domain;
 pub mod repositories;
 pub mod services;
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use rusqlite::Connection;
 use tauri::Manager;
 
 type DbHandle = Mutex<Connection>;
+
+/// Application data paths, managed so commands can reach the DB/assets/backup
+/// locations for destructive operations (e.g. the pre-empty backup gate).
+#[derive(Clone)]
+pub struct AppPaths {
+    pub data_dir: PathBuf,
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -86,6 +94,9 @@ pub fn run() {
             let _ = domain::asset_service::collect_orphaned_assets(&mut conn, &assets_dir);
 
             app.manage(DbHandle::new(conn));
+            app.manage(AppPaths {
+                data_dir: data_dir.clone(),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

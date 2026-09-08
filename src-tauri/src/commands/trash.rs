@@ -8,6 +8,7 @@ use tauri::State;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{EmptyTrashResult, TrashSelectionInput, TrashSummaryDto};
 use crate::domain::trash_service;
+use crate::AppPaths;
 
 /// The application-wide SQLite connection, guarded so commands can share it.
 pub type DbState<'a> = State<'a, Mutex<Connection>>;
@@ -61,13 +62,25 @@ pub fn list_trash(db: DbState<'_>) -> Result<TrashSummaryDto, WorkspaceError> {
     trash_service::list_trash(&conn)
 }
 
-/// Permanently empties the Trash. Requires the exact token `EMPTY`; hard-deletes
-/// trashed relational rows and returns the affected counts (asset GC is separate).
+/// Permanently empties the Trash. Requires the exact token `EMPTY`. A fresh
+/// validated backup is created first; if it cannot be created or validated the
+/// operation is refused before anything is deleted. Hard-deletes trashed
+/// relational rows and returns the affected counts (asset GC follows on startup).
 #[tauri::command]
 pub fn empty_trash(
     db: DbState<'_>,
+    paths: State<'_, AppPaths>,
     confirmation: String,
 ) -> Result<EmptyTrashResult, WorkspaceError> {
+    let db_path = paths.data_dir.join("workspace.sqlite3");
+    let assets_dir = paths.data_dir.join("assets");
+    let backup_dir = paths.data_dir.join("backups");
+
+    // Mandatory pre-empty backup gate: refuse to mutate unless a fresh validated
+    // snapshot is on disk.
+    crate::db::backup::snapshot_before_destructive_operation(&db_path, &assets_dir, &backup_dir)
+        .map_err(WorkspaceError::Database)?;
+
     let mut conn = db
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;

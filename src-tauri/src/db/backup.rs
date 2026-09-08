@@ -205,6 +205,49 @@ fn within_rate_limit(backup_root: &Path) -> bool {
     now_secs().saturating_sub(ts) < RATE_LIMIT_SECONDS
 }
 
+/// Creates one validated, atomic snapshot into `backup_root` and returns the
+/// final snapshot directory path on success. Staging, validation, asset copy, and
+/// manifest write all fail the snapshot (no partial success).
+fn create_snapshot(
+    db_path: &Path,
+    assets_dir: &Path,
+    backup_root: &Path,
+) -> Result<PathBuf, String> {
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let staging = backup_root.join(format!(".staging-{}", uuid::Uuid::now_v7()));
+    fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+
+    let result = (|| -> Result<(), String> {
+        let dest_db = staging.join("workspace.sqlite3");
+        backup_database(&conn, &dest_db).map_err(|e| e.to_string())?;
+
+        let snap = Connection::open(&dest_db).map_err(|e| e.to_string())?;
+        validate_snapshot(&snap)?;
+        let asset_count = copy_referenced_assets(&snap, assets_dir, &staging)?;
+
+        let manifest = serde_json::json!({
+            "timestamp_secs": now_secs(),
+            "schema_version": schema_version(&conn),
+            "asset_count": asset_count,
+            "validation": "ok",
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
+        fs::write(staging.join("manifest.json"), manifest_bytes).map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+
+    let final_dir = backup_root.join(snapshot_dir_name());
+    fs::rename(&staging, &final_dir).map_err(|e| e.to_string())?;
+    prune_old_backups(backup_root);
+    Ok(final_dir)
+}
+
 /// Performs a full, validated, atomic startup snapshot. Best-effort: never panics
 /// and never blocks startup. A snapshot is published only after staging, copying
 /// all referenced assets, validating, and writing a success manifest.
@@ -215,52 +258,18 @@ pub fn snapshot_on_startup(db_path: &Path, assets_dir: &Path, backup_root: &Path
     if within_rate_limit(backup_root) {
         return;
     }
+    let _ = create_snapshot(db_path, assets_dir, backup_root);
+}
 
-    let Ok(conn) = Connection::open(db_path) else {
-        return;
-    };
-
-    // Stage into a unique temp dir inside the backup root so a crash mid-snapshot
-    // never leaves a half-written dir that could be mistaken for a valid one.
-    let staging = backup_root.join(format!(".staging-{}", uuid::Uuid::now_v7()));
-    if fs::create_dir_all(&staging).is_err() {
-        return;
-    }
-
-    let result = (|| -> Result<(), String> {
-        let dest_db = staging.join("workspace.sqlite3");
-        backup_database(&conn, &dest_db).map_err(|e| e.to_string())?;
-
-        // Re-open the staged copy to validate and read its asset list.
-        let snap = Connection::open(&dest_db).map_err(|e| e.to_string())?;
-        validate_snapshot(&snap)?;
-        let asset_count = copy_referenced_assets(&snap, assets_dir, &staging)?;
-
-        // Record a success manifest.
-        let manifest = serde_json::json!({
-            "timestamp_secs": now_secs(),
-            "schema_version": schema_version(&conn),
-            "asset_count": asset_count,
-            "validation": "ok",
-        });
-        let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
-        fs::write(staging.join("manifest.json"), manifest_bytes).map_err(|e| e.to_string())?;
-
-        Ok(())
-    })();
-
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&staging);
-        return;
-    }
-
-    // Atomic publish: rename the fully staged dir into its final timestamp name.
-    let final_dir = backup_root.join(snapshot_dir_name());
-    if fs::rename(&staging, &final_dir).is_ok() {
-        prune_old_backups(backup_root);
-    } else {
-        let _ = fs::remove_dir_all(&staging);
-    }
+/// Creates a synchronous, validated snapshot for a destructive operation,
+/// bypassing the startup rate limit. Returns the snapshot directory, or an error
+/// which the caller must treat as a hard stop before mutating data.
+pub fn snapshot_before_destructive_operation(
+    db_path: &Path,
+    assets_dir: &Path,
+    backup_root: &Path,
+) -> Result<PathBuf, String> {
+    create_snapshot(db_path, assets_dir, backup_root)
 }
 
 /// Restores the live database from a validated snapshot, first moving the current
