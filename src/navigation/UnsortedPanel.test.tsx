@@ -20,14 +20,14 @@ function note(id: string, text = "hello"): CardDto {
 
 describe("UnsortedPanel", () => {
   it("renders nothing when there are no unsorted cards", () => {
-    render(<UnsortedPanel cards={[]} onPlace={vi.fn()} />);
+    render(<UnsortedPanel cards={[]} onPlace={vi.fn()} onClose={vi.fn()} />);
     expect(screen.queryByTestId("unsorted-panel")).not.toBeInTheDocument();
   });
 
   it("renders a row per unsorted card with a Place action", async () => {
     const user = userEvent.setup();
     const onPlace = vi.fn();
-    render(<UnsortedPanel cards={[note("a"), note("b", "second")]} onPlace={onPlace} />);
+    render(<UnsortedPanel cards={[note("a"), note("b", "second")]} onPlace={onPlace} onClose={vi.fn()} />);
 
     expect(screen.getAllByTestId("unsorted-card")).toHaveLength(2);
     expect(screen.getByText("hello")).toBeInTheDocument();

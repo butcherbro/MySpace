@@ -7,26 +7,16 @@ interface AppShellProps {
   toolRail: ReactNode;
   rightRail?: ReactNode;
   rightRailCollapsed?: boolean;
-  /** Optional separate Unsorted side panel (right of the Quick Boards rail). */
-  unsortedRail?: ReactNode;
   children: ReactNode;
 }
 
-/** Fixed application chrome around the spatial workspace. */
-export function AppShell({
-  topBar,
-  toolRail,
-  rightRail,
-  rightRailCollapsed = false,
-  unsortedRail,
-  children,
-}: AppShellProps) {
-  const hasUnsorted = Boolean(unsortedRail);
+/** Fixed application chrome around the spatial workspace. The Unsorted panel is
+ *  an overlay drawer rendered by the caller over the canvas, not a grid column. */
+export function AppShell({ topBar, toolRail, rightRail, rightRailCollapsed = false, children }: AppShellProps) {
   const className = [
     "app-shell",
     rightRail && "app-shell--with-right-rail",
     rightRail && rightRailCollapsed && "app-shell--right-rail-collapsed",
-    hasUnsorted && "app-shell--with-unsorted",
   ]
     .filter(Boolean)
     .join(" ");
@@ -55,14 +45,9 @@ export function AppShell({
       <main className="app-shell__canvas" data-testid="canvas-region">
         {children}
       </main>
-      {hasUnsorted && (
-        <aside className="app-shell__unsorted-rail" data-testid="unsorted-rail-region">
-          {unsortedRail}
-        </aside>
-      )}
       {rightRail && (
         <aside
-          className={`app-shell__right-rail${hasUnsorted ? "" : " app-shell__right-rail--adjacent"}`}
+          className="app-shell__right-rail"
           data-testid="right-rail-region"
           data-collapsed={rightRailCollapsed ? "true" : "false"}
         >

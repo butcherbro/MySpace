@@ -1,71 +1,185 @@
+/* Milanote-style Unsorted drawer: a right-side overlay with a light gray
+   surface and white object cards. It is NOT a grid column. */
 .unsorted-panel {
-  border-top: 1px solid var(--edge-subtle);
-  padding: var(--space-2) var(--space-2) var(--space-3);
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  overflow: hidden;
+  background: var(--chrome-surface);
+  border-left: 1px solid var(--edge-subtle);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.08);
+  z-index: 50;
 }
 
-.unsorted-panel__heading {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ink-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0 var(--space-1);
-}
-
-.unsorted-panel__list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.unsorted-panel__row {
+.unsorted-panel__header {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--paper-raised) 60%, transparent);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--edge-subtle);
 }
 
-.unsorted-panel__thumb {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
+.unsorted-panel__title {
+  font: 600 14px/1.2 var(--font-ui);
+  color: var(--ink);
+}
+
+.unsorted-panel__close {
+  border: none;
+  background: transparent;
   color: var(--ink-secondary);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  font: 500 12px/1.2 var(--font-ui);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-control);
 }
 
-.unsorted-panel__mini {
-  width: 28px;
-  height: 28px;
-  object-fit: cover;
-  border-radius: var(--radius-control);
-  flex-shrink: 0;
+.unsorted-panel__close:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--edge-focus) 8%, transparent);
+}
+
+.unsorted-panel__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.unsorted-panel__card {
+  position: relative;
+  background: var(--paper-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-portal);
+  box-shadow: var(--shadow-paper);
+  padding: 10px;
+  cursor: grab;
+}
+
+.unsorted-panel__card:active {
+  cursor: grabbing;
 }
 
 .unsorted-panel__place {
+  display: block;
+  margin: 10px 0 0 auto;
   border: 1px solid var(--edge-subtle);
   border-radius: var(--radius-control);
   background: var(--paper-raised);
   color: var(--ink-secondary);
-  font-size: 11px;
-  padding: 2px 8px;
+  font: 500 11px/1.2 var(--font-ui);
+  padding: 4px 10px;
   cursor: pointer;
 }
 
 .unsorted-panel__place:hover {
   color: var(--ink);
   border-color: var(--edge-strong);
+}
+
+/* Board preview: large rounded tile + title + counts. */
+.unsorted-panel__board {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.unsorted-panel__board-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.unsorted-panel__board-title {
+  font: 600 14px/1.25 var(--font-ui);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unsorted-panel__board-count {
+  font: 400 12px/1.3 var(--font-ui);
+  color: var(--ink-tertiary);
+}
+
+/* Note preview: readable text. */
+.unsorted-panel__note {
+  font-family: var(--font-content);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Image preview: media on top, caption below. */
+.unsorted-panel__image {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.unsorted-panel__image-img {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  object-fit: cover;
+  border-radius: var(--radius-image);
+}
+
+.unsorted-panel__caption {
+  font: 400 13px/1.4 var(--font-content);
+  color: var(--ink-secondary);
+}
+
+/* Link preview: media on top, then source/title/description. */
+.unsorted-panel__link {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unsorted-panel__link-preview {
+  display: block;
+  width: 100%;
+  max-height: 140px;
+  object-fit: cover;
+  border-radius: var(--radius-image);
+}
+
+.unsorted-panel__link-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.unsorted-panel__link-source {
+  font: 400 11px/1.3 var(--font-ui);
+  color: var(--ink-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unsorted-panel__link-title {
+  font: 500 13px/1.35 var(--font-content);
+  color: var(--link);
+}
+
+.unsorted-panel__link-desc {
+  font: 400 13px/1.4 var(--font-content);
+  color: var(--ink-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }

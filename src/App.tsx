@@ -139,6 +139,17 @@ function App() {
   const [quickBoards, setQuickBoards] = useState<QuickBoardDto[]>([]);
   const [quickBoardsCollapsed, setQuickBoardsCollapsed] = useState(false);
 
+  // Unsorted drawer: shows when unsorted cards exist; Close hides it until the
+  // next blind drop.
+  const [unsortedOpen, setUnsortedOpen] = useState(false);
+  const prevUnsortedCountRef = useRef(state.unsortedCards.length);
+  useEffect(() => {
+    if (state.unsortedCards.length > prevUnsortedCountRef.current) {
+      setUnsortedOpen(true);
+    }
+    prevUnsortedCountRef.current = state.unsortedCards.length;
+  }, [state.unsortedCards.length]);
+
   // Recoverable Trash surface: the summary drives both the rail badge and the
   // inspection/restore drawer.
   const [trashSummary, setTrashSummary] = useState<TrashSummaryDto | null>(null);
@@ -1993,15 +2004,6 @@ function App() {
         />
       }
       rightRailCollapsed={quickBoardsCollapsed}
-      unsortedRail={
-        state.unsortedCards.length > 0 ? (
-          <UnsortedPanel
-            cards={state.unsortedCards}
-            onPlace={handlePlaceUnsortedCard}
-            onDragStartCard={handleUnsortedPointerDown}
-          />
-        ) : undefined
-      }
     >
       <div className="workspace">
         {tabs && (
@@ -2011,6 +2013,14 @@ function App() {
             activeBoardId={tabs.activeBoardId}
             onActivate={handleTabActivate}
             onClose={handleTabClose}
+          />
+        )}
+        {unsortedOpen && state.unsortedCards.length > 0 && (
+          <UnsortedPanel
+            cards={state.unsortedCards}
+            onPlace={handlePlaceUnsortedCard}
+            onDragStartCard={handleUnsortedPointerDown}
+            onClose={() => setUnsortedOpen(false)}
           />
         )}
         {contextMenu && (
