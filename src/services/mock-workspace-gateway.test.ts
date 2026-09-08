@@ -60,6 +60,37 @@ describe("MockWorkspaceGateway", () => {
     expect(summary.batchCount).toBe(0);
   });
 
+  it("reparents a board and shows it in the target board snapshot", async () => {
+    const gateway = new MockWorkspaceGateway();
+    await gateway.createChildBoard({
+      parentBoardId: "home",
+      boardId: "a",
+      portalCardId: "p-a",
+      frame: { x: 0, y: 0, width: 120, height: 112 },
+      title: "A",
+    });
+    await gateway.createChildBoard({
+      parentBoardId: "home",
+      boardId: "b",
+      portalCardId: "p-b",
+      frame: { x: 200, y: 0, width: 120, height: 112 },
+      title: "B",
+    });
+
+    await gateway.moveBoard({
+      boardId: "a",
+      expectedBoardRevision: 1,
+      expectedPortalRevision: 1,
+      targetParentBoardId: "b",
+      frame: { x: 40, y: 40, width: 120, height: 112 },
+    });
+
+    // The portal for A now lives on B's canvas.
+    const snapshot = await gateway.loadBoardSnapshot("b");
+    expect(snapshot.cards.map((c) => c.kind)).toContain("board_portal");
+    expect(snapshot.cards.find((c) => c.id === "p-a")).toBeDefined();
+  });
+
   it("searches boards, notes, and links by their indexed fields", async () => {
     const gateway = new MockWorkspaceGateway();
     await gateway.createChildBoard({

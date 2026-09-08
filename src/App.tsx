@@ -48,6 +48,7 @@ import { subscribeToImageDrops } from "./services/drag-drop";
 import { copyText } from "./services/clipboard";
 import type {
   BoardPortalDto,
+  CardDto,
   EmbedCardDto,
   ImageCardDto,
   NoteCardDto,
@@ -170,6 +171,13 @@ function App() {
   useEffect(() => {
     cardsRef.current = state.cards;
   }, [state.cards]);
+
+  // Always reflects the latest selection, so a drag start can snapshot all
+  // currently-selected card ids for a group move.
+  const selectionRef = useRef(state.selection);
+  useEffect(() => {
+    selectionRef.current = state.selection;
+  }, [state.selection]);
 
   const metadataInFlightRef = useRef(new Set<string>());
   const metadataAttemptedRef = useRef(new Set<string>());
@@ -879,6 +887,62 @@ function App() {
     [gateway, dispatcher, idGenerator],
   );
 
+  // Group drop onto a board (portal or breadcrumb): leaf cards move as one batch
+  // into the target's Unsorted panel; board portals reparent one by one.
+  const handleCardsDroppedOnBoard = useCallback(
+    (ids: string[], targetBoardId: string) => {
+      const cards = ids
+        .map((id) => cardsRef.current.find((c) => c.id === id))
+        .filter((c): c is CardDto => Boolean(c));
+
+      const leafCards = cards.filter((c) => c.kind !== "board_portal");
+      const portals = cards.filter(
+        (c): c is BoardPortalDto => c.kind === "board_portal",
+      );
+
+      if (leafCards.length > 0) {
+        void gateway
+          .moveCardsToBoardUnsorted({
+            targetBoardId,
+            cards: leafCards.map((c) => ({ id: c.id, expectedRevision: c.revision })),
+          })
+          .then(() => {
+            if (targetBoardId === boardRef.current?.id) {
+              for (const c of leafCards) dispatch({ type: "cardMovedToUnsorted", id: c.id });
+            } else {
+              dispatch({ type: "cardsRemoved", ids: leafCards.map((c) => c.id) });
+            }
+          })
+          .catch((err) => {
+            dispatch({ type: "failed", message: errorMessage(err) });
+          });
+      }
+
+      for (const portal of portals) {
+        void dispatcher
+          .execute(
+            new MoveBoardCommand(
+              idGenerator.nextId(),
+              portal.target.id,
+              portal.boardId,
+              portal.frame,
+              targetBoardId,
+              { x: 40, y: 40, width: portal.frame.width, height: portal.frame.height },
+              portal.target.boardRevision,
+              portal.revision,
+            ),
+          )
+          .then(() => {
+            dispatch({ type: "cardsRemoved", ids: [portal.id] });
+          })
+          .catch((err) => {
+            dispatch({ type: "failed", message: errorMessage(err) });
+          });
+      }
+    },
+    [gateway, dispatcher, idGenerator],
+  );
+
   // Quick Boards: remove deletes only the reference, and pin adds a reference
   // without moving/reparenting the Board. (Open lives after `navigateTo`.)
   const handleQuickBoardRemove = useCallback(
@@ -1190,6 +1254,9 @@ function App() {
   // breadcrumb ancestor trail. Only the hovered board id is kept in state; the
   // actual drop is routed through handleCardDroppedOnPortal.
   const lastDraggedCardIdRef = useRef<string | null>(null);
+  // All card ids of an in-flight drag (a group when the dragged card is part of
+  // a multi-selection). Populated on drag start, cleared on drag end.
+  const draggedCardIdsRef = useRef<string[]>([]);
 
   // Ref to the drag-end resolver so window pointer tracking (started after the
   // target board opens) can resolve the drop without ordering issues.
@@ -1216,6 +1283,11 @@ function App() {
   }, [cleanupCrossBoardWindow]);
   const handleCardDragMove = useCallback((e: { cardId: string; clientX: number; clientY: number }) => {
     lastDraggedCardIdRef.current = e.cardId;
+    // A drag of a card inside a multi-selection moves the whole selection.
+    const selection = selectionRef.current;
+    const groupIds =
+      selection.includes(e.cardId) && selection.length > 1 ? selection : [e.cardId];
+    draggedCardIdsRef.current = groupIds;
     // Start a cross-board drag session on the first real move of a card. A
     // lingering finished/cancelled session (effect may resync ref from state)
     // must not block a new drag.
@@ -1224,7 +1296,7 @@ function App() {
       const card = cardsRef.current.find((c) => c.id === e.cardId);
       if (card) {
         const drag = createCrossBoardDrag(
-          [e.cardId],
+          groupIds,
           card.boardId,
           {
             cardId: card.id,
@@ -1291,11 +1363,13 @@ function App() {
     const cardId = lastDraggedCardIdRef.current;
     const targetBoardId = dropTargetBoardIdRef.current;
     const overQuick = overQuickBoardsRef.current;
+    const groupIds = draggedCardIdsRef.current;
     dropTargetBoardIdRef.current = null;
     overQuickBoardsRef.current = false;
     setDropTargetBoardId(null);
     setDropActiveQuickBoards(false);
     lastDraggedCardIdRef.current = null;
+    draggedCardIdsRef.current = [];
 
     // Cross-board drag: resolve the final drop. Only a drag that actually
     // reached the previewing phase (a tab was hovered and its board opened)
@@ -1410,11 +1484,11 @@ function App() {
       // rail must still follow the normal canvas-position persistence path.
     }
     if (cardId && targetBoardId) {
-      handleCardDroppedOnPortal(cardId, targetBoardId);
-      return true; // consumed: moved to a portal
+      handleCardsDroppedOnBoard(groupIds.length > 0 ? groupIds : [cardId], targetBoardId);
+      return true; // consumed: moved to a portal/breadcrumb
     }
     return false;
-  }, [handleCardDroppedOnPortal, handleQuickBoardPin, gateway, dispatcher, idGenerator, navigateTo, cleanupCrossBoardWindow]);
+  }, [handleCardsDroppedOnBoard, handleQuickBoardPin, gateway, dispatcher, idGenerator, navigateTo, cleanupCrossBoardWindow]);
 
   // Keep the drag-end resolver in a ref so window pointer tracking (started
   // after the target board opens) can resolve the drop.
@@ -2024,6 +2098,7 @@ function App() {
               onCardContextMenu: handleRequestContextMenu,
               onPaneContextMenu: handlePaneContextMenu,
               onCardDroppedOnPortal: handleCardDroppedOnPortal,
+              onCardsDroppedOnPortal: handleCardsDroppedOnBoard,
               onPortalHighlight: setHighlightedPortalId,
               onCardDragMove: handleCardDragMove,
               onCardDragEnd: handleCardDragEnd,

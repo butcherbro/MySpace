@@ -304,16 +304,14 @@ export function CanvasAdapter({
       return;
     }
 
-    // Drop onto a portal: if a single card's center lands inside a board portal,
-    // move it to that board instead of repositioning on the current board.
-    if (ids.length === 1) {
-      const dragged = nodesRef.current.find((n) => n.id === ids[0]);
-      if (dragged) {
-        const portal = portalAtPoint(dragged);
-        if (portal?.targetBoardId) {
-          events.onCardDroppedOnPortal?.(ids[0], portal.targetBoardId);
-          return;
-        }
+    // Drop onto a portal: if the dragged card (or group) lands inside a board
+    // portal, move the whole selection there instead of repositioning.
+    const dragged = nodesRef.current.find((n) => n.id === ids[0]);
+    if (dragged) {
+      const portal = portalAtPoint(dragged);
+      if (portal?.targetBoardId) {
+        events.onCardsDroppedOnPortal?.(ids, portal.targetBoardId);
+        return;
       }
     }
 
