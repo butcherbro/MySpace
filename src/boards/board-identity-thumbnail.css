@@ -23,6 +23,16 @@
   background: var(--board-accent, #657482);
 }
 
+.board-identity-thumbnail--search {
+  width: 56px;
+  height: 56px;
+  border-radius: 11px;
+  background: var(--board-accent, #657482);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.28),
+    var(--shadow-paper, 0 1px 2px rgba(31, 37, 33, 0.12));
+}
+
 .board-identity-thumbnail__cover {
   width: 100%;
   height: 100%;
@@ -43,4 +53,8 @@
 
 .board-identity-thumbnail--navigation .board-identity-thumbnail__symbol {
   font-size: 11px;
+}
+
+.board-identity-thumbnail--search .board-identity-thumbnail__symbol {
+  font-size: 25px;
 }

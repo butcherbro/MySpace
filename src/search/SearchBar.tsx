@@ -105,11 +105,13 @@ export function SearchBar({ query, onQueryChange, results, loading, onSelect }: 
                         colorToken={first.boardColorToken}
                         symbol={first.boardSymbol}
                         coverAsset={first.boardCoverAsset}
-                        size="navigation"
+                        size="search"
                         decorative
                       />
-                      <span className="search-bar__group-title">{boardTitle(first)}</span>
-                      <span className="search-bar__group-trail">{trailLabel(first)}</span>
+                      <div className="search-bar__group-meta">
+                        <span className="search-bar__group-title">{boardTitle(first)}</span>
+                        <span className="search-bar__group-trail">{trailLabel(first)}</span>
+                      </div>
                       <span className="search-bar__group-count">{entries.length}</span>
                     </div>
                     <ul className="search-bar__items">

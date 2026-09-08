@@ -7,7 +7,7 @@ interface BoardIdentityThumbnailProps {
   colorToken: string;
   symbol: string | null;
   coverAsset: AssetDto | null;
-  size: "portal" | "navigation";
+  size: "portal" | "navigation" | "search";
   /** Decorative (aria-hidden) in tab/bookmark usage; the adjacent title names it. */
   decorative?: boolean;
 }
