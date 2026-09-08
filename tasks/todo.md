@@ -169,6 +169,17 @@ architecture pass before sizing; `blocked` = depends on another item.
   from the donor app. The user will show the reference to the architect, who
   will hand back concrete styling before this slice starts.
 
+### 10. Card connections (arrows between cards)
+
+- `wishlist` — Milanote-style arrows: single-click a card to show a handle in its
+  top-right corner; drag the handle onto another card to draw an arrow from the
+  source center to the target center, clipped to each card's outline (the line is
+  hidden outside both card bounds) and pointing at the target center, re-routing
+  as either card moves. A dashed line from the source center only shows while the
+  source card is selected. This is a large separate slice: a `connections`
+  migration + backend commands, gateway/state, an SVG overlay above React Flow,
+  and the drag-to-connect interaction.
+
 ## Ordering decision
 
 1. Finish the current block: breadcrumb order (✅), breadcrumb navigation (✅),
