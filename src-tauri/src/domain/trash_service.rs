@@ -8,7 +8,9 @@
 use rusqlite::{params, Connection, Transaction};
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::{TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto};
+use crate::domain::models::{
+    EmptyTrashResult, TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto,
+};
 
 use super::super::db;
 
@@ -211,6 +213,88 @@ pub fn restore_trash_batch(conn: &mut Connection, batch_id: &str) -> Result<(), 
 
     tx.commit()?;
     Ok(())
+}
+
+/// Permanently deletes every trashed row. This is the irreversible counterpart
+/// to `restore_trash_batch`: trashed detail rows, cards, view states, quick-board
+/// references, and boards are removed in one transaction (deferring FK checks so
+/// a board subtree can be deleted regardless of internal child/parent order).
+///
+/// Returns relational counts only; asset cleanup is a separate mark-and-sweep
+/// step (asset GC) that must run after this and after any backup gate.
+pub fn empty_trash(
+    conn: &mut Connection,
+    confirmation: &str,
+) -> Result<EmptyTrashResult, WorkspaceError> {
+    if confirmation != "EMPTY" {
+        return Err(WorkspaceError::ConstraintViolation(
+            "type EMPTY to confirm".to_string(),
+        ));
+    }
+
+    // Never repair a broken root invariant inside a destructive command: if the
+    // root board is somehow trashed, refuse to empty.
+    let root_trashed: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM boards b
+         JOIN workspaces w ON w.root_board_id = b.id
+         WHERE b.deleted_at IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    if root_trashed > 0 {
+        return Err(WorkspaceError::RootBoardProtected);
+    }
+
+    let board_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM boards WHERE deleted_at IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    let card_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM cards WHERE deleted_at IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let tx = conn.transaction()?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
+
+    // Detail rows for trashed cards, leaves -> roots.
+    tx.execute(
+        "DELETE FROM note_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM image_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM embed_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM board_portal_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    // Board-referencing rows for trashed boards.
+    tx.execute(
+        "DELETE FROM board_view_states WHERE board_id IN (SELECT id FROM boards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM quick_boards WHERE board_id IN (SELECT id FROM boards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+
+    tx.execute("DELETE FROM cards WHERE deleted_at IS NOT NULL", [])?;
+    tx.execute("DELETE FROM boards WHERE deleted_at IS NOT NULL", [])?;
+    tx.commit()?;
+
+    Ok(EmptyTrashResult {
+        board_count,
+        card_count,
+        orphan_asset_count: 0,
+    })
 }
 
 /// Maximum Unicode scalar values for a Trash entry excerpt.

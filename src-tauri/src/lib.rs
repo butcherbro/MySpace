@@ -78,8 +78,12 @@ pub fn run() {
             // misbehaves. Best-effort: it never blocks startup.
             db::backup::snapshot_on_startup(&db_path, &assets_dir, &backup_dir);
 
-            let conn = db::open_and_bootstrap(&db_path)
+            let mut conn = db::open_and_bootstrap(&db_path)
                 .expect("failed to open and bootstrap workspace database");
+
+            // Converge any interrupted asset GC: delete orphaned files + rows.
+            // Best-effort; a failure never blocks startup.
+            let _ = domain::asset_service::collect_orphaned_assets(&mut conn, &assets_dir);
 
             app.manage(DbHandle::new(conn));
             Ok(())
@@ -117,6 +121,7 @@ pub fn run() {
             commands::trash::trash_selection,
             commands::trash::restore_trash_batch,
             commands::trash::list_trash,
+            commands::trash::empty_trash,
             commands::clipboard::copy_text_command,
             commands::search::search_workspace,
             commands::quick_boards::list_quick_boards,

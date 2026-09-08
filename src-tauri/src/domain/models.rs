@@ -472,6 +472,15 @@ pub struct TrashSummaryDto {
     pub card_count: i64,
 }
 
+/// Result of permanently emptying the Trash.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmptyTrashResult {
+    pub board_count: i64,
+    pub card_count: i64,
+    pub orphan_asset_count: i64,
+}
+
 /// A single workspace search result. `kind` is the user-facing kind (`board`,
 /// `note`, or `link` — the `embed` card is reported as `link`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -160,3 +160,54 @@ fn extension_for_mime(mime_type: &str) -> &'static str {
         _ => "bin",
     }
 }
+
+/// Mark-and-sweep collection of orphaned managed assets. An asset is referenced
+/// if any remaining `image_cards`/`embed_cards`/`boards` row points at it; every
+/// other asset file is deleted (file first, then its metadata row). A missing
+/// file counts as success so an interrupted sweep converges on the next run.
+/// Returns the number of assets collected.
+pub fn collect_orphaned_assets(
+    conn: &mut Connection,
+    asset_dir: &Path,
+) -> Result<i64, WorkspaceError> {
+    let orphans: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.file_path FROM assets a
+             WHERE a.id NOT IN (
+                 SELECT asset_id FROM image_cards WHERE asset_id IS NOT NULL
+                 UNION
+                 SELECT asset_id FROM embed_cards WHERE asset_id IS NOT NULL
+                 UNION
+                 SELECT favicon_asset_id FROM embed_cards WHERE favicon_asset_id IS NOT NULL
+                 UNION
+                 SELECT cover_asset_id FROM boards WHERE cover_asset_id IS NOT NULL
+             )",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut collected: i64 = 0;
+    for (id, file_path) in orphans {
+        if !crate::is_safe_asset_name(&file_path) {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "unsafe asset filename: {file_path}"
+            )));
+        }
+        let abs = asset_dir.join(&file_path);
+        match fs::remove_file(&abs) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(WorkspaceError::Database(format!(
+                    "cannot delete asset: {e}"
+                )))
+            }
+        }
+        conn.execute("DELETE FROM assets WHERE id = ?1", params![id])?;
+        collected += 1;
+    }
+    Ok(collected)
+}

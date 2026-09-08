@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::{TrashSelectionInput, TrashSummaryDto};
+use crate::domain::models::{EmptyTrashResult, TrashSelectionInput, TrashSummaryDto};
 use crate::domain::trash_service;
 
 /// The application-wide SQLite connection, guarded so commands can share it.
@@ -59,4 +59,17 @@ pub fn list_trash(db: DbState<'_>) -> Result<TrashSummaryDto, WorkspaceError> {
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     trash_service::list_trash(&conn)
+}
+
+/// Permanently empties the Trash. Requires the exact token `EMPTY`; hard-deletes
+/// trashed relational rows and returns the affected counts (asset GC is separate).
+#[tauri::command]
+pub fn empty_trash(
+    db: DbState<'_>,
+    confirmation: String,
+) -> Result<EmptyTrashResult, WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    trash_service::empty_trash(&mut conn, &confirmation)
 }
