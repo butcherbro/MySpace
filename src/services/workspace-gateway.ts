@@ -327,6 +327,8 @@ export interface SearchResultDto {
   boardColorToken: string;
   boardSymbol: string | null;
   boardCoverAsset: AssetDto | null;
+  /** Thumbnail for the matched entity itself (image/link preview/board cover). */
+  thumbnailAsset: AssetDto | null;
 }
 
 export interface AddQuickBoardInput {

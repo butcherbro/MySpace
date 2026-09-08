@@ -15,6 +15,7 @@ const results: SearchResultDto[] = [
     boardColorToken: "ink",
     boardSymbol: null,
     boardCoverAsset: null,
+    thumbnailAsset: null,
   },
   {
     entityId: "b1",
@@ -29,6 +30,7 @@ const results: SearchResultDto[] = [
     boardColorToken: "moss",
     boardSymbol: null,
     boardCoverAsset: null,
+    thumbnailAsset: null,
   },
 ];
 

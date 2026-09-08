@@ -126,8 +126,27 @@ export function SearchBar({ query, onQueryChange, results, loading, onSelect }: 
                           onMouseEnter={() => setActiveIndex(flatIndex)}
                           onClick={() => onSelect(result)}
                         >
-                          <span className={`search-bar__kind search-bar__kind--${result.kind}`}>
-                            {result.kind}
+                          <span className="search-bar__thumb">
+                            {result.kind === "board" ? (
+                              <BoardIdentityThumbnail
+                                title={result.title}
+                                colorToken={result.boardColorToken}
+                                symbol={result.boardSymbol}
+                                coverAsset={result.thumbnailAsset}
+                                size="portal"
+                                decorative
+                              />
+                            ) : result.thumbnailAsset ? (
+                              <img
+                                className="search-bar__thumb-img"
+                                src={`myspace-asset://localhost/${result.thumbnailAsset.filePath}`}
+                                alt=""
+                              />
+                            ) : (
+                              <span className={`search-bar__kind search-bar__kind--${result.kind}`}>
+                                {result.kind}
+                              </span>
+                            )}
                           </span>
                           <span className="search-bar__body">
                             <span className="search-bar__title">

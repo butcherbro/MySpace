@@ -1752,6 +1752,7 @@ struct SearchHit {
     excerpt: Option<String>,
     board_id: String,
     rank: i64,
+    thumbnail_asset: Option<AssetDto>,
 }
 
 /// Searches the workspace (Board titles, Note plain text, Link Card title/URL/
@@ -1771,12 +1772,31 @@ pub fn search_workspace(
 
     // Boards by title (rank 0).
     {
-        let mut stmt = conn.prepare("SELECT id, title FROM boards WHERE deleted_at IS NULL")?;
+        let mut stmt = conn.prepare(
+            "SELECT b.id, b.title,
+                    ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+             FROM boards b
+             LEFT JOIN assets ca ON ca.id = b.cover_asset_id
+             WHERE b.deleted_at IS NULL",
+        )?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            let cover = if row.get::<_, Option<String>>(2)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(2)?,
+                    file_name: row.get(3)?,
+                    mime_type: row.get(4)?,
+                    width: row.get(5)?,
+                    height: row.get(6)?,
+                    size_bytes: row.get(7)?,
+                    file_path: row.get(8)?,
+                })
+            } else {
+                None
+            };
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, cover))
         })?;
         for r in rows {
-            let (id, title) = r?;
+            let (id, title, cover) = r?;
             if contains_query(&title, &q) {
                 hits.push(SearchHit {
                     entity_id: id.clone(),
@@ -1785,6 +1805,7 @@ pub fn search_workspace(
                     excerpt: None,
                     board_id: id,
                     rank: 0,
+                    thumbnail_asset: cover,
                 });
             }
         }
@@ -1816,6 +1837,7 @@ pub fn search_workspace(
                     excerpt: None,
                     board_id,
                     rank: 1,
+                    thumbnail_asset: None,
                 });
             }
         }
@@ -1824,7 +1846,8 @@ pub fn search_workspace(
     // Image cards by caption or file name (rank 1).
     {
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, i.caption_plain_text, a.file_name
+            "SELECT c.id, c.board_id, i.caption_plain_text,
+                    a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path
              FROM cards c
              JOIN image_cards i ON i.card_id = c.id
              JOIN assets a ON a.id = i.asset_id
@@ -1832,15 +1855,25 @@ pub fn search_workspace(
              WHERE c.deleted_at IS NULL",
         )?;
         let rows = stmt.query_map([], |row| {
+            let thumb = AssetDto {
+                id: row.get(3)?,
+                file_name: row.get(4)?,
+                mime_type: row.get(5)?,
+                width: row.get(6)?,
+                height: row.get(7)?,
+                size_bytes: row.get(8)?,
+                file_path: row.get(9)?,
+            };
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
+                thumb,
             ))
         })?;
         for r in rows {
-            let (id, board_id, caption, file_name) = r?;
+            let (id, board_id, caption, thumb) = r?;
+            let file_name = thumb.file_name.clone();
             if contains_query(&caption, &q) || contains_query(&file_name, &q) {
                 let title = if caption.trim().is_empty() {
                     file_name
@@ -1854,6 +1887,7 @@ pub fn search_workspace(
                     excerpt: None,
                     board_id,
                     rank: 1,
+                    thumbnail_asset: Some(thumb),
                 });
             }
         }
@@ -1862,13 +1896,43 @@ pub fn search_workspace(
     // Link Cards (embed) by title, URL, or description.
     {
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, e.title, e.source_url, e.display_url, e.description_plain_text
+            "SELECT c.id, c.board_id, e.title, e.source_url, e.display_url, e.description_plain_text,
+                    pa.id, pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
+                    fa.id, fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
              FROM cards c
              JOIN embed_cards e ON e.card_id = c.id
              JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
+             LEFT JOIN assets pa ON pa.id = e.asset_id
+             LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
              WHERE c.deleted_at IS NULL",
         )?;
         let rows = stmt.query_map([], |row| {
+            let preview = if row.get::<_, Option<String>>(6)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(6)?,
+                    file_name: row.get(7)?,
+                    mime_type: row.get(8)?,
+                    width: row.get(9)?,
+                    height: row.get(10)?,
+                    size_bytes: row.get(11)?,
+                    file_path: row.get(12)?,
+                })
+            } else {
+                None
+            };
+            let favicon = if row.get::<_, Option<String>>(13)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(13)?,
+                    file_name: row.get(14)?,
+                    mime_type: row.get(15)?,
+                    width: row.get(16)?,
+                    height: row.get(17)?,
+                    size_bytes: row.get(18)?,
+                    file_path: row.get(19)?,
+                })
+            } else {
+                None
+            };
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1876,10 +1940,11 @@ pub fn search_workspace(
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                preview.or(favicon),
             ))
         })?;
         for r in rows {
-            let (id, board_id, title_raw, source_url, display_url, description) = r?;
+            let (id, board_id, title_raw, source_url, display_url, description, thumb) = r?;
             let title = title_raw
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or_else(|| source_url.clone());
@@ -1906,6 +1971,7 @@ pub fn search_workspace(
                 excerpt,
                 board_id,
                 rank,
+                thumbnail_asset: thumb,
             });
         }
     }
@@ -1953,6 +2019,7 @@ pub fn search_workspace(
             board_color_token,
             board_symbol,
             board_cover_asset,
+            thumbnail_asset: hit.thumbnail_asset,
         });
     }
     Ok(out)

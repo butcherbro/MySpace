@@ -504,6 +504,9 @@ pub struct SearchResultDto {
     pub board_color_token: String,
     pub board_symbol: Option<String>,
     pub board_cover_asset: Option<AssetDto>,
+    /// Thumbnail for the matched entity itself: image asset, link preview/
+    /// favicon, or board cover.
+    pub thumbnail_asset: Option<AssetDto>,
 }
 
 /// A single Link Card to create in a batch.
