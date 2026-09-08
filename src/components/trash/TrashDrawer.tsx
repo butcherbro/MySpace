@@ -1,4 +1,5 @@
 import type { TrashSummaryDto } from "../../services/workspace-gateway";
+import { BoardIdentityThumbnail } from "../../boards/BoardIdentityThumbnail";
 import "./trash-drawer.css";
 
 interface TrashDrawerProps {
@@ -86,8 +87,29 @@ export function TrashDrawer({
                   <ul className="trash-drawer__items">
                     {batch.items.map((item) => (
                       <li key={`${batch.batchId}:${item.id}`} className="trash-drawer__item">
-                        <span className={`trash-drawer__kind trash-drawer__kind--${item.kind}`}>
-                          {item.kind}
+                        <span className="trash-drawer__thumb">
+                          {item.kind === "board" ? (
+                            <BoardIdentityThumbnail
+                              title={item.title}
+                              colorToken={item.colorToken ?? "ink"}
+                              symbol={item.symbol}
+                              coverAsset={item.thumbnailAsset}
+                              size="navigation"
+                              decorative
+                            />
+                          ) : item.thumbnailAsset ? (
+                            <img
+                              className="trash-drawer__thumb-img"
+                              src={`myspace-asset://localhost/${item.thumbnailAsset.filePath}`}
+                              alt=""
+                            />
+                          ) : (
+                            <span
+                              className={`trash-drawer__kind trash-drawer__kind--${item.kind}`}
+                            >
+                              {item.kind}
+                            </span>
+                          )}
                         </span>
                         <span className="trash-drawer__item-title">
                           {item.title || "(no title)"}

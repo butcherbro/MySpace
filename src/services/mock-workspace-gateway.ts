@@ -464,6 +464,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           id: board.id,
           kind: "board" as const,
           title: board.title,
+          thumbnailAsset: board.coverAsset ?? null,
+          colorToken: board.colorToken,
+          symbol: board.symbol,
         }))
         .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
 
@@ -473,6 +476,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           id: card.id,
           kind: card.kind as TrashEntryDto["kind"],
           title: cardTitle(card),
+          thumbnailAsset: cardThumbnail(card),
+          colorToken: null,
+          symbol: null,
         }))
         .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
 
@@ -784,5 +790,16 @@ function cardTitle(card: CardDto): string {
       return card.title || card.sourceUrl || "";
     default:
       return "";
+  }
+}
+
+function cardThumbnail(card: CardDto): AssetDto | null {
+  switch (card.kind) {
+    case "image":
+      return card.asset;
+    case "embed":
+      return card.previewAsset ?? card.faviconAsset;
+    default:
+      return null;
   }
 }

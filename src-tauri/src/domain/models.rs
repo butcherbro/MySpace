@@ -448,6 +448,11 @@ pub struct TrashEntryDto {
     /// One of `note` | `image` | `embed` | `board`.
     pub kind: String,
     pub title: String,
+    /// Thumbnail source: the image/preview/cover asset, when one exists.
+    pub thumbnail_asset: Option<AssetDto>,
+    /// Board identity fallback (color/symbol) when there is no thumbnail.
+    pub color_token: Option<String>,
+    pub symbol: Option<String>,
 }
 
 /// One recoverable Trash batch: a single atomic delete operation that may span

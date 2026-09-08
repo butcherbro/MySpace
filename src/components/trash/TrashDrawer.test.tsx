@@ -10,8 +10,8 @@ const summary: TrashSummaryDto = {
       batchId: "batch-1",
       deletedAt: 1_700_000_000_000,
       items: [
-        { id: "n1", kind: "note", title: "Remember to ship" },
-        { id: "b1", kind: "board", title: "Research" },
+        { id: "n1", kind: "note", title: "Remember to ship", thumbnailAsset: null, colorToken: null, symbol: null },
+        { id: "b1", kind: "board", title: "Research", thumbnailAsset: null, colorToken: "moss", symbol: null },
       ],
       boardCount: 1,
       cardCount: 2,

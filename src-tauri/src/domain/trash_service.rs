@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, Transaction};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    EmptyTrashResult, TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto,
+    AssetDto, EmptyTrashResult, TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto,
 };
 
 use super::super::db;
@@ -308,6 +308,9 @@ struct TrashedBoard {
     title: String,
     batch_id: String,
     deleted_at: i64,
+    color_token: String,
+    symbol: Option<String>,
+    cover_asset: Option<AssetDto>,
 }
 
 struct TrashedCard {
@@ -318,6 +321,7 @@ struct TrashedCard {
     deleted_at: i64,
     is_portal: bool,
     title: String,
+    thumbnail_asset: Option<AssetDto>,
 }
 
 fn bound_excerpt(text: &str) -> String {
@@ -332,16 +336,36 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
     let mut boards = Vec::<TrashedBoard>::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT id, parent_board_id, title, trash_batch_id, deleted_at
-             FROM boards WHERE deleted_at IS NOT NULL",
+            "SELECT b.id, b.parent_board_id, b.title, b.trash_batch_id, b.deleted_at,
+                    b.color_token, b.symbol,
+                    ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+             FROM boards b
+             LEFT JOIN assets ca ON ca.id = b.cover_asset_id
+             WHERE b.deleted_at IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |row| {
+            let cover_asset = if row.get::<_, Option<String>>(7)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(7)?,
+                    file_name: row.get(8)?,
+                    mime_type: row.get(9)?,
+                    width: row.get(10)?,
+                    height: row.get(11)?,
+                    size_bytes: row.get(12)?,
+                    file_path: row.get(13)?,
+                })
+            } else {
+                None
+            };
             Ok(TrashedBoard {
                 id: row.get(0)?,
                 parent_board_id: row.get(1)?,
                 title: row.get(2)?,
                 batch_id: row.get(3)?,
                 deleted_at: row.get(4)?,
+                color_token: row.get(5)?,
+                symbol: row.get(6)?,
+                cover_asset,
             })
         })?;
         for row in rows {
@@ -353,12 +377,19 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
     {
         let mut stmt = conn.prepare(
             "SELECT c.id, c.board_id, c.kind, c.trash_batch_id, c.deleted_at,
-                    n.plain_text, i.caption_plain_text, e.title, e.source_url, a.file_name
+                    n.plain_text,
+                    i.caption_plain_text, i.asset_id,
+                    ia.file_name, ia.mime_type, ia.width, ia.height, ia.size_bytes, ia.file_path,
+                    e.title, e.source_url, e.asset_id, e.favicon_asset_id,
+                    pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
+                    fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
              FROM cards c
              LEFT JOIN note_cards n ON n.card_id = c.id
              LEFT JOIN image_cards i ON i.card_id = c.id
-             LEFT JOIN assets a ON a.id = i.asset_id
+             LEFT JOIN assets ia ON ia.id = i.asset_id
              LEFT JOIN embed_cards e ON e.card_id = c.id
+             LEFT JOIN assets pa ON pa.id = e.asset_id
+             LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
              WHERE c.deleted_at IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -369,15 +400,17 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
             } else {
                 let note_plain: Option<String> = row.get(5)?;
                 let image_caption: Option<String> = row.get(6)?;
-                let embed_title: Option<String> = row.get(7)?;
-                let embed_source: Option<String> = row.get(8)?;
-                let image_file: Option<String> = row.get(9)?;
+                let embed_title: Option<String> = row.get(13)?;
+                let embed_source: Option<String> = row.get(14)?;
                 let raw = match kind.as_str() {
                     "note" => note_plain.unwrap_or_default(),
-                    "image" => image_caption
-                        .filter(|s| !s.trim().is_empty())
-                        .or_else(|| image_file)
-                        .unwrap_or_default(),
+                    "image" => {
+                        let image_file: Option<String> = row.get(9)?;
+                        image_caption
+                            .filter(|s| !s.trim().is_empty())
+                            .or_else(|| image_file)
+                            .unwrap_or_default()
+                    }
                     "embed" => embed_title
                         .filter(|s| !s.trim().is_empty())
                         .or_else(|| embed_source)
@@ -386,6 +419,52 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                 };
                 bound_excerpt(&raw)
             };
+
+            let thumbnail_asset = match kind.as_str() {
+                "image" => {
+                    if row.get::<_, Option<String>>(7)?.is_some() {
+                        Some(AssetDto {
+                            id: row.get(7)?,
+                            file_name: row.get(8)?,
+                            mime_type: row.get(9)?,
+                            width: row.get(10)?,
+                            height: row.get(11)?,
+                            size_bytes: row.get(12)?,
+                            file_path: row.get(13)?,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                "embed" => {
+                    // Prefer the preview image, then the favicon.
+                    if row.get::<_, Option<String>>(15)?.is_some() {
+                        Some(AssetDto {
+                            id: row.get(15)?,
+                            file_name: row.get(16)?,
+                            mime_type: row.get(17)?,
+                            width: row.get(18)?,
+                            height: row.get(19)?,
+                            size_bytes: row.get(20)?,
+                            file_path: row.get(21)?,
+                        })
+                    } else if row.get::<_, Option<String>>(22)?.is_some() {
+                        Some(AssetDto {
+                            id: row.get(22)?,
+                            file_name: row.get(23)?,
+                            mime_type: row.get(24)?,
+                            width: row.get(25)?,
+                            height: row.get(26)?,
+                            size_bytes: row.get(27)?,
+                            file_path: row.get(28)?,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
             Ok(TrashedCard {
                 id: row.get(0)?,
                 board_id: row.get(1)?,
@@ -394,6 +473,7 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                 deleted_at: row.get(4)?,
                 is_portal,
                 title,
+                thumbnail_asset,
             })
         })?;
         for row in rows {
@@ -449,6 +529,9 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                 id: b.id.clone(),
                 kind: "board".to_string(),
                 title: bound_excerpt(&b.title),
+                thumbnail_asset: b.cover_asset.clone(),
+                color_token: Some(b.color_token.clone()),
+                symbol: b.symbol.clone(),
             })
             .collect();
         board_items.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
@@ -463,6 +546,9 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                 id: c.id.clone(),
                 kind: c.kind.clone(),
                 title: c.title.clone(),
+                thumbnail_asset: c.thumbnail_asset.clone(),
+                color_token: None,
+                symbol: None,
             })
             .collect();
         card_items.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));

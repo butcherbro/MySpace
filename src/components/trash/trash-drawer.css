@@ -155,6 +155,21 @@
   gap: 8px;
 }
 
+.trash-drawer__thumb {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+}
+
+.trash-drawer__thumb-img {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
 .trash-drawer__kind {
   flex: none;
   min-width: 40px;

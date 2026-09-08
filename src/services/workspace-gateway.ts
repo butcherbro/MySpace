@@ -283,6 +283,11 @@ export interface TrashEntryDto {
   id: string;
   kind: "note" | "image" | "embed" | "board";
   title: string;
+  /** Thumbnail source: image/preview/cover asset when one exists. */
+  thumbnailAsset: AssetDto | null;
+  /** Board identity fallback (color/symbol) when there is no thumbnail. */
+  colorToken: string | null;
+  symbol: string | null;
 }
 
 /** One recoverable Trash batch: a single atomic delete operation. */
