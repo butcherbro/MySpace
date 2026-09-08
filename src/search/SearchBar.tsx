@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BoardIdentityThumbnail } from "../boards/BoardIdentityThumbnail";
 import { HighlightedText } from "../components/HighlightedText";
 import type { SearchResultDto } from "../services/workspace-gateway";
@@ -54,10 +54,27 @@ function formatRelativeTime(millis: number): string {
 export function SearchBar({ query, onQueryChange, results, loading, onSelect }: SearchBarProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const clampIndex = (i: number) =>
     results.length === 0 ? 0 : Math.max(0, Math.min(i, results.length - 1));
   const index = clampIndex(activeIndex);
+
+  const open = query.trim() !== "";
+
+  // Clicking anywhere outside the search control closes it (clears the query),
+  // so the panel does not linger until the user erases the field.
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: PointerEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        onQueryChange("");
+        setActiveIndex(0);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open, onQueryChange]);
 
   // Group results by board, preserving each result's flat index for keyboard
   // navigation and the active highlight.
@@ -70,8 +87,6 @@ export function SearchBar({ query, onQueryChange, results, loading, onSelect }: 
     });
     return Array.from(map.entries());
   }, [results]);
-
-  const open = query.trim() !== "";
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Escape") {
@@ -94,7 +109,7 @@ export function SearchBar({ query, onQueryChange, results, loading, onSelect }: 
   }
 
   return (
-    <div className="search-bar" data-testid="search-bar">
+    <div className="search-bar" data-testid="search-bar" ref={rootRef}>
       <input
         ref={inputRef}
         className="search-bar__input"

@@ -72,3 +72,17 @@ test("Backspace edits the search field instead of trashing canvas selection", as
   await expect(search).toHaveValue("ab");
   await expect(page.getByTestId("note-card")).toHaveCount(1);
 });
+
+test("clicking the canvas closes the search panel", async ({ page }) => {
+  await page.goto("/");
+
+  // Create a note that matches, then run a search.
+  await page.getByRole("button", { name: "New note", exact: true }).click();
+  await page.getByRole("searchbox", { name: "Search" }).fill("needle");
+  await expect(page.getByTestId("search-results")).toBeVisible();
+
+  // Clicking the empty canvas closes the panel and clears the query.
+  await page.locator(".react-flow__pane").click({ position: { x: 400, y: 300 } });
+  await expect(page.getByTestId("search-results")).toHaveCount(0);
+  await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("");
+});
