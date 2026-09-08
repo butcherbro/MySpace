@@ -152,6 +152,10 @@ architecture pass before sizing; `blocked` = depends on another item.
   creation placement, and Search. Locked decisions:
   macOS system font (no web font), top bar `44px`, rail `56px`, breadcrumbs as the
   navigation anchor, no dead controls, default rail Note/Link/Board/Image.
+- `blocked` (contextual left rail) — the contextual note tools (Bold, note
+  background color, later text color/highlight/tags) need a visual reference
+  from the donor app. The user will show the reference to the architect, who
+  will hand back concrete styling before this slice starts.
 
 ## Ordering decision
 
