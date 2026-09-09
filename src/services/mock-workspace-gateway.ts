@@ -7,11 +7,15 @@ import type {
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateChildBoardInput,
+  CreateFolderAliasInput,
   CreateImageCardInput,
   CreateNoteInput,
   EmbedCardDto,
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
+  DropPathClassificationDto,
+  FilesystemAliasDto,
+  FolderPreviewDto,
   ImportAssetInput,
   MoveBoardInput,
   MoveCardInput,
@@ -355,6 +359,84 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve();
   }
 
+  createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {
+    const displayName = input.sourcePath.split("/").filter(Boolean).at(-1) ?? input.sourcePath;
+    const card: FilesystemAliasDto = {
+      kind: "filesystem_alias",
+      id: input.id,
+      boardId: input.boardId,
+      frame: { ...input.frame },
+      zIndex: input.zIndex,
+      revision: 1,
+      targetKind: "folder",
+      pathHint: input.sourcePath,
+      displayName,
+    };
+    this.snapshot.cards.push(card);
+    return Promise.resolve(structuredClone(card));
+  }
+
+  listFolderPreview(cardId: string, limit: number): Promise<FolderPreviewDto> {
+    const card = this.snapshot.cards.find(
+      (candidate): candidate is FilesystemAliasDto =>
+        candidate.kind === "filesystem_alias" && candidate.id === cardId,
+    );
+    if (!card) return Promise.reject(new Error(`folder alias not found: ${cardId}`));
+
+    const status = card.pathHint.endsWith("/empty")
+      ? "empty"
+      : card.pathHint.endsWith("/missing")
+        ? "missing"
+        : card.pathHint.endsWith("/permission-lost")
+          ? "permission_lost"
+          : card.pathHint.endsWith("/io-error")
+            ? "io_error"
+            : "ready";
+    const entries = status === "ready"
+      ? [
+          { name: "Footage", kind: "folder" as const, sizeBytes: null, childCount: 6 },
+          { name: "script-v3.md", kind: "file" as const, sizeBytes: 18_432, childCount: null },
+          { name: "shots.csv", kind: "file" as const, sizeBytes: 43_008, childCount: null },
+          { name: "intro.mov", kind: "file" as const, sizeBytes: 1_932_735_283, childCount: null },
+        ].slice(0, Math.max(0, Math.min(limit, 50)))
+      : [];
+    return Promise.resolve({
+      status,
+      entries,
+      hasMore: false,
+      displayName: card.displayName,
+      pathHint: card.pathHint,
+    });
+  }
+
+  classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]> {
+    return Promise.resolve(paths.map((path) => {
+      const fileName = path.split("/").filter(Boolean).at(-1) ?? path;
+      const extension = fileName.includes(".") ? fileName.split(".").at(-1)?.toLowerCase() ?? "" : "";
+      const imageMimeTypes: Record<string, string> = {
+        png: "image/png",
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        gif: "image/gif",
+        webp: "image/webp",
+        svg: "image/svg+xml",
+        heic: "image/heic",
+      };
+      if (!extension) return { path, kind: "folder", fileName, mimeType: null };
+      if (imageMimeTypes[extension]) {
+        return { path, kind: "image", fileName, mimeType: imageMimeTypes[extension] };
+      }
+      return { path, kind: "unsupported", fileName, mimeType: null };
+    }));
+  }
+
+  openFolderInFinder(cardId: string): Promise<void> {
+    const card = this.snapshot.cards.find(
+      (candidate) => candidate.kind === "filesystem_alias" && candidate.id === cardId,
+    );
+    return card ? Promise.resolve() : Promise.reject(new Error(`folder alias not found: ${cardId}`));
+  }
+
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "image" && c.id === input.id,
@@ -619,6 +701,26 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           });
         }
       }
+      if (card.kind === "filesystem_alias") {
+        const nameMatch = card.displayName.toLowerCase().includes(q);
+        const pathMatch = card.pathHint.toLowerCase().includes(q);
+        if (nameMatch || pathMatch) {
+          hits.push({
+            rank: nameMatch ? 0 : 1,
+            result: {
+              entityId: card.id,
+              kind: "folder",
+              title: card.displayName,
+              excerpt: nameMatch ? null : card.pathHint,
+              boardId: card.boardId,
+              boardTrail: this.buildBreadcrumbs(card.boardId),
+              ...identity(card.boardId),
+              thumbnailAsset: null,
+              createdAt: Date.now(),
+            },
+          });
+        }
+      }
     }
 
     hits.sort(
@@ -824,6 +926,8 @@ function cardTitle(card: CardDto): string {
       return card.captionPlainText || card.asset.fileName || "";
     case "embed":
       return card.title || card.sourceUrl || "";
+    case "filesystem_alias":
+      return card.displayName;
     default:
       return "";
   }
@@ -835,6 +939,8 @@ function cardThumbnail(card: CardDto): AssetDto | null {
       return card.asset;
     case "embed":
       return card.previewAsset ?? card.faviconAsset;
+    case "filesystem_alias":
+      return null;
     default:
       return null;
   }

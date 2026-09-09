@@ -132,7 +132,37 @@ export interface EmbedCardDto {
   metadataError: string | null;
 }
 
-export type CardDto = NoteCardDto | BoardPortalDto | ImageCardDto | EmbedCardDto;
+export interface FilesystemAliasDto {
+  kind: "filesystem_alias";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  revision: number;
+  targetKind: "folder" | "file";
+  /** Last resolved display path only; bookmark bytes remain the authority in Rust. */
+  pathHint: string;
+  displayName: string;
+}
+
+export type FolderPreviewStatus = "ready" | "empty" | "missing" | "permission_lost" | "io_error";
+
+export interface FolderEntryDto {
+  name: string;
+  kind: "folder" | "file";
+  sizeBytes: number | null;
+  childCount: number | null;
+}
+
+export interface FolderPreviewDto {
+  status: FolderPreviewStatus;
+  entries: FolderEntryDto[];
+  hasMore: boolean;
+  displayName: string;
+  pathHint: string;
+}
+
+export type CardDto = NoteCardDto | BoardPortalDto | ImageCardDto | EmbedCardDto | FilesystemAliasDto;
 
 export interface BoardSnapshot {
   board: BoardSummary;
@@ -240,6 +270,21 @@ export interface CreateImageCardInput {
   captionPlainText: string;
 }
 
+export interface CreateFolderAliasInput {
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  sourcePath: string;
+}
+
+export interface DropPathClassificationDto {
+  path: string;
+  kind: "folder" | "image" | "unsupported";
+  fileName: string;
+  mimeType: string | null;
+}
+
 export interface UpdateImageCaptionInput {
   id: string;
   expectedRevision: number;
@@ -249,7 +294,7 @@ export interface UpdateImageCaptionInput {
 
 export interface TrashItemInput {
   id: string;
-  kind: "note" | "image" | "embed" | "board_portal";
+  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal";
 }
 
 export interface ConvertNoteToEmbedInput {
@@ -281,7 +326,7 @@ export interface TrashSelectionInput {
 /** A single representative top-level item in a Trash batch. */
 export interface TrashEntryDto {
   id: string;
-  kind: "note" | "image" | "embed" | "board";
+  kind: "note" | "image" | "embed" | "filesystem_alias" | "board";
   title: string;
   /** Thumbnail source: image/preview/cover asset when one exists. */
   thumbnailAsset: AssetDto | null;
@@ -317,7 +362,7 @@ export interface EmptyTrashResult {
 /** A single workspace search result. */
 export interface SearchResultDto {
   entityId: string;
-  kind: "board" | "note" | "link" | "image";
+  kind: "board" | "note" | "link" | "image" | "folder";
   title: string;
   /** Bounded match-context snippet; `null` when the match is in the title. */
   excerpt: string | null;
@@ -379,6 +424,10 @@ export interface WorkspaceGateway {
   importAsset(input: ImportAssetInput): Promise<AssetDto>;
   resolveAssetPath(assetId: string): Promise<string>;
   createImageCard(input: CreateImageCardInput): Promise<void>;
+  createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto>;
+  listFolderPreview(cardId: string, limit: number): Promise<FolderPreviewDto>;
+  classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]>;
+  openFolderInFinder(cardId: string): Promise<void>;
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
   convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto>;
   enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto>;

@@ -8,12 +8,16 @@ import type {
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateChildBoardInput,
+  CreateFolderAliasInput,
   CreateImageCardInput,
   CreateNoteInput,
   EmbedCardDto,
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
   ImportAssetInput,
+  DropPathClassificationDto,
+  FilesystemAliasDto,
+  FolderPreviewDto,
   MoveBoardInput,
   MoveCardInput,
   MoveCardsInput,
@@ -114,6 +118,23 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   createImageCard(input: CreateImageCardInput): Promise<void> {
     return invoke<void>("create_image_card", { input });
+  }
+
+  async createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {
+    const alias = await invoke<Omit<FilesystemAliasDto, "kind">>("create_folder_alias", { input });
+    return { ...alias, kind: "filesystem_alias" };
+  }
+
+  listFolderPreview(cardId: string, limit: number): Promise<FolderPreviewDto> {
+    return invoke<FolderPreviewDto>("list_folder_preview", { cardId, limit });
+  }
+
+  classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]> {
+    return invoke<DropPathClassificationDto[]>("classify_drop_paths", { paths });
+  }
+
+  openFolderInFinder(cardId: string): Promise<void> {
+    return invoke<void>("open_folder_in_finder", { cardId });
   }
 
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {

@@ -147,4 +147,53 @@ describe("MockWorkspaceGateway", () => {
     expect(images).toHaveLength(1);
     expect(images[0].kind).toBe("image");
   });
+
+  it("creates a persistent folder alias with deterministic preview states", async () => {
+    const gateway = new MockWorkspaceGateway();
+    const card = await gateway.createFolderAlias({
+      id: "folder-ready",
+      boardId: "home",
+      frame: { x: 20, y: 30, width: 360, height: 300 },
+      zIndex: 0,
+      sourcePath: "/mock/Video project",
+    });
+
+    expect(card).toMatchObject({
+      kind: "filesystem_alias",
+      displayName: "Video project",
+      pathHint: "/mock/Video project",
+    });
+    expect((await gateway.readCard("folder-ready")).kind).toBe("filesystem_alias");
+    await expect(gateway.listFolderPreview("folder-ready", 50)).resolves.toMatchObject({
+      status: "ready",
+      hasMore: false,
+    });
+
+    for (const [id, sourcePath, status] of [
+      ["folder-empty", "/mock/empty", "empty"],
+      ["folder-missing", "/mock/missing", "missing"],
+      ["folder-denied", "/mock/permission-lost", "permission_lost"],
+      ["folder-error", "/mock/io-error", "io_error"],
+    ] as const) {
+      await gateway.createFolderAlias({
+        id,
+        boardId: "home",
+        frame: { x: 0, y: 0, width: 360, height: 300 },
+        zIndex: 0,
+        sourcePath,
+      });
+      await expect(gateway.listFolderPreview(id, 50)).resolves.toMatchObject({ status });
+    }
+  });
+
+  it("classifies folders and images without turning unsupported files into cards", async () => {
+    const gateway = new MockWorkspaceGateway();
+    await expect(
+      gateway.classifyDropPaths(["/mock/Folder", "/mock/photo.png", "/mock/readme.txt"]),
+    ).resolves.toEqual([
+      { path: "/mock/Folder", kind: "folder", fileName: "Folder", mimeType: null },
+      { path: "/mock/photo.png", kind: "image", fileName: "photo.png", mimeType: "image/png" },
+      { path: "/mock/readme.txt", kind: "unsupported", fileName: "readme.txt", mimeType: null },
+    ]);
+  });
 });
