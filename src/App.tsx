@@ -46,12 +46,13 @@ import { createGateway } from "./services/create-gateway";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickImageFile } from "./services/asset-picker";
-import { subscribeToImageDrops } from "./services/drag-drop";
+import { routeNativeDropItems, subscribeToNativeDrops } from "./services/drag-drop";
 import { copyText } from "./services/clipboard";
 import type {
   BoardPortalDto,
   CardDto,
   EmbedCardDto,
+  FilesystemAliasDto,
   ImageCardDto,
   NoteCardDto,
   QuickBoardDto,
@@ -701,25 +702,63 @@ function App() {
     await importImageCard(picked.path, picked.fileName, picked.mimeType, 80, 80 + cardsRef.current.length * 24);
   }, [importImageCard]);
 
-  // Native drag-drop: import dropped image files at the current cursor position.
-  useEffect(() => {
-    return subscribeToImageDrops((files, x, y) => {
-      const screenToFlow = screenToFlowRef.current;
-      for (const file of files) {
-        let flowX = 80;
-        let flowY = 80 + cardsRef.current.length * 24;
-        if (screenToFlow && Number.isFinite(x) && Number.isFinite(y)) {
-          const flow = screenToFlow(x, y);
-          if (Number.isFinite(flow.x) && Number.isFinite(flow.y)) {
-            flowX = flow.x;
-            flowY = flow.y;
-          }
-        }
-        // Center the new card under the cursor.
-        void importImageCard(file.path, file.fileName, file.mimeType, flowX - 160, flowY - 120);
+  const createFolderShortcut = useCallback(
+    async (sourcePath: string, boardX: number, boardY: number) => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard) return;
+      const frame = {
+        x: Number.isFinite(boardX) ? boardX : 80,
+        y: Number.isFinite(boardY) ? boardY : 80,
+        width: 360,
+        height: 300,
+      };
+      try {
+        const card: FilesystemAliasDto = await gateway.createFolderAlias({
+          id: idGenerator.nextId(),
+          boardId: currentBoard.id,
+          frame,
+          zIndex: cardsRef.current.length,
+          sourcePath,
+        });
+        dispatch({ type: "cardAdded", card });
+      } catch (e) {
+        dispatch({ type: "failed", message: errorMessage(e) });
       }
+    },
+    [gateway, idGenerator],
+  );
+
+  // Native drag-drop: Rust classifies Finder paths before the UI creates Cards.
+  useEffect(() => {
+    return subscribeToNativeDrops((paths, x, y) => {
+      const screenToFlow = screenToFlowRef.current;
+      let flowX = 80;
+      let flowY = 80 + cardsRef.current.length * 24;
+      if (screenToFlow && Number.isFinite(x) && Number.isFinite(y)) {
+        const flow = screenToFlow(x, y);
+        if (Number.isFinite(flow.x) && Number.isFinite(flow.y)) {
+          flowX = flow.x;
+          flowY = flow.y;
+        }
+      }
+      void routeNativeDropItems({
+        gateway,
+        paths,
+        origin: { x: flowX - 180, y: flowY - 150 },
+        onFolder: (item, point) => createFolderShortcut(item.path, point.x, point.y),
+        onImage: (item, point) =>
+          importImageCard(
+            item.path,
+            item.fileName,
+            item.mimeType ?? "application/octet-stream",
+            point.x + 20,
+            point.y + 30,
+          ),
+      }).catch((e) => {
+        dispatch({ type: "failed", message: errorMessage(e) });
+      });
     });
-  }, [importImageCard]);
+  }, [createFolderShortcut, gateway, importImageCard]);
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {

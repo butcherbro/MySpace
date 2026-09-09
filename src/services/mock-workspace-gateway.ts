@@ -360,7 +360,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {
-    const displayName = input.sourcePath.split("/").filter(Boolean).at(-1) ?? input.sourcePath;
+    const pathParts = input.sourcePath.split("/").filter(Boolean);
+    const displayName = pathParts[pathParts.length - 1] ?? input.sourcePath;
     const card: FilesystemAliasDto = {
       kind: "filesystem_alias",
       id: input.id,
@@ -411,8 +412,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]> {
     return Promise.resolve(paths.map((path) => {
-      const fileName = path.split("/").filter(Boolean).at(-1) ?? path;
-      const extension = fileName.includes(".") ? fileName.split(".").at(-1)?.toLowerCase() ?? "" : "";
+      const pathParts = path.split("/").filter(Boolean);
+      const fileName = pathParts[pathParts.length - 1] ?? path;
+      const nameParts = fileName.split(".");
+      const extension = fileName.includes(".") ? nameParts[nameParts.length - 1]?.toLowerCase() ?? "" : "";
       const imageMimeTypes: Record<string, string> = {
         png: "image/png",
         jpg: "image/jpeg",
