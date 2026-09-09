@@ -1440,7 +1440,7 @@ pub fn move_card_to_board(
     let changed = tx.execute(
         "UPDATE cards
          SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4
-         WHERE id = ?5 AND revision = ?6 AND kind IN ('note', 'image', 'embed')",
+         WHERE id = ?5 AND revision = ?6 AND kind IN ('note', 'image', 'embed', 'filesystem_alias')",
         params![
             input.target_board_id,
             dest_x,

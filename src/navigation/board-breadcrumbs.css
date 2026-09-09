@@ -4,9 +4,13 @@
   gap: 4px;
   font-size: 13px;
   padding: 0 16px;
+  /* Never clip a long board path: when the window is wide enough the full
+     trail is visible; narrow windows fall back to horizontal scroll. */
   overflow-x: auto;
   white-space: nowrap;
   height: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .breadcrumbs__item {
