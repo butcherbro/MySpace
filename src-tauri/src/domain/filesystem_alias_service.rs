@@ -11,10 +11,29 @@ pub enum LocatorError {
     Io,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// RAII guard that stops a macOS security-scoped access when dropped.
+pub struct SecurityScopeGuard {
+    #[cfg(target_os = "macos")]
+    url: objc2::rc::Retained<objc2_foundation::NSURL>,
+}
+#[cfg(target_os = "macos")]
+impl Drop for SecurityScopeGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.url.stopAccessingSecurityScopedResource();
+        }
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub struct SecurityScopeGuard;
+
+/// A resolved folder plus an active security scope that must live as long as the
+/// returned path is read. Callers hold this value until done; dropping it stops
+/// the scope.
 pub struct ResolvedFolder {
     pub path: PathBuf,
     pub refreshed_locator: Option<Vec<u8>>,
+    pub _scope: Option<SecurityScopeGuard>,
 }
 
 /// Platform-specific bookmark implementation. Tests inject a fake locator so
@@ -202,9 +221,11 @@ impl FolderLocator for MacosBookmarkLocator {
         } else {
             None
         };
+        let scope = SecurityScopeGuard { url };
         Ok(ResolvedFolder {
             path: PathBuf::from(path),
             refreshed_locator,
+            _scope: Some(scope),
         })
     }
 }
