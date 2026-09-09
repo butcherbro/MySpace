@@ -8,12 +8,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AddQuickBoardInput, ApplyEmbedMetadataInput, AssetDto, BoardPortalDto, BoardSnapshot,
-    BoardSummary, Breadcrumb, CardDto, ConvertNoteToEmbedInput, CreateImageCardInput,
-    CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata,
-    Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
-    NoteCardDto, PlaceUnsortedCardInput, PortalTarget, QuickBoardDto, ReorderQuickBoardsInput, FilesystemAliasDto, CreateFilesystemAliasInput,
-    SearchResultDto, SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
-    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput, Viewport,
+    BoardSummary, Breadcrumb, CardDto, ConvertNoteToEmbedInput, CreateFilesystemAliasInput,
+    CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
+    EmbedCardDto, EmbedForMetadata, FilesystemAliasDto, Frame, ImageCardDto, MoveCardToBoardInput,
+    MoveCardsInput, MoveCardsToUnsortedInput, NoteCardDto, PlaceUnsortedCardInput, PortalTarget,
+    QuickBoardDto, ReorderQuickBoardsInput, SearchResultDto, SetNoteColorInput,
+    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
+    UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -414,9 +415,25 @@ fn load_cards(
              FROM cards c JOIN filesystem_aliases a ON a.card_id = c.id
              WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2 ORDER BY c.z_index, c.id",
         )?;
-        for row in stmt.query_map(params![board_id, unsorted_flag], |row| Ok(CardDto::FilesystemAlias(FilesystemAliasDto {
-            id: row.get(0)?, board_id: row.get(1)?, frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? }, z_index: row.get(6)?, revision: row.get(7)?, target_kind: row.get(8)?, path_hint: row.get(9)?, display_name: row.get(10)?,
-        })))? { out.push(row?); }
+        for row in stmt.query_map(params![board_id, unsorted_flag], |row| {
+            Ok(CardDto::FilesystemAlias(FilesystemAliasDto {
+                id: row.get(0)?,
+                board_id: row.get(1)?,
+                frame: Frame {
+                    x: row.get(2)?,
+                    y: row.get(3)?,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                },
+                z_index: row.get(6)?,
+                revision: row.get(7)?,
+                target_kind: row.get(8)?,
+                path_hint: row.get(9)?,
+                display_name: row.get(10)?,
+            }))
+        })? {
+            out.push(row?);
+        }
     }
 
     Ok(out)
@@ -655,8 +672,30 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
     }
 }
 
-pub fn create_filesystem_alias(conn: &mut Connection, input: &CreateFilesystemAliasInput) -> Result<(), WorkspaceError> {
-    if input.target_kind != "folder" && input.target_kind != "file" { return Err(WorkspaceError::ConstraintViolation("invalid alias target kind".into())); }
+pub fn create_filesystem_alias(
+    conn: &mut Connection,
+    input: &CreateFilesystemAliasInput,
+) -> Result<(), WorkspaceError> {
+    if input.target_kind != "folder" && input.target_kind != "file" {
+        return Err(WorkspaceError::ConstraintViolation(
+            "invalid alias target kind".into(),
+        ));
+    }
+    // Idempotent replay: a compatible existing alias returns unchanged; a
+    // conflicting reuse of the card id is rejected (no partial rows).
+    let existing_kind: Option<String> = conn
+        .query_row("SELECT kind FROM cards WHERE id = ?1", [&input.id], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if let Some(kind) = existing_kind {
+        if kind == "filesystem_alias" {
+            return Ok(());
+        }
+        return Err(WorkspaceError::ConstraintViolation(
+            "card id already in use with a different kind".into(),
+        ));
+    }
     let now = db::migrations::now_millis();
     let tx = conn.transaction()?;
     tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'filesystem_alias', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
@@ -666,7 +705,10 @@ pub fn create_filesystem_alias(conn: &mut Connection, input: &CreateFilesystemAl
 }
 
 /// Internal-only authority lookup for Rust commands. No locator bytes appear in DTOs.
-pub fn load_filesystem_alias_locator(conn: &Connection, card_id: &str) -> Result<(Vec<u8>, String, String), WorkspaceError> {
+pub fn load_filesystem_alias_locator(
+    conn: &Connection,
+    card_id: &str,
+) -> Result<(Vec<u8>, String, String), WorkspaceError> {
     conn.query_row(
         "SELECT a.locator_blob, a.path_hint, a.display_name FROM filesystem_aliases a JOIN cards c ON c.id = a.card_id WHERE a.card_id = ?1 AND c.deleted_at IS NULL",
         [card_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -675,12 +717,20 @@ pub fn load_filesystem_alias_locator(conn: &Connection, card_id: &str) -> Result
 
 /// Stale bookmark renewal is one durable transition: locator authority and
 /// display diagnostics advance together, never from a path-hint fallback.
-pub fn refresh_filesystem_alias_locator(conn: &mut Connection, card_id: &str, locator_blob: &[u8], path_hint: &str, display_name: &str) -> Result<(), WorkspaceError> {
+pub fn refresh_filesystem_alias_locator(
+    conn: &mut Connection,
+    card_id: &str,
+    locator_blob: &[u8],
+    path_hint: &str,
+    display_name: &str,
+) -> Result<(), WorkspaceError> {
     let updated = conn.execute(
         "UPDATE filesystem_aliases SET locator_blob = ?1, path_hint = ?2, display_name = ?3 WHERE card_id = ?4",
         params![locator_blob, path_hint, display_name, card_id],
     )?;
-    if updated == 0 { return Err(WorkspaceError::NotFound(card_id.to_owned())); }
+    if updated == 0 {
+        return Err(WorkspaceError::NotFound(card_id.to_owned()));
+    }
     Ok(())
 }
 ///
