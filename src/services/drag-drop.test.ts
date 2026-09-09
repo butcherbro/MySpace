@@ -14,7 +14,7 @@ describe("native drag-drop", () => {
   });
 
   it("forwards every native path, including folders, to the application classifier", async () => {
-    let listener: ((event: { payload: { paths: string[]; x: number; y: number } }) => void) | undefined;
+    let listener: ((event: { payload: { paths: string[]; position: { x: number; y: number } } }) => void) | undefined;
     listenMock.mockImplementation(async (_event, callback) => {
       listener = callback;
       return vi.fn();
@@ -24,7 +24,10 @@ describe("native drag-drop", () => {
     subscribeToNativeDrops(onDrop);
     await vi.waitFor(() => expect(listener).toBeDefined());
     listener?.({
-      payload: { paths: ["/Users/me/Folder", "/Users/me/photo.png", "/Users/me/readme.txt"], x: 100, y: 200 },
+      payload: {
+        paths: ["/Users/me/Folder", "/Users/me/photo.png", "/Users/me/readme.txt"],
+        position: { x: 100, y: 200 },
+      },
     });
 
     expect(onDrop).toHaveBeenCalledWith(

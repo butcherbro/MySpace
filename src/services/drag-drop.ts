@@ -1,10 +1,10 @@
 import type { DropPathClassificationDto } from "./workspace-gateway";
 
-/** The current cursor position (screen/window coordinates) and dropped paths. */
+/** The current cursor position (screen/window coordinates) and dropped paths.
+ * Tauri v2 delivers `{ paths, position: { x, y } }`. */
 export interface DropPayload {
   paths: string[];
-  x: number;
-  y: number;
+  position: { x: number; y: number };
 }
 
 type DropClassifier = {
@@ -52,7 +52,9 @@ export function subscribeToNativeDrops(
   void import("@tauri-apps/api/event").then(({ listen }) => {
     void listen<DropPayload>("tauri://drag-drop", (event) => {
       const paths = event.payload.paths ?? [];
-      if (paths.length > 0) onDrop(paths, event.payload.x, event.payload.y);
+      const x = event.payload.position?.x;
+      const y = event.payload.position?.y;
+      if (paths.length > 0) onDrop(paths, x, y);
     }).then((fn) => {
       unlisten = fn;
     });
