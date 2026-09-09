@@ -3,7 +3,7 @@
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::board_service;
 use myspace_lib::domain::models::{
-    CreateChildBoardInput, CreateNoteInput, Frame, TrashItem, TrashSelectionInput,
+    CreateChildBoardInput, CreateFilesystemAliasInput, CreateNoteInput, Frame, TrashItem, TrashSelectionInput,
 };
 use myspace_lib::domain::trash_service;
 use myspace_lib::repositories::workspace_repository;
@@ -13,6 +13,41 @@ fn root_board_id(conn: &rusqlite::Connection) -> String {
         r.get(0)
     })
     .unwrap()
+}
+
+#[test]
+fn trash_and_restore_folder_alias_preserves_detail_identity() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    workspace_repository::create_filesystem_alias(&mut conn, &CreateFilesystemAliasInput {
+        id: "folder-trash".into(),
+        board_id: home.clone(),
+        frame: Frame { x: 0.0, y: 0.0, width: 360.0, height: 300.0 },
+        z_index: 0,
+        target_kind: "folder".into(),
+        locator_blob: vec![9, 8, 7],
+        path_hint: "/Volumes/Studio/Video project".into(),
+        display_name: "Video project".into(),
+    }).unwrap();
+
+    let batch_id = trash_service::trash_selection(&mut conn, &TrashSelectionInput {
+        items: vec![TrashItem { id: "folder-trash".into(), kind: "filesystem_alias".into() }],
+    }).unwrap();
+    let summary = trash_service::list_trash(&conn).unwrap();
+    assert_eq!(summary.batches[0].items[0].kind, "filesystem_alias");
+    assert_eq!(summary.batches[0].items[0].title, "Video project");
+
+    trash_service::restore_trash_batch(&mut conn, &batch_id).unwrap();
+    assert!(matches!(
+        workspace_repository::load_card(&conn, "folder-trash").unwrap(),
+        myspace_lib::domain::models::CardDto::FilesystemAlias(alias)
+            if alias.path_hint == "/Volumes/Studio/Video project"
+    ));
+    assert_eq!(
+        workspace_repository::load_filesystem_alias_locator(&conn, "folder-trash").unwrap().0,
+        vec![9, 8, 7],
+    );
 }
 
 fn child_input(parent: &str, board_id: &str, portal_id: &str) -> CreateChildBoardInput {

@@ -4,9 +4,9 @@ import type { WorkspaceGateway } from "../services/workspace-gateway";
 import type { WorkspaceCommand } from "./workspace-command";
 
 export interface TrashItem {
-  /** The card id for leaf cards (note/image/embed), or the target board id for portals. */
+  /** The card id for leaf cards, or the target board id for portals. */
   id: string;
-  kind: "note" | "image" | "embed" | "board_portal";
+  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal";
 }
 
 /**

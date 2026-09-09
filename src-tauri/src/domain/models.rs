@@ -481,7 +481,7 @@ pub struct PlaceUnsortedCardInput {
 #[serde(rename_all = "camelCase")]
 pub struct TrashItem {
     pub id: String,
-    /// One of `note` | `image` | `embed` | `board_portal`.
+    /// One of `note` | `image` | `embed` | `filesystem_alias` | `board_portal`.
     pub kind: String,
 }
 
@@ -500,7 +500,7 @@ pub struct TrashSelectionInput {
 #[serde(rename_all = "camelCase")]
 pub struct TrashEntryDto {
     pub id: String,
-    /// One of `note` | `image` | `embed` | `board`.
+    /// One of `note` | `image` | `embed` | `filesystem_alias` | `board`.
     pub kind: String,
     pub title: String,
     /// Thumbnail source: the image/preview/cover asset, when one exists.

@@ -1977,6 +1977,43 @@ pub fn search_workspace(
         }
     }
 
+    // Folder shortcuts by display name or the display-only path hint.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, a.display_name, a.path_hint, c.created_at
+             FROM cards c
+             JOIN filesystem_aliases a ON a.card_id = c.id
+             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
+             WHERE c.deleted_at IS NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, board_id, display_name, path_hint, created_at) = row?;
+            let name_match = contains_query(&display_name, &q);
+            let path_match = contains_query(&path_hint, &q);
+            if name_match || path_match {
+                hits.push(SearchHit {
+                    entity_id: id,
+                    kind: "folder",
+                    title: bound_text(&display_name),
+                    excerpt: (!name_match).then(|| bound_text(&path_hint)),
+                    board_id,
+                    rank: if name_match { 0 } else { 1 },
+                    thumbnail_asset: None,
+                    created_at,
+                });
+            }
+        }
+    }
+
     // Link Cards (embed) by title, URL, or description.
     {
         let mut stmt = conn.prepare(

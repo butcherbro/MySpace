@@ -1,5 +1,15 @@
 # Lessons
 
+## 2026-09-09 — External-agent handoff is a routing decision
+
+- User correction: when the user asks to hand work to an external agent in
+  another IDE, stop doing the implementation in the current session and create
+  an exact pickup packet instead of silently continuing with internal agents.
+- Consequence: anchor detached commits on a named branch, preserve intentional
+  WIP without committing a RED block, record commands/results/root causes in
+  `.continue-here.md`, and give the user one copy-paste prompt for the external
+  agent.
+
 ## 2026-08-28 — Note pointer intent
 
 - User correction: a normal click on a Note must edit immediately. Holding the same click and moving must drag either a Note or Board Portal.

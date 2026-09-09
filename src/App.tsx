@@ -18,7 +18,7 @@ import { CommandDispatcher } from "./commands/command-dispatcher";
 import type { NoteEditorCommands } from "./editor/editor-commands";
 import type { TextColorId } from "./editor/text-color";
 import type { NoteColorId } from "./cards/note/note-color";
-import { TrashSelectionCommand } from "./commands/trash-commands";
+import { TrashSelectionCommand, type TrashItem } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
@@ -1133,16 +1133,16 @@ function App() {
 
   const handleDeleteSelection = useCallback(async () => {
     if (state.selection.length === 0) return;
-    const items = state.selection
+    const items: TrashItem[] = state.selection
       .map((id) => {
         const card = state.cards.find((c) => c.id === id);
         if (!card) return null;
         if (card.kind === "board_portal") {
           return { id: card.target.id, kind: "board_portal" as const };
         }
-        return { id: card.id, kind: card.kind as "note" | "image" };
+        return { id: card.id, kind: card.kind };
       })
-      .filter((x): x is { id: string; kind: "note" | "image" | "board_portal" } => x !== null);
+      .filter((x): x is TrashItem => x !== null);
 
     if (items.length === 0) return;
 
@@ -1251,16 +1251,16 @@ function App() {
     const ids = state.selection.length > 0 ? state.selection : [contextMenu.cardId];
     setContextMenu(null);
 
-    const items = ids
+    const items: TrashItem[] = ids
       .map((id) => {
         const card = state.cards.find((c) => c.id === id);
         if (!card) return null;
         if (card.kind === "board_portal") {
           return { id: card.target.id, kind: "board_portal" as const };
         }
-        return { id: card.id, kind: card.kind as "note" | "image" };
+        return { id: card.id, kind: card.kind };
       })
-      .filter((x): x is { id: string; kind: "note" | "image" | "board_portal" } => x !== null);
+      .filter((x): x is TrashItem => x !== null);
 
     if (items.length === 0) return;
     void dispatcher
@@ -1448,7 +1448,12 @@ function App() {
             kind: c.kind,
             width: c.frame.width,
             height: c.frame.height,
-            label: c.kind === "note" ? c.plainText || "Note" : c.kind,
+            label:
+              c.kind === "note"
+                ? c.plainText || "Note"
+                : c.kind === "filesystem_alias"
+                  ? c.displayName
+                  : c.kind,
             revision: c.revision,
             boardId: c.boardId,
             frame: { ...c.frame },
@@ -2155,6 +2160,7 @@ function App() {
             const card = state.cards.find((c) => c.id === contextMenu.cardId);
             const isImage = card?.kind === "image";
             const isPortal = card?.kind === "board_portal";
+            const isFolderAlias = card?.kind === "filesystem_alias";
             const actions: ContextMenuAction[] = [
               { id: "copy-link", label: "Copy MySpace Link", onSelect: () => void handleCopyLink() },
             ];
@@ -2163,6 +2169,13 @@ function App() {
                 { id: "copy-file-path", label: "Copy File Path", onSelect: () => void handleCopyFilePath() },
                 { id: "copy-image", label: "Copy Image", onSelect: handleCopySelectionImages },
               );
+            }
+            if (isFolderAlias) {
+              actions.push({
+                id: "show-in-finder",
+                label: "Show in Finder",
+                onSelect: () => handleOpenFolderInFinder(card.id),
+              });
             }
             if (isPortal) {
               actions.push(

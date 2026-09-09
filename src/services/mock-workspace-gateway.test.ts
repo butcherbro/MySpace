@@ -196,4 +196,32 @@ describe("MockWorkspaceGateway", () => {
       { path: "/mock/readme.txt", kind: "unsupported", fileName: "readme.txt", mimeType: null },
     ]);
   });
+
+  it("searches, trashes, restores, and projects folder shortcuts as normal cards", async () => {
+    const gateway = new MockWorkspaceGateway();
+    await gateway.createFolderAlias({
+      id: "folder-1",
+      boardId: "home",
+      frame: { x: 20, y: 30, width: 360, height: 300 },
+      zIndex: 0,
+      sourcePath: "/Volumes/Studio/Video project",
+    });
+
+    await expect(gateway.searchWorkspace("video project")).resolves.toMatchObject([
+      { entityId: "folder-1", kind: "folder", title: "Video project" },
+    ]);
+    await expect(gateway.searchWorkspace("studio")).resolves.toMatchObject([
+      { entityId: "folder-1", kind: "folder", excerpt: "/Volumes/Studio/Video project" },
+    ]);
+
+    const batchId = await gateway.trashSelection({
+      items: [{ id: "folder-1", kind: "filesystem_alias" }],
+    });
+    await expect(gateway.listTrash()).resolves.toMatchObject({
+      batches: [{ items: [{ id: "folder-1", kind: "filesystem_alias", title: "Video project" }] }],
+    });
+
+    await gateway.restoreTrashBatch(batchId);
+    await expect(gateway.readCard("folder-1")).resolves.toMatchObject({ kind: "filesystem_alias" });
+  });
 });
