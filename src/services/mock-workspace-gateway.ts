@@ -33,6 +33,7 @@ import type {
   UpdateNoteInput,
   WorkspaceGateway,
 } from "./workspace-gateway";
+import { denseBoardSnapshot } from "../test/dense-board-fixture";
 
 /**
  * In-memory gateway for browser-mode tests and fixtures. It keeps a single
@@ -82,6 +83,15 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot> {
+    // Test-only dense fixture activated by a query parameter.
+    if (
+      boardId === "home" &&
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("fixture") === "dense"
+    ) {
+      return Promise.resolve(denseBoardSnapshot());
+    }
+
     const board = this.boards.get(boardId);
     if (!board) {
       return Promise.reject(new Error(`boarding not found: ${boardId}`));
