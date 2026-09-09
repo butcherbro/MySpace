@@ -132,3 +132,15 @@
   overlap (`portalAtPoint`), not by `data-board-drop-id` hit-testing.
 - `set_note_color` must NOT bump the card revision: color is orthogonal to text, and
   bumping it races the text autosave's `expected_revision` on the same card.
+
+## 2026-09-09 — Filesystem shortcuts must read as folders and reveal names
+
+- User preference: a folder shortcut should keep a large, unmistakable blue
+  folder silhouette while showing a Finder-like list of real child names inside
+  that silhouette. Thumbnail-only mosaics do not provide enough information.
+- Design consequence: use the folder surface as a bounded live-content window
+  with file-type icons, names, and compact metadata; preserve the silhouette at
+  every resized height and collapse overflow behind an item count.
+- User-approved V1 scope: the folder shortcut is resizable from the bottom-right
+  corner, but only the direct Finder link and shallow live preview ship first.
+  In-card navigation/expansion and copied File Cards remain later slices.
