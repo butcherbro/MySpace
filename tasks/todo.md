@@ -5,14 +5,18 @@
 - [x] Checkpoint Tasks 1–6 on `codex/folder-shortcut-v1` through commit `cabdcaa`:
   schema/DTOs, macOS bookmark boundary, commands/projections, gateway/mock,
   native Finder drop routing, and the initial resizable blue Folder Card.
-- [ ] Complete and commit the current Task 7 WIP: Search, Trash/restore,
-  Unsorted, context-menu Show in Finder, and all exhaustive Card-kind boundaries.
-- [ ] Close the backend correctness gaps listed in `.continue-here.md`: do not
-  hold the SQLite mutex across filesystem I/O, balance security-scoped access,
-  preserve image MIME/SVG drop behavior, implement ID replay, and expand the
-  thin migration/service coverage.
-- [ ] Complete Task 8 E2E/manual docs, full frontend/Rust gate, packaged macOS
-  Finder-drop/restart/move/open acceptance, and approved-design comparison.
+- [x] Task 7 integrated and committed: Search by display name/path hint, Trash
+  title/kind/restore, Unsorted alias preview, context-menu Show in Finder, and
+  exhaustive Card-kind boundaries (`041bf0e`).
+- [x] Backend correctness gaps closed and committed: SQLite mutex no longer held
+  across filesystem I/O, balanced security-scoped access via RAII guard, image
+  MIME/SVG drop classification preserved, ID replay implemented, refreshed
+  identity on stale previews, and expanded service/migration coverage
+  (`d73b53f`, `e74486e`, `200da0c`).
+- [x] Task 8 E2E + manual docs committed (`test: verify folder shortcut lifecycle`).
+- [ ] Packaged macOS Finder-drop/restart/move/open acceptance and comparison to
+  the approved PNG remain a manual step for a signed build; `tauri dev` is not
+  bookmark-durability evidence.
 
 ## Current V1 delta — 2026-09-05
 

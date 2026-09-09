@@ -87,13 +87,42 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot> {
+    // Test-only folder-shortcut fixture: a single alias, no other cards.
+    if (
+      boardId === "home" &&
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("fixture") === "folder"
+    ) {
+      const alias: FilesystemAliasDto = {
+        kind: "filesystem_alias",
+        id: "folder-0",
+        boardId: "home",
+        frame: { x: 40, y: 40, width: 280, height: 180 },
+        zIndex: 0,
+        revision: 1,
+        targetKind: "folder",
+        pathHint: "/Users/me/Research",
+        displayName: "Research",
+      };
+      this.snapshot.cards = [structuredClone(alias)];
+      return Promise.resolve({
+        board: this.board,
+        breadcrumbs: [{ id: "home", title: "Home" }],
+        viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
+        cards: [structuredClone(alias)],
+        unsortedCards: [],
+      });
+    }
     // Test-only dense fixture activated by a query parameter.
     if (
       boardId === "home" &&
       typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("fixture") === "dense"
     ) {
-      return Promise.resolve(denseBoardSnapshot());
+      const snap = denseBoardSnapshot();
+      // Keep the mock's in-memory cards in sync so readCard/update/trash work.
+      this.snapshot.cards = structuredClone(snap.cards);
+      return Promise.resolve(snap);
     }
 
     const board = this.boards.get(boardId);
