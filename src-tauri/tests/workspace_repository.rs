@@ -7,26 +7,69 @@ fn filesystem_alias_is_serialized_by_snapshot_and_read_card() {
     let mut conn = open_in_memory().unwrap();
     bootstrap::bootstrap(&mut conn).unwrap();
     let home = root_board_id(&conn);
-    let input = CreateFilesystemAliasInput { id: uuid::Uuid::now_v7().to_string(), board_id: home.clone(), frame: Frame { x: 1.0, y: 2.0, width: 280.0, height: 180.0 }, z_index: 0, target_kind: "folder".into(), locator_blob: b"opaque".to_vec(), path_hint: "/display".into(), display_name: "Folder".into() };
+    let input = CreateFilesystemAliasInput {
+        id: uuid::Uuid::now_v7().to_string(),
+        board_id: home.clone(),
+        frame: Frame {
+            x: 1.0,
+            y: 2.0,
+            width: 280.0,
+            height: 180.0,
+        },
+        z_index: 0,
+        target_kind: "folder".into(),
+        locator_blob: b"opaque".to_vec(),
+        path_hint: "/display".into(),
+        display_name: "Folder".into(),
+    };
     workspace_repository::create_filesystem_alias(&mut conn, &input).unwrap();
     let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
-    assert!(matches!(&snapshot.cards[0], CardDto::FilesystemAlias(alias) if alias.display_name == "Folder" && alias.path_hint == "/display"));
-    assert!(matches!(workspace_repository::load_card(&conn, &input.id).unwrap(), CardDto::FilesystemAlias(_)));
+    assert!(
+        matches!(&snapshot.cards[0], CardDto::FilesystemAlias(alias) if alias.display_name == "Folder" && alias.path_hint == "/display")
+    );
+    assert!(matches!(
+        workspace_repository::load_card(&conn, &input.id).unwrap(),
+        CardDto::FilesystemAlias(_)
+    ));
 }
 
 #[test]
 fn stale_alias_refresh_replaces_authority_and_display_metadata_atomically() {
-    let mut conn = open_in_memory().unwrap(); bootstrap::bootstrap(&mut conn).unwrap(); let board_id = root_board_id(&conn);
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
     let id = uuid::Uuid::now_v7().to_string();
-    workspace_repository::create_filesystem_alias(&mut conn, &CreateFilesystemAliasInput { id: id.clone(), board_id, frame: Frame { x: 0.0, y: 0.0, width: 280.0, height: 180.0 }, z_index: 0, target_kind: "folder".into(), locator_blob: b"old".to_vec(), path_hint: "/old".into(), display_name: "Old".into() }).unwrap();
-    workspace_repository::refresh_filesystem_alias_locator(&mut conn, &id, b"new", "/new", "New").unwrap();
-    assert_eq!(workspace_repository::load_filesystem_alias_locator(&conn, &id).unwrap(), (b"new".to_vec(), "/new".into(), "New".into()));
+    workspace_repository::create_filesystem_alias(
+        &mut conn,
+        &CreateFilesystemAliasInput {
+            id: id.clone(),
+            board_id,
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 280.0,
+                height: 180.0,
+            },
+            z_index: 0,
+            target_kind: "folder".into(),
+            locator_blob: b"old".to_vec(),
+            path_hint: "/old".into(),
+            display_name: "Old".into(),
+        },
+    )
+    .unwrap();
+    workspace_repository::refresh_filesystem_alias_locator(&mut conn, &id, b"new", "/new", "New")
+        .unwrap();
+    assert_eq!(
+        workspace_repository::load_filesystem_alias_locator(&conn, &id).unwrap(),
+        (b"new".to_vec(), "/new".into(), "New".into())
+    );
 }
 use myspace_lib::domain::asset_service;
 use myspace_lib::domain::models::{
-    CardDto, CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame, ImportAssetInput,
-    LinkBatchItem, MoveCardItem, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
-    UpdateViewportInput,
+    CardDto, CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput,
+    CreateNoteInput, Frame, ImportAssetInput, LinkBatchItem, MoveCardItem, MoveCardsInput,
+    UpdateCardFrameInput, UpdateNoteInput, UpdateViewportInput,
 };
 use myspace_lib::repositories::workspace_repository;
 

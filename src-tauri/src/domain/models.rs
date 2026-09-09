@@ -158,7 +158,13 @@ pub struct FolderEntryDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FolderPreviewStatus { Ready, Empty, Missing, PermissionLost, IoError }
+pub enum FolderPreviewStatus {
+    Ready,
+    Empty,
+    Missing,
+    PermissionLost,
+    IoError,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

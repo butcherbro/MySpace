@@ -10,8 +10,9 @@ use rusqlite::Connection;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    AddQuickBoardInput, BoardSnapshot, BoardSummary, CardDto, CreateLinkBatchInput, CreateFilesystemAliasInput,
-    CreateLinkBatchResult, QuickBoardDto, ReorderQuickBoardsInput, TrashItem, TrashSelectionInput,
+    AddQuickBoardInput, BoardSnapshot, BoardSummary, CardDto, CreateFilesystemAliasInput,
+    CreateLinkBatchInput, CreateLinkBatchResult, QuickBoardDto, ReorderQuickBoardsInput, TrashItem,
+    TrashSelectionInput,
 };
 use crate::domain::trash_service;
 use crate::repositories::workspace_repository;
@@ -55,7 +56,10 @@ pub fn parse_address(address: &str) -> Result<(String, String), WorkspaceError> 
 pub struct WorkspaceService;
 
 impl WorkspaceService {
-    pub fn create_filesystem_alias(conn: &mut Connection, input: &CreateFilesystemAliasInput) -> Result<(), WorkspaceError> {
+    pub fn create_filesystem_alias(
+        conn: &mut Connection,
+        input: &CreateFilesystemAliasInput,
+    ) -> Result<(), WorkspaceError> {
         workspace_repository::create_filesystem_alias(conn, input)
     }
     /// Lists all active boards.

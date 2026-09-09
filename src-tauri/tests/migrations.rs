@@ -89,7 +89,9 @@ fn migration_is_recorded_in_schema_migrations() {
 #[test]
 fn filesystem_alias_migration_adds_detail_table_and_kind_without_fk_debt() {
     let conn = open_in_memory().unwrap();
-    assert!(table_names(&conn).iter().any(|name| name == "filesystem_aliases"));
+    assert!(table_names(&conn)
+        .iter()
+        .any(|name| name == "filesystem_aliases"));
     conn.execute(
         "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('alias-ws', 'Home', 'alias-home', 0, 0)",
         [],
@@ -106,9 +108,22 @@ fn filesystem_alias_migration_adds_detail_table_and_kind_without_fk_debt() {
         "INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES ('alias-card', 'folder', X'0102', '/display-only', 'Folder')",
         [],
     ).unwrap();
-    let preserved: (i64, i64) = conn.query_row("SELECT revision, unsorted FROM cards WHERE id = 'alias-card'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    let preserved: (i64, i64) = conn
+        .query_row(
+            "SELECT revision, unsorted FROM cards WHERE id = 'alias-card'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
     assert_eq!(preserved, (7, 1));
-    assert_eq!(conn.prepare("PRAGMA foreign_key_check").unwrap().query_map([], |_| Ok(())).unwrap().count(), 0);
+    assert_eq!(
+        conn.prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query_map([], |_| Ok(()))
+            .unwrap()
+            .count(),
+        0
+    );
 }
 
 /// Regression: applying migration 2 (which re-creates `cards`) over a database
