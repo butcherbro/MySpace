@@ -672,6 +672,17 @@ pub fn load_filesystem_alias_locator(conn: &Connection, card_id: &str) -> Result
         [card_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     ).map_err(WorkspaceError::from)
 }
+
+/// Stale bookmark renewal is one durable transition: locator authority and
+/// display diagnostics advance together, never from a path-hint fallback.
+pub fn refresh_filesystem_alias_locator(conn: &mut Connection, card_id: &str, locator_blob: &[u8], path_hint: &str, display_name: &str) -> Result<(), WorkspaceError> {
+    let updated = conn.execute(
+        "UPDATE filesystem_aliases SET locator_blob = ?1, path_hint = ?2, display_name = ?3 WHERE card_id = ?4",
+        params![locator_blob, path_hint, display_name, card_id],
+    )?;
+    if updated == 0 { return Err(WorkspaceError::NotFound(card_id.to_owned())); }
+    Ok(())
+}
 ///
 /// A failed insert must leave no orphaned `cards` row: both inserts share one
 /// transaction, so any failure rolls both back.
