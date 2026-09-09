@@ -11,7 +11,7 @@ use crate::domain::models::{
     BoardSummary, Breadcrumb, CardDto, ConvertNoteToEmbedInput, CreateImageCardInput,
     CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata,
     Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
-    NoteCardDto, PlaceUnsortedCardInput, PortalTarget, QuickBoardDto, ReorderQuickBoardsInput,
+    NoteCardDto, PlaceUnsortedCardInput, PortalTarget, QuickBoardDto, ReorderQuickBoardsInput, FilesystemAliasDto, CreateFilesystemAliasInput,
     SearchResultDto, SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
     UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput, Viewport,
 };
@@ -407,6 +407,18 @@ fn load_cards(
         }
     }
 
+    // Alias identity is SQLite-only: this projection never resolves locator bytes.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision, a.target_kind, a.path_hint, a.display_name
+             FROM cards c JOIN filesystem_aliases a ON a.card_id = c.id
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2 ORDER BY c.z_index, c.id",
+        )?;
+        for row in stmt.query_map(params![board_id, unsorted_flag], |row| Ok(CardDto::FilesystemAlias(FilesystemAliasDto {
+            id: row.get(0)?, board_id: row.get(1)?, frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? }, z_index: row.get(6)?, revision: row.get(7)?, target_kind: row.get(8)?, path_hint: row.get(9)?, display_name: row.get(10)?,
+        })))? { out.push(row?); }
+    }
+
     Ok(out)
 }
 
@@ -633,10 +645,32 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
             )
             .map_err(WorkspaceError::from)
         }
+        "filesystem_alias" => conn.query_row(
+            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision, a.target_kind, a.path_hint, a.display_name FROM cards c JOIN filesystem_aliases a ON a.card_id = c.id WHERE c.id = ?1 AND c.deleted_at IS NULL",
+            [card_id], |row| Ok(CardDto::FilesystemAlias(FilesystemAliasDto { id: row.get(0)?, board_id: row.get(1)?, frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? }, z_index: row.get(6)?, revision: row.get(7)?, target_kind: row.get(8)?, path_hint: row.get(9)?, display_name: row.get(10)? }))
+        ).map_err(WorkspaceError::from),
         other => Err(WorkspaceError::ConstraintViolation(format!(
             "unknown card kind: {other}"
         ))),
     }
+}
+
+pub fn create_filesystem_alias(conn: &mut Connection, input: &CreateFilesystemAliasInput) -> Result<(), WorkspaceError> {
+    if input.target_kind != "folder" && input.target_kind != "file" { return Err(WorkspaceError::ConstraintViolation("invalid alias target kind".into())); }
+    let now = db::migrations::now_millis();
+    let tx = conn.transaction()?;
+    tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'filesystem_alias', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
+    tx.execute("INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES (?1, ?2, ?3, ?4, ?5)", params![input.id, input.target_kind, input.locator_blob, input.path_hint, input.display_name])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Internal-only authority lookup for Rust commands. No locator bytes appear in DTOs.
+pub fn load_filesystem_alias_locator(conn: &Connection, card_id: &str) -> Result<(Vec<u8>, String, String), WorkspaceError> {
+    conn.query_row(
+        "SELECT a.locator_blob, a.path_hint, a.display_name FROM filesystem_aliases a JOIN cards c ON c.id = a.card_id WHERE a.card_id = ?1 AND c.deleted_at IS NULL",
+        [card_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).map_err(WorkspaceError::from)
 }
 ///
 /// A failed insert must leave no orphaned `cards` row: both inserts share one

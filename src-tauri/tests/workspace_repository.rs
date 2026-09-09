@@ -1,9 +1,21 @@
 //! Repository tests: load a board snapshot and create notes transactionally.
 
 use myspace_lib::db::{bootstrap, open_in_memory};
+
+#[test]
+fn filesystem_alias_is_serialized_by_snapshot_and_read_card() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    let input = CreateFilesystemAliasInput { id: uuid::Uuid::now_v7().to_string(), board_id: home.clone(), frame: Frame { x: 1.0, y: 2.0, width: 280.0, height: 180.0 }, z_index: 0, target_kind: "folder".into(), locator_blob: b"opaque".to_vec(), path_hint: "/display".into(), display_name: "Folder".into() };
+    workspace_repository::create_filesystem_alias(&mut conn, &input).unwrap();
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &home).unwrap();
+    assert!(matches!(&snapshot.cards[0], CardDto::FilesystemAlias(alias) if alias.display_name == "Folder" && alias.path_hint == "/display"));
+    assert!(matches!(workspace_repository::load_card(&conn, &input.id).unwrap(), CardDto::FilesystemAlias(_)));
+}
 use myspace_lib::domain::asset_service;
 use myspace_lib::domain::models::{
-    CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame, ImportAssetInput,
+    CardDto, CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame, ImportAssetInput,
     LinkBatchItem, MoveCardItem, MoveCardsInput, UpdateCardFrameInput, UpdateNoteInput,
     UpdateViewportInput,
 };

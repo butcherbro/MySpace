@@ -342,6 +342,20 @@ pub struct CreateImageCardInput {
     pub caption_plain_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFilesystemAliasInput {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub target_kind: String,
+    #[serde(skip_serializing, skip_deserializing, default)]
+    pub locator_blob: Vec<u8>,
+    pub path_hint: String,
+    pub display_name: String,
+}
+
 /// Input for updating an image card's caption, bumping its revision with an
 /// optimistic guard (mirrors `UpdateNoteInput`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
