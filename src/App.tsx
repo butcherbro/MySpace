@@ -1239,6 +1239,11 @@ function App() {
     [gateway],
   );
 
+  const handleLoadFolderPreview = useCallback((id: string) => gateway.listFolderPreview(id, 50), [gateway]);
+  const handleOpenFolderInFinder = useCallback((id: string) => {
+    void gateway.openFolderInFinder(id).catch((error) => dispatch({ type: "failed", message: errorMessage(error) }));
+  }, [gateway]);
+
   const handleContextDelete = useCallback(() => {
     if (!contextMenu) return;
     // Delete the current selection, not just the single right-clicked card. If
@@ -2317,6 +2322,9 @@ function App() {
                 onResizeNote: handleResizeNote,
                 onResizeImage: handleResizeNote,
                 onResizeEmbed: handleResizeNote,
+                onResizeFilesystemAlias: handleResizeNote,
+                onLoadFolderPreview: handleLoadFolderPreview,
+                onOpenFolderInFinder: handleOpenFolderInFinder,
                 highlightedPortalId,
                 highlightQuery,
                 onNoteCommands: handleNoteCommands,
