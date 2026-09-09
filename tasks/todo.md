@@ -87,15 +87,17 @@ architecture pass before sizing; `blocked` = depends on another item.
 
 ### 4. Real filesystem shortcuts (folder/file aliases)
 
-- `discuss` — Project a real macOS folder's contents onto the Board as a visual
-  map (no copying), click to open in Finder. Icons/thumbnails preferred; readable
-  preview of text/json is an ideal, not required. Alias file links too. Same
-  external-world theme as item 1 — recommend one combined architecture pass.
-- `wishlist` (related) — **File/document cards**: drag files of any format (text,
-  Markdown, JSON, CSV/Excel, etc.) onto a Board so they are stored (copied into the
-  managed asset store) and rendered as a card with a preview (text/MD/JSON/table)
-  and an open-in-external-app action. This is the copy-in counterpart to the
-  no-copy folder shortcut above; both are one "external world" slice.
+- `discuss` — Drag-and-drop a real macOS folder onto a Board to create a **folder
+  shortcut** (no copying): a card that shows its live contents (list of files and
+  subfolders) and a small "reveal in Finder" action (open the folder; opening a
+  file reveals it selected in Finder). For files, drag creates a **file card**
+  (copied into the managed asset store) with a preview (text/MD/JSON/table) and an
+  open-in-external-app action.
+- **Drop rule (default)**: folder → shortcut; file → copied file card. Hold `⌥`
+  while dropping a file to create an alias shortcut instead (for heavy files like
+  video that should not be duplicated). All interaction is drag-and-drop.
+- Same external-world theme as item 1 — recommend one combined architecture pass
+  (folder listing, file-type detection, preview rendering, "open in Finder").
 
 ### 5. Unsorted side panel (Milanote-style)
 
@@ -181,6 +183,23 @@ architecture pass before sizing; `blocked` = depends on another item.
   source card is selected. This is a large separate slice: a `connections`
   migration + backend commands, gateway/state, an SVG overlay above React Flow,
   and the drag-to-connect interaction.
+
+### 11. Grouping (combine cards into a fixed group)
+
+- `wishlist` — select several cards, then combine them into a persistent group
+  (give it a name + color), like Obsidian/Milanote. The group moves/translates as
+  one unit, can be resized, and accepts new members; its members keep their
+  relative layout. A marquee-style selection frame already exists; a small
+  context menu on selection would offer "Group". Needs a `groups` entity
+  (migration), backend commands, and group rendering/interaction.
+
+### 12. Favicon deduplication
+
+- `wishlist` — link enrichment currently stores a separate favicon per Link Card,
+  so 10 YouTube links yield 10 identical YouTube favicons. Introduce a shared
+  favicon registry: for common hosts (e.g. YouTube) reuse one stored favicon
+  instead of saving duplicates, and collapse existing duplicates. Same
+  mark-and-sweep/refcount-free cleanup as asset GC.
 
 ## Ordering decision
 
