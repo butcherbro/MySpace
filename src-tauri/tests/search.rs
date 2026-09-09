@@ -4,8 +4,8 @@
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::board_service;
 use myspace_lib::domain::models::{
-    CreateChildBoardInput, CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame,
-    LinkBatchItem,
+    CreateChildBoardInput, CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput,
+    CreateNoteInput, Frame, LinkBatchItem,
 };
 use myspace_lib::domain::trash_service;
 use myspace_lib::repositories::workspace_repository;
@@ -15,6 +15,47 @@ fn root_board_id(conn: &rusqlite::Connection) -> String {
         r.get(0)
     })
     .unwrap()
+}
+
+#[test]
+fn search_matches_folder_alias_display_name_and_path_hint() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    workspace_repository::create_filesystem_alias(
+        &mut conn,
+        &CreateFilesystemAliasInput {
+            id: "folder-1".into(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 360.0,
+                height: 300.0,
+            },
+            z_index: 0,
+            target_kind: "folder".into(),
+            locator_blob: vec![1, 2, 3],
+            path_hint: "/Volumes/Studio/Video project".into(),
+            display_name: "Video project".into(),
+        },
+    )
+    .unwrap();
+
+    let by_name = workspace_repository::search_workspace(&conn, "VIDEO PROJECT").unwrap();
+    assert_eq!(by_name.len(), 1);
+    assert_eq!(by_name[0].kind, "folder");
+    assert_eq!(by_name[0].entity_id, "folder-1");
+    assert_eq!(by_name[0].title, "Video project");
+    assert_eq!(by_name[0].excerpt, None);
+
+    let by_path = workspace_repository::search_workspace(&conn, "studio").unwrap();
+    assert_eq!(by_path.len(), 1);
+    assert_eq!(by_path[0].entity_id, "folder-1");
+    assert_eq!(
+        by_path[0].excerpt.as_deref(),
+        Some("/Volumes/Studio/Video project")
+    );
 }
 
 fn child_input(

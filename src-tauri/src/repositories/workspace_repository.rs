@@ -8,12 +8,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AddQuickBoardInput, ApplyEmbedMetadataInput, AssetDto, BoardPortalDto, BoardSnapshot,
-    BoardSummary, Breadcrumb, CardDto, ConvertNoteToEmbedInput, CreateImageCardInput,
-    CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata,
-    Frame, ImageCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
-    NoteCardDto, PlaceUnsortedCardInput, PortalTarget, QuickBoardDto, ReorderQuickBoardsInput,
-    SearchResultDto, SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
-    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput, Viewport,
+    BoardSummary, Breadcrumb, CardDto, ConvertNoteToEmbedInput, CreateFilesystemAliasInput,
+    CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
+    EmbedCardDto, EmbedForMetadata, FilesystemAliasDto, Frame, ImageCardDto, MoveCardToBoardInput,
+    MoveCardsInput, MoveCardsToUnsortedInput, NoteCardDto, PlaceUnsortedCardInput, PortalTarget,
+    QuickBoardDto, ReorderQuickBoardsInput, SearchResultDto, SetNoteColorInput,
+    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
+    UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -407,6 +408,34 @@ fn load_cards(
         }
     }
 
+    // Alias identity is SQLite-only: this projection never resolves locator bytes.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision, a.target_kind, a.path_hint, a.display_name
+             FROM cards c JOIN filesystem_aliases a ON a.card_id = c.id
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2 ORDER BY c.z_index, c.id",
+        )?;
+        for row in stmt.query_map(params![board_id, unsorted_flag], |row| {
+            Ok(CardDto::FilesystemAlias(FilesystemAliasDto {
+                id: row.get(0)?,
+                board_id: row.get(1)?,
+                frame: Frame {
+                    x: row.get(2)?,
+                    y: row.get(3)?,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                },
+                z_index: row.get(6)?,
+                revision: row.get(7)?,
+                target_kind: row.get(8)?,
+                path_hint: row.get(9)?,
+                display_name: row.get(10)?,
+            }))
+        })? {
+            out.push(row?);
+        }
+    }
+
     Ok(out)
 }
 
@@ -633,10 +662,76 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
             )
             .map_err(WorkspaceError::from)
         }
+        "filesystem_alias" => conn.query_row(
+            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision, a.target_kind, a.path_hint, a.display_name FROM cards c JOIN filesystem_aliases a ON a.card_id = c.id WHERE c.id = ?1 AND c.deleted_at IS NULL",
+            [card_id], |row| Ok(CardDto::FilesystemAlias(FilesystemAliasDto { id: row.get(0)?, board_id: row.get(1)?, frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? }, z_index: row.get(6)?, revision: row.get(7)?, target_kind: row.get(8)?, path_hint: row.get(9)?, display_name: row.get(10)? }))
+        ).map_err(WorkspaceError::from),
         other => Err(WorkspaceError::ConstraintViolation(format!(
             "unknown card kind: {other}"
         ))),
     }
+}
+
+pub fn create_filesystem_alias(
+    conn: &mut Connection,
+    input: &CreateFilesystemAliasInput,
+) -> Result<(), WorkspaceError> {
+    if input.target_kind != "folder" && input.target_kind != "file" {
+        return Err(WorkspaceError::ConstraintViolation(
+            "invalid alias target kind".into(),
+        ));
+    }
+    // Idempotent replay: a compatible existing alias returns unchanged; a
+    // conflicting reuse of the card id is rejected (no partial rows).
+    let existing_kind: Option<String> = conn
+        .query_row("SELECT kind FROM cards WHERE id = ?1", [&input.id], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if let Some(kind) = existing_kind {
+        if kind == "filesystem_alias" {
+            return Ok(());
+        }
+        return Err(WorkspaceError::ConstraintViolation(
+            "card id already in use with a different kind".into(),
+        ));
+    }
+    let now = db::migrations::now_millis();
+    let tx = conn.transaction()?;
+    tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'filesystem_alias', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
+    tx.execute("INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES (?1, ?2, ?3, ?4, ?5)", params![input.id, input.target_kind, input.locator_blob, input.path_hint, input.display_name])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Internal-only authority lookup for Rust commands. No locator bytes appear in DTOs.
+pub fn load_filesystem_alias_locator(
+    conn: &Connection,
+    card_id: &str,
+) -> Result<(Vec<u8>, String, String), WorkspaceError> {
+    conn.query_row(
+        "SELECT a.locator_blob, a.path_hint, a.display_name FROM filesystem_aliases a JOIN cards c ON c.id = a.card_id WHERE a.card_id = ?1 AND c.deleted_at IS NULL",
+        [card_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).map_err(WorkspaceError::from)
+}
+
+/// Stale bookmark renewal is one durable transition: locator authority and
+/// display diagnostics advance together, never from a path-hint fallback.
+pub fn refresh_filesystem_alias_locator(
+    conn: &mut Connection,
+    card_id: &str,
+    locator_blob: &[u8],
+    path_hint: &str,
+    display_name: &str,
+) -> Result<(), WorkspaceError> {
+    let updated = conn.execute(
+        "UPDATE filesystem_aliases SET locator_blob = ?1, path_hint = ?2, display_name = ?3 WHERE card_id = ?4",
+        params![locator_blob, path_hint, display_name, card_id],
+    )?;
+    if updated == 0 {
+        return Err(WorkspaceError::NotFound(card_id.to_owned()));
+    }
+    Ok(())
 }
 ///
 /// A failed insert must leave no orphaned `cards` row: both inserts share one
@@ -1345,7 +1440,7 @@ pub fn move_card_to_board(
     let changed = tx.execute(
         "UPDATE cards
          SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4
-         WHERE id = ?5 AND revision = ?6 AND kind IN ('note', 'image', 'embed')",
+         WHERE id = ?5 AND revision = ?6 AND kind IN ('note', 'image', 'embed', 'filesystem_alias')",
         params![
             input.target_board_id,
             dest_x,
@@ -1406,7 +1501,7 @@ pub fn move_cards_to_board_unsorted(
     // Validate every card revision up front so a stale one rolls back the batch.
     for item in &input.cards {
         let actual: i64 = tx.query_row(
-            "SELECT revision FROM cards WHERE id = ?1 AND kind IN ('note','image','embed')",
+            "SELECT revision FROM cards WHERE id = ?1 AND kind IN ('note','image','embed','filesystem_alias')",
             [item.id.as_str()],
             |r| r.get(0),
         )?;
@@ -1422,7 +1517,7 @@ pub fn move_cards_to_board_unsorted(
         tx.execute(
             "UPDATE cards
              SET board_id = ?1, unsorted = 1, revision = revision + 1, updated_at = ?2
-             WHERE id = ?3 AND revision = ?4 AND kind IN ('note','image','embed')",
+             WHERE id = ?3 AND revision = ?4 AND kind IN ('note','image','embed','filesystem_alias')",
             params![input.target_board_id, now, item.id, item.expected_revision],
         )?;
     }
@@ -1441,7 +1536,7 @@ pub fn place_unsorted_card(
     let changed = conn.execute(
         "UPDATE cards
          SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
-         WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed')",
+         WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed','filesystem_alias')",
         params![
             input.frame.x,
             input.frame.y,
@@ -1926,6 +2021,43 @@ pub fn search_workspace(
                     board_id,
                     rank: 1,
                     thumbnail_asset: Some(thumb),
+                    created_at,
+                });
+            }
+        }
+    }
+
+    // Folder shortcuts by display name or the display-only path hint.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, a.display_name, a.path_hint, c.created_at
+             FROM cards c
+             JOIN filesystem_aliases a ON a.card_id = c.id
+             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
+             WHERE c.deleted_at IS NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, board_id, display_name, path_hint, created_at) = row?;
+            let name_match = contains_query(&display_name, &q);
+            let path_match = contains_query(&path_hint, &q);
+            if name_match || path_match {
+                hits.push(SearchHit {
+                    entity_id: id,
+                    kind: "folder",
+                    title: bound_text(&display_name),
+                    excerpt: (!name_match).then(|| bound_text(&path_hint)),
+                    board_id,
+                    rank: if name_match { 0 } else { 1 },
+                    thumbnail_asset: None,
                     created_at,
                 });
             }

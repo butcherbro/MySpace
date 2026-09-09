@@ -400,6 +400,7 @@ fn handle_tool_call(
                         myspace_lib::domain::models::CardDto::BoardPortal(p) => p.revision,
                         myspace_lib::domain::models::CardDto::Image(i) => i.revision,
                         myspace_lib::domain::models::CardDto::Embed(e) => e.revision,
+                        myspace_lib::domain::models::CardDto::FilesystemAlias(a) => a.revision,
                     },
                     Err(e) => {
                         results.push(serde_json::json!({ "id": id, "status": "failed", "error": e.to_string() }));

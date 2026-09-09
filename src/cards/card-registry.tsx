@@ -12,6 +12,7 @@ import { BoardPortalCard } from "./board/BoardPortalCard";
 import { NoteCard } from "./note/NoteCard";
 import { ImageCard } from "./image/ImageCard";
 import { EmbedCard } from "./link/EmbedCard";
+import { FolderShortcutCard } from "./folder/FolderShortcutCard";
 
 export interface CardRenderContext {
   /** Whether the card (if a note) is currently being edited. */
@@ -40,6 +41,12 @@ export interface CardRenderContext {
   onResizeImage: (id: string, width: number, height: number) => void;
   /** Persist a manual resize for embed (Link) cards. */
   onResizeEmbed: (id: string, width: number, height: number) => void;
+  /** Persist a manual resize for folder shortcuts. */
+  onResizeFilesystemAlias: (id: string, width: number, height: number) => void;
+  /** Fetch the bounded live folder preview exactly when a shortcut mounts. */
+  onLoadFolderPreview: (id: string) => Promise<import("../services/workspace-gateway").FolderPreviewDto>;
+  /** Reveal the resolved bookmark in Finder without exposing its path to JS. */
+  onOpenFolderInFinder: (id: string) => void;
   /** The portal currently being hovered during a card drag, if any. */
   highlightedPortalId: string | null;
   /** Transient search phrase to highlight inside cards (UI-only). */
@@ -95,6 +102,10 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         highlightQuery={ctx.highlightQuery}
       />
     );
+  }
+
+  if (card.kind === "filesystem_alias") {
+    return <FolderShortcutCard alias={card} loadPreview={ctx.onLoadFolderPreview} onOpenFinder={ctx.onOpenFolderInFinder} onResize={ctx.onResizeFilesystemAlias} onContextMenu={ctx.onContextMenu} />;
   }
 
   return (

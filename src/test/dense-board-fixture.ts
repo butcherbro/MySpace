@@ -3,6 +3,7 @@ import type {
   BoardPortalDto,
   BoardSnapshot,
   EmbedCardDto,
+  FilesystemAliasDto,
   ImageCardDto,
   NoteCardDto,
 } from "../services/workspace-gateway";
@@ -69,6 +70,20 @@ function image(id: string, x: number, y: number, caption: string): ImageCardDto 
   };
 }
 
+function folderAlias(id: string, x: number, y: number, pathHint: string, displayName: string): FilesystemAliasDto {
+  return {
+    kind: "filesystem_alias",
+    id,
+    boardId: "home",
+    frame: { x, y, width: 280, height: 180 },
+    zIndex: 0,
+    revision: 1,
+    targetKind: "folder",
+    pathHint,
+    displayName,
+  };
+}
+
 function link(id: string, x: number, y: number, title: string): EmbedCardDto {
   return {
     kind: "embed",
@@ -124,6 +139,7 @@ export function denseBoardSnapshot(): BoardSnapshot {
       image("image-1", 320, 640, "Another screenshot"),
       link("link-0", 40, 820, "Example link"),
       link("link-1", 360, 820, "Another link"),
+      folderAlias("folder-0", 40, 1040, "/Users/me/Research", "Research"),
     ],
     unsortedCards: [],
   };

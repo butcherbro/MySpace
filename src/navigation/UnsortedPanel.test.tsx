@@ -18,6 +18,20 @@ function note(id: string, text = "hello"): CardDto {
   };
 }
 
+function folder(id: string): CardDto {
+  return {
+    kind: "filesystem_alias",
+    id,
+    boardId: "home",
+    frame: { x: 0, y: 0, width: 360, height: 300 },
+    zIndex: 0,
+    revision: 1,
+    targetKind: "folder",
+    pathHint: "/Volumes/Studio/Video project",
+    displayName: "Video project",
+  };
+}
+
 describe("UnsortedPanel", () => {
   it("renders nothing when there are no unsorted cards", () => {
     render(<UnsortedPanel cards={[]} onPlace={vi.fn()} onClose={vi.fn()} />);
@@ -35,5 +49,13 @@ describe("UnsortedPanel", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Place" })[0]);
     expect(onPlace).toHaveBeenCalledWith("a");
+  });
+
+  it("renders a recognizable compact folder shortcut identity", () => {
+    render(<UnsortedPanel cards={[folder("folder-1")]} onPlace={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByTestId("unsorted-card")).toHaveAttribute("data-kind", "filesystem_alias");
+    expect(screen.getByText("Video project")).toBeInTheDocument();
+    expect(screen.getByText("/Volumes/Studio/Video project")).toBeInTheDocument();
   });
 });

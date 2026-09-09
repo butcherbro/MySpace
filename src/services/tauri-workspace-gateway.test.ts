@@ -181,4 +181,56 @@ describe("TauriWorkspaceGateway", () => {
     expect(invokeMock).toHaveBeenCalledWith("search_workspace", { query: "rocket" });
     expect(result).toEqual([]);
   });
+
+  it("creates a folder alias and restores its filesystem_alias discriminator", async () => {
+    invokeMock.mockResolvedValue({
+      id: "folder-1",
+      boardId: "home",
+      frame: { x: 40, y: 60, width: 360, height: 300 },
+      zIndex: 2,
+      revision: 1,
+      targetKind: "folder",
+      pathHint: "/Users/me/Video project",
+      displayName: "Video project",
+    });
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      id: "folder-1",
+      boardId: "home",
+      frame: { x: 40, y: 60, width: 360, height: 300 },
+      zIndex: 2,
+      sourcePath: "/Users/me/Video project",
+    };
+
+    const result = await gw.createFolderAlias(input);
+
+    expect(invokeMock).toHaveBeenCalledWith("create_folder_alias", { input });
+    expect(result.kind).toBe("filesystem_alias");
+    expect(result.displayName).toBe("Video project");
+  });
+
+  it("routes folder preview, drop classification, and Finder opening through typed commands", async () => {
+    const gw = new TauriWorkspaceGateway();
+    invokeMock.mockResolvedValueOnce({
+      status: "ready",
+      entries: [{ name: "Footage", kind: "folder", sizeBytes: null, childCount: 6 }],
+      hasMore: false,
+      displayName: "Video project",
+      pathHint: "/Users/me/Video project",
+    });
+    await gw.listFolderPreview("folder-1", 50);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_folder_preview", { cardId: "folder-1", limit: 50 });
+
+    invokeMock.mockResolvedValueOnce([
+      { path: "/Users/me/Video project", kind: "folder", fileName: "Video project", mimeType: null },
+    ]);
+    await gw.classifyDropPaths(["/Users/me/Video project"]);
+    expect(invokeMock).toHaveBeenLastCalledWith("classify_drop_paths", {
+      paths: ["/Users/me/Video project"],
+    });
+
+    invokeMock.mockResolvedValueOnce(undefined);
+    await gw.openFolderInFinder("folder-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("open_folder_in_finder", { cardId: "folder-1" });
+  });
 });

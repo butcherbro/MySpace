@@ -132,6 +132,50 @@ pub struct EmbedCardDto {
     pub metadata_error: Option<String>,
 }
 
+/// A durable shortcut to an external filesystem item. The stored bookmark
+/// bytes remain server-side; this projection intentionally exposes only display identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilesystemAliasDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    pub target_kind: String,
+    pub path_hint: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderEntryDto {
+    pub name: String,
+    pub kind: String,
+    pub size_bytes: Option<i64>,
+    pub child_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderPreviewStatus {
+    Ready,
+    Empty,
+    Missing,
+    PermissionLost,
+    IoError,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderPreviewDto {
+    pub status: FolderPreviewStatus,
+    pub entries: Vec<FolderEntryDto>,
+    pub has_more: bool,
+    pub display_name: String,
+    pub path_hint: String,
+}
+
 /// Metadata for a stored file asset (image / preview thumbnail).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,6 +199,8 @@ pub enum CardDto {
     BoardPortal(BoardPortalDto),
     Image(ImageCardDto),
     Embed(EmbedCardDto),
+    #[serde(rename = "filesystem_alias")]
+    FilesystemAlias(FilesystemAliasDto),
 }
 
 impl CardDto {
@@ -165,6 +211,7 @@ impl CardDto {
             CardDto::BoardPortal(p) => &p.id,
             CardDto::Image(i) => &i.id,
             CardDto::Embed(e) => &e.id,
+            CardDto::FilesystemAlias(a) => &a.id,
         }
     }
 }
@@ -301,6 +348,20 @@ pub struct CreateImageCardInput {
     pub caption_plain_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFilesystemAliasInput {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub target_kind: String,
+    #[serde(skip_serializing, skip_deserializing, default)]
+    pub locator_blob: Vec<u8>,
+    pub path_hint: String,
+    pub display_name: String,
+}
+
 /// Input for updating an image card's caption, bumping its revision with an
 /// optimistic guard (mirrors `UpdateNoteInput`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -426,7 +487,7 @@ pub struct PlaceUnsortedCardInput {
 #[serde(rename_all = "camelCase")]
 pub struct TrashItem {
     pub id: String,
-    /// One of `note` | `image` | `embed` | `board_portal`.
+    /// One of `note` | `image` | `embed` | `filesystem_alias` | `board_portal`.
     pub kind: String,
 }
 
@@ -445,7 +506,7 @@ pub struct TrashSelectionInput {
 #[serde(rename_all = "camelCase")]
 pub struct TrashEntryDto {
     pub id: String,
-    /// One of `note` | `image` | `embed` | `board`.
+    /// One of `note` | `image` | `embed` | `filesystem_alias` | `board`.
     pub kind: String,
     pub title: String,
     /// Thumbnail source: the image/preview/cover asset, when one exists.

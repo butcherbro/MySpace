@@ -1,5 +1,23 @@
 # Todo
 
+## Active handoff — Folder Shortcut V1 (2026-09-09)
+
+- [x] Checkpoint Tasks 1–6 on `codex/folder-shortcut-v1` through commit `cabdcaa`:
+  schema/DTOs, macOS bookmark boundary, commands/projections, gateway/mock,
+  native Finder drop routing, and the initial resizable blue Folder Card.
+- [x] Task 7 integrated and committed: Search by display name/path hint, Trash
+  title/kind/restore, Unsorted alias preview, context-menu Show in Finder, and
+  exhaustive Card-kind boundaries (`041bf0e`).
+- [x] Backend correctness gaps closed and committed: SQLite mutex no longer held
+  across filesystem I/O, balanced security-scoped access via RAII guard, image
+  MIME/SVG drop classification preserved, ID replay implemented, refreshed
+  identity on stale previews, and expanded service/migration coverage
+  (`d73b53f`, `e74486e`, `200da0c`).
+- [x] Task 8 E2E + manual docs committed (`test: verify folder shortcut lifecycle`).
+- [ ] Packaged macOS Finder-drop/restart/move/open acceptance and comparison to
+  the approved PNG remain a manual step for a signed build; `tauri dev` is not
+  bookmark-durability evidence.
+
 ## Current V1 delta — 2026-09-05
 
 - [x] Add the reversible Trash UI: fixed bottom-left button, non-zero batch
@@ -87,7 +105,7 @@ architecture pass before sizing; `blocked` = depends on another item.
 
 ### 4. Real filesystem shortcuts (folder/file aliases)
 
-- `discuss` — Drag-and-drop a real macOS folder onto a Board to create a **folder
+- `in progress` — Drag-and-drop a real macOS folder onto a Board to create a **folder
   shortcut** (no copying): a card that shows its live contents (list of files and
   subfolders) and a small "reveal in Finder" action (open the folder; opening a
   file reveals it selected in Finder). For files, drag creates a **file card**

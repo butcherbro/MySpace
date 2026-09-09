@@ -95,6 +95,15 @@ export function UnsortedPanel({ cards, onPlace, onDragStartCard, onClose }: Unso
             {card.kind === "note" && (
               <div className="unsorted-panel__note">{card.plainText.trim() || "Note"}</div>
             )}
+            {card.kind === "filesystem_alias" && (
+              <div className="unsorted-panel__folder">
+                <span className="unsorted-panel__folder-icon" aria-hidden="true" />
+                <span className="unsorted-panel__folder-meta">
+                  <strong>{card.displayName}</strong>
+                  <span>{card.pathHint}</span>
+                </span>
+              </div>
+            )}
             <button
               type="button"
               className="unsorted-panel__place"

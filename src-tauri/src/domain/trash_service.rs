@@ -14,14 +14,14 @@ use crate::domain::models::{
 
 use super::super::db;
 
-/// Trashes a leaf card (note, image, or embed) — soft-delete of its `cards`
+/// Trashes a leaf card (note, image, embed, or filesystem alias) — soft-delete of its `cards`
 /// row. Returns the batch id used for restore.
 pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, WorkspaceError> {
     let now = db::migrations::now_millis();
     let batch_id = uuid::Uuid::now_v7().to_string();
     let changed = conn.execute(
         "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-         WHERE id = ?3 AND kind IN ('note', 'image', 'embed') AND deleted_at IS NULL",
+         WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias') AND deleted_at IS NULL",
         params![now, batch_id, card_id],
     )?;
     if changed == 0 {
@@ -180,10 +180,10 @@ pub fn trash_selection(
                 trash_board_in_tx(&tx, &item.id, &batch_id, now)?;
             }
             _ => {
-                // leaf card: note / image / embed
+                // leaf card: note / image / embed / filesystem alias
                 let changed = tx.execute(
                     "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-                     WHERE id = ?3 AND kind IN ('note', 'image', 'embed') AND deleted_at IS NULL",
+                     WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias') AND deleted_at IS NULL",
                     params![now, batch_id, item.id],
                 )?;
                 if changed == 0 {
@@ -270,6 +270,10 @@ pub fn empty_trash(
     )?;
     tx.execute(
         "DELETE FROM embed_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM filesystem_aliases WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
         [],
     )?;
     tx.execute(
@@ -382,12 +386,14 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     ia.file_name, ia.mime_type, ia.width, ia.height, ia.size_bytes, ia.file_path,
                     e.title, e.source_url, e.asset_id, e.favicon_asset_id,
                     pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
-                    fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
+                    fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path,
+                    fsa.display_name
              FROM cards c
              LEFT JOIN note_cards n ON n.card_id = c.id
              LEFT JOIN image_cards i ON i.card_id = c.id
              LEFT JOIN assets ia ON ia.id = i.asset_id
              LEFT JOIN embed_cards e ON e.card_id = c.id
+             LEFT JOIN filesystem_aliases fsa ON fsa.card_id = c.id
              LEFT JOIN assets pa ON pa.id = e.asset_id
              LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
              WHERE c.deleted_at IS NOT NULL",
@@ -415,6 +421,7 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                         .filter(|s| !s.trim().is_empty())
                         .or_else(|| embed_source)
                         .unwrap_or_default(),
+                    "filesystem_alias" => row.get::<_, Option<String>>(30)?.unwrap_or_default(),
                     _ => String::new(),
                 };
                 bound_excerpt(&raw)
