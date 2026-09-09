@@ -216,3 +216,42 @@ fn migration_rebases_existing_board_layouts_to_non_negative_coordinates() {
         .unwrap();
     assert_eq!(viewport, (0.0, 0.0, 1.5, 7));
 }
+
+#[test]
+fn migration_creates_filesystem_aliases_table() {
+    let conn = open_in_memory().unwrap();
+    let tables = table_names(&conn);
+    assert!(
+        tables.iter().any(|t| t == "filesystem_aliases"),
+        "missing filesystem_aliases table; got {tables:?}"
+    );
+}
+
+#[test]
+fn cards_accept_filesystem_alias_kind_and_foreign_keys_stay_clean() {
+    let mut conn = open_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws1', 'Home', 'home', 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) VALUES ('home', 'ws1', NULL, 'Home', 'default', NULL, 1, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES ('fa1', 'home', 'filesystem_alias', 0, 0, 280, 180, 0, 1, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES ('fa1', 'folder', X'0102', '/tmp/demo', 'demo')",
+        [],
+    )
+    .unwrap();
+
+    let mut stmt = conn.prepare("PRAGMA foreign_key_check").unwrap();
+    let violations = stmt.query_map([], |_| Ok(())).unwrap().count();
+    assert_eq!(violations, 0);
+}
