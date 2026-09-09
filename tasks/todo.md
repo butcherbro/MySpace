@@ -91,6 +91,11 @@ architecture pass before sizing; `blocked` = depends on another item.
   map (no copying), click to open in Finder. Icons/thumbnails preferred; readable
   preview of text/json is an ideal, not required. Alias file links too. Same
   external-world theme as item 1 — recommend one combined architecture pass.
+- `wishlist` (related) — **File/document cards**: drag files of any format (text,
+  Markdown, JSON, CSV/Excel, etc.) onto a Board so they are stored (copied into the
+  managed asset store) and rendered as a card with a preview (text/MD/JSON/table)
+  and an open-in-external-app action. This is the copy-in counterpart to the
+  no-copy folder shortcut above; both are one "external world" slice.
 
 ### 5. Unsorted side panel (Milanote-style)
 
