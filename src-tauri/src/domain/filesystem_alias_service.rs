@@ -247,3 +247,41 @@ impl FolderLocator for UnsupportedPlatformLocator {
         Err(LocatorError::Io)
     }
 }
+
+/// Classifies a dropped native path into a drop kind plus display metadata.
+/// `folder` -> shortcut, `image` -> existing image-card path, else unsupported.
+pub fn classify_drop(path: &Path) -> (String, Option<String>, Option<String>) {
+    let file_name = path.file_name().and_then(|v| v.to_str()).map(str::to_owned);
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_owned);
+    let kind = if path.is_dir() {
+        "folder"
+    } else if matches!(
+        ext.as_deref().map(|e| e.to_ascii_lowercase()).as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "svg")
+    ) {
+        "image"
+    } else {
+        "unsupported"
+    };
+    let mime = if kind == "image" {
+        mime_for_ext(ext.as_deref())
+    } else {
+        None
+    };
+    (kind.to_string(), file_name, mime)
+}
+
+fn mime_for_ext(ext: Option<&str>) -> Option<String> {
+    ext.and_then(|e| {
+        match e.to_ascii_lowercase().as_str() {
+            "png" => Some("image/png"),
+            "jpg" | "jpeg" => Some("image/jpeg"),
+            "gif" => Some("image/gif"),
+            "webp" => Some("image/webp"),
+            "heic" => Some("image/heic"),
+            "svg" => Some("image/svg+xml"),
+            _ => None,
+        }
+        .map(str::to_owned)
+    })
+}

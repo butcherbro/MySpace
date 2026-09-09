@@ -186,3 +186,20 @@ fn create_filesystem_alias_rejects_conflicting_card_kind() {
     );
     assert!(result.is_err());
 }
+
+#[test]
+fn classify_drop_returns_mime_and_svg() {
+    use myspace_lib::domain::filesystem_alias_service::classify_drop;
+    use std::path::Path;
+    assert_eq!(classify_drop(Path::new("/a/b.png")).0, "image");
+    assert_eq!(
+        classify_drop(Path::new("/a/b.png")).2.as_deref(),
+        Some("image/png")
+    );
+    assert_eq!(classify_drop(Path::new("/a/b.svg")).0, "image");
+    assert_eq!(
+        classify_drop(Path::new("/a/b.svg")).2.as_deref(),
+        Some("image/svg+xml")
+    );
+    assert_eq!(classify_drop(Path::new("/a/b.txt")).0, "unsupported");
+}

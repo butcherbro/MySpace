@@ -120,52 +120,16 @@ pub fn list_folder_preview(
     }
     Ok(preview)
 }
-fn mime_for_ext(ext: Option<&str>) -> Option<String> {
-    ext.and_then(|e| {
-        match e.to_ascii_lowercase().as_str() {
-            "png" => Some("image/png"),
-            "jpg" | "jpeg" => Some("image/jpeg"),
-            "gif" => Some("image/gif"),
-            "webp" => Some("image/webp"),
-            "heic" => Some("image/heic"),
-            "svg" => Some("image/svg+xml"),
-            _ => None,
-        }
-        .map(str::to_owned)
-    })
-}
-
 #[tauri::command]
 pub fn classify_drop_paths(paths: Vec<String>) -> Vec<ClassifiedDrop> {
     paths
         .into_iter()
         .map(|path| {
-            let ext = Path::new(&path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_owned);
-            let file_name = Path::new(&path)
-                .file_name()
-                .and_then(|v| v.to_str())
-                .map(str::to_owned);
-            let kind = if Path::new(&path).is_dir() {
-                "folder"
-            } else if matches!(
-                ext.as_deref().map(|e| e.to_ascii_lowercase()).as_deref(),
-                Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "svg")
-            ) {
-                "image"
-            } else {
-                "unsupported"
-            };
-            let mime_type = if kind == "image" {
-                mime_for_ext(ext.as_deref())
-            } else {
-                None
-            };
+            let (kind, file_name, mime_type) =
+                filesystem_alias_service::classify_drop(Path::new(&path));
             ClassifiedDrop {
                 path,
-                kind: kind.into(),
+                kind,
                 file_name,
                 mime_type,
             }
