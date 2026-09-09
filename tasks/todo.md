@@ -151,23 +151,20 @@ architecture pass before sizing; `blocked` = depends on another item.
 
 ### 9. Quiet Desk visual shell (design slice)
 
-- `next` (recorded; start after the technical slices below) — the accepted design
-  direction from `.interface-design/system.md` (Quiet Desk, Retina smoothing,
-  dense-board rules). Full 10-step TDD plan in
-  `docs/plans/2026-09-05-quiet-desk-visual-shell.md`: tokens → AppShell (top bar +
-  fixed rail + canvas) → icon outline → creation rail → top navigation → Desk
-  theme / neutralize React Flow defaults → Portal/card material grammar →
-  type-aware context menu (preserving Copy/Delete) → dense-board visual acceptance.
+- `done` — accepted design from `.interface-design/system.md` (Quiet Desk, Retina
+  smoothing, dense-board rules). Implemented across slices: tokens, AppShell
+  (top bar + fixed rail + canvas), outline icons, creation rail (incl. drag-to-
+  create), top navigation (breadcrumbs/Search/Undo/Redo), Desk theme + React Flow
+  defaults neutralized, Portal/card material grammar, note/text colors, and the
+  type-aware context menu (extracted to `components/context-menu`). Dense-board
+  acceptance locked with `tests/e2e/visual-shell.spec.ts` + `?fixture=dense` and
+  `docs/testing/visual-shell-manual.md`.
 - Supersedes Tasks 1–5, 9, and the visual-acceptance part of Task 12 of
-  `docs/plans/2026-09-04-spatial-workspace-interface.md`, which remains the source
-  for contextual rail behavior, Note appearance, shared rich-text tools,
-  creation placement, and Search. Locked decisions:
+  `docs/plans/2026-09-04-spatial-workspace-interface.md`. Locked decisions:
   macOS system font (no web font), top bar `44px`, rail `56px`, breadcrumbs as the
   navigation anchor, no dead controls, default rail Note/Link/Board/Image.
-- `blocked` (contextual left rail) — the contextual note tools (Bold, note
-  background color, later text color/highlight/tags) need a visual reference
-  from the donor app. The user will show the reference to the architect, who
-  will hand back concrete styling before this slice starts.
+- `wishlist` — contextual left rail hover modes beyond the current select-to-context
+  (e.g. hover-intent handoff) and any further donor-app styling refinements.
 
 ### 10. Card connections (arrows between cards)
 
