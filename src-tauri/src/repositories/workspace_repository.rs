@@ -1501,7 +1501,7 @@ pub fn move_cards_to_board_unsorted(
     // Validate every card revision up front so a stale one rolls back the batch.
     for item in &input.cards {
         let actual: i64 = tx.query_row(
-            "SELECT revision FROM cards WHERE id = ?1 AND kind IN ('note','image','embed')",
+            "SELECT revision FROM cards WHERE id = ?1 AND kind IN ('note','image','embed','filesystem_alias')",
             [item.id.as_str()],
             |r| r.get(0),
         )?;
@@ -1517,7 +1517,7 @@ pub fn move_cards_to_board_unsorted(
         tx.execute(
             "UPDATE cards
              SET board_id = ?1, unsorted = 1, revision = revision + 1, updated_at = ?2
-             WHERE id = ?3 AND revision = ?4 AND kind IN ('note','image','embed')",
+             WHERE id = ?3 AND revision = ?4 AND kind IN ('note','image','embed','filesystem_alias')",
             params![input.target_board_id, now, item.id, item.expected_revision],
         )?;
     }
@@ -1536,7 +1536,7 @@ pub fn place_unsorted_card(
     let changed = conn.execute(
         "UPDATE cards
          SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
-         WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed')",
+         WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed','filesystem_alias')",
         params![
             input.frame.x,
             input.frame.y,
