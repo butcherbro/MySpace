@@ -6,7 +6,8 @@
   width: 320px;
   display: flex;
   flex-direction: column;
-  background: var(--paper-raised);
+  /* Darker surface so the white batch cards read as separate blocks. */
+  background: var(--desk);
   border-left: 1px solid var(--edge-subtle);
   box-shadow: -12px 0 32px rgba(0, 0, 0, 0.08);
   z-index: 40;
@@ -119,6 +120,8 @@
   border: 1px solid var(--edge-subtle);
   border-radius: var(--radius-control);
   padding: 10px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow-paper);
 }
 
 .trash-drawer__batch-meta {
