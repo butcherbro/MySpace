@@ -26,14 +26,12 @@ export function AppShell({ topBar, toolRail, rightRail, rightRailCollapsed = fal
       data-testid="app-shell"
       data-theme="system"
     >
-      <header className="app-shell__title-bar" data-testid="title-bar-region">
-        {/* Empty drag spacer under the macOS traffic lights. The attribute is on
-            the spacer only, so breadcrumbs and their buttons never move the
-            window. */}
+      <header className="app-shell__title-bar" data-testid="title-bar-region" data-tauri-drag-region>
+        {/* Empty drag spacer under the macOS traffic lights. The header itself
+            is the drag surface; interactive chrome opts out below. */}
         <div
           className="app-shell__titlebar-drag"
           data-testid="titlebar-drag-region"
-          data-tauri-drag-region
         />
         <div className="app-shell__titlebar-content" data-testid="top-bar-region">
           {topBar}

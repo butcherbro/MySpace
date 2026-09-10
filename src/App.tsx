@@ -2157,7 +2157,7 @@ function App() {
             dropTargetBoardId={dropTargetBoardId}
             onNavigate={(id) => void navigateTo(id, { pushHistory: true, tabMode: "open" })}
           />
-          <div className="topbar-actions">
+          <div className="topbar-actions" data-tauri-drag-region="false">
             <SearchBar
               query={searchQuery}
               onQueryChange={handleSearchQueryChange}

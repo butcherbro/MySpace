@@ -57,6 +57,7 @@
   margin-left: auto;
   padding-right: var(--space-2);
   flex: 0 0 auto;
+  -webkit-app-region: no-drag;
 }
 
 .app-shell__tool-rail {
