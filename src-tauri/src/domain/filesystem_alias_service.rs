@@ -253,13 +253,19 @@ impl FolderLocator for UnsupportedPlatformLocator {
 pub fn classify_drop(path: &Path) -> (String, Option<String>, Option<String>) {
     let file_name = path.file_name().and_then(|v| v.to_str()).map(str::to_owned);
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_owned);
+    let ext_lower = ext.as_deref().map(|e| e.to_ascii_lowercase());
     let kind = if path.is_dir() {
         "folder"
     } else if matches!(
-        ext.as_deref().map(|e| e.to_ascii_lowercase()).as_deref(),
+        ext_lower.as_deref(),
         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "svg")
     ) {
         "image"
+    } else if matches!(
+        ext_lower.as_deref(),
+        Some("txt" | "md" | "markdown" | "json" | "csv")
+    ) {
+        "text_file"
     } else {
         "unsupported"
     };

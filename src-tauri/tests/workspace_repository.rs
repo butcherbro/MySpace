@@ -1489,3 +1489,49 @@ fn place_unsorted_card_puts_it_on_canvas_at_frame() {
         other => panic!("expected placed note, got {other:?}"),
     }
 }
+
+#[test]
+fn file_card_roundtrips_through_snapshot_and_read_card() {
+    use myspace_lib::domain::models::{CreateFileCardInput, FileCardDto};
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at) VALUES ('fa', 'x.txt', 'text/plain', 'notes.txt', NULL, NULL, 10, 0)",
+        [],
+    )
+    .unwrap();
+    workspace_repository::create_file_card(
+        &mut conn,
+        &CreateFileCardInput {
+            id: "fc".into(),
+            board_id: board_id.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 280.0,
+                height: 180.0,
+            },
+            z_index: 0,
+            source_path: "/tmp/notes.txt".into(),
+            mime_type: "text/plain".into(),
+            file_name: "notes.txt".into(),
+        },
+        "fa",
+        "hello preview",
+    )
+    .unwrap();
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    let file = snapshot.cards.iter().find_map(|c| match c {
+        CardDto::File(f) if f.id == "fc" => Some(f),
+        _ => None,
+    });
+    assert!(file.is_some());
+    let file = file.unwrap();
+    assert_eq!(file.preview_text, "hello preview");
+    assert_eq!(file.asset.file_name, "notes.txt");
+    assert!(matches!(
+        workspace_repository::load_card(&conn, "fc").unwrap(),
+        CardDto::File(FileCardDto { .. })
+    ));
+}

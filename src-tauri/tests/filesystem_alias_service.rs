@@ -201,5 +201,18 @@ fn classify_drop_returns_mime_and_svg() {
         classify_drop(Path::new("/a/b.svg")).2.as_deref(),
         Some("image/svg+xml")
     );
-    assert_eq!(classify_drop(Path::new("/a/b.txt")).0, "unsupported");
+    assert_eq!(classify_drop(Path::new("/a/b.txt")).0, "text_file");
+}
+
+#[test]
+fn classify_drop_marks_text_files() {
+    use myspace_lib::domain::filesystem_alias_service::classify_drop;
+    use std::path::Path;
+    assert_eq!(classify_drop(Path::new("/a/notes.txt")).0, "text_file");
+    assert_eq!(classify_drop(Path::new("/a/README.md")).0, "text_file");
+    assert_eq!(classify_drop(Path::new("/a/data.json")).0, "text_file");
+    assert_eq!(classify_drop(Path::new("/a/table.csv")).0, "text_file");
+    assert_eq!(classify_drop(Path::new("/a/doc.docx")).0, "unsupported");
+    assert_eq!(classify_drop(Path::new("/a/sheet.xlsx")).0, "unsupported");
+    assert_eq!(classify_drop(Path::new("/a/report.pdf")).0, "unsupported");
 }

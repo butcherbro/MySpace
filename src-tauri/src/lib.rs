@@ -131,6 +131,8 @@ pub fn run() {
             commands::filesystem_aliases::list_folder_preview,
             commands::filesystem_aliases::classify_drop_paths,
             commands::filesystem_aliases::open_folder_in_finder,
+            commands::filesystem_aliases::create_file_card,
+            commands::filesystem_aliases::open_file_card,
             commands::trash::trash_note,
             commands::trash::trash_board,
             commands::trash::trash_selection,

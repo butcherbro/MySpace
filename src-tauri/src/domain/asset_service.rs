@@ -211,3 +211,74 @@ pub fn collect_orphaned_assets(
     }
     Ok(collected)
 }
+
+/// Copies a text-like file into the managed asset store under a UUID, preserving
+/// the original extension, and returns its metadata. `file_name` is the original
+/// basename (kept for display); the on-disk name is `<uuid>.<ext>`.
+pub fn import_file_asset(
+    conn: &mut Connection,
+    asset_dir: &Path,
+    id: &str,
+    file_name: &str,
+    mime_type: &str,
+    source_path: &str,
+) -> Result<AssetDto, WorkspaceError> {
+    validate_uuid(id)?;
+    if let Some(existing) = load_asset(conn, id)? {
+        return Ok(existing);
+    }
+
+    let source = Path::new(source_path);
+    let meta = fs::metadata(source)
+        .map_err(|e| WorkspaceError::ConstraintViolation(format!("cannot read source: {e}")))?;
+    if !meta.is_file() {
+        return Err(WorkspaceError::ConstraintViolation(
+            "file card target must be an existing file".into(),
+        ));
+    }
+    let size_bytes = meta.len() as i64;
+
+    // Keep the original extension on the stored copy.
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_else(|| "bin".to_string());
+    let relative = format!("{id}.{ext}");
+    let dest = asset_dir.join(&relative);
+    fs::create_dir_all(asset_dir)
+        .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
+    fs::copy(source, &dest)
+        .map_err(|e| WorkspaceError::Database(format!("cannot copy asset: {e}")))?;
+
+    let now = db::migrations::now_millis();
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6)",
+        params![id, relative, mime_type, file_name, size_bytes, now],
+    )?;
+
+    Ok(AssetDto {
+        id: id.to_string(),
+        file_name: file_name.to_string(),
+        mime_type: mime_type.to_string(),
+        width: None,
+        height: None,
+        size_bytes,
+        file_path: relative,
+    })
+}
+
+/// Bounded inline preview for a text-like file: reads at most `limit` bytes from
+/// the stored asset and returns them as UTF-8 (lossy), trimmed. Binary content
+/// yields an empty preview without error.
+pub fn read_text_preview(asset_dir: &Path, asset: &AssetDto, limit: usize) -> String {
+    let path = asset_abs_path(asset_dir, &asset.file_path);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => return String::new(),
+    };
+    let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(limit)]).into_owned();
+    let trimmed = preview.trim();
+    trimmed.chars().take(limit).collect()
+}

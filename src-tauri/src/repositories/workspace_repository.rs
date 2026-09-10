@@ -8,13 +8,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AddQuickBoardInput, ApplyEmbedMetadataInput, AssetDto, BoardPortalDto, BoardSnapshot,
-    BoardSummary, Breadcrumb, CardDto, ConvertNoteToEmbedInput, CreateFilesystemAliasInput,
-    CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
-    EmbedCardDto, EmbedForMetadata, FilesystemAliasDto, Frame, ImageCardDto, MoveCardToBoardInput,
-    MoveCardsInput, MoveCardsToUnsortedInput, NoteCardDto, PlaceUnsortedCardInput, PortalTarget,
-    QuickBoardDto, ReorderQuickBoardsInput, SearchResultDto, SetNoteColorInput,
-    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
-    UpdateViewportInput, Viewport,
+    BoardSummary, Breadcrumb, CardDto, ConvertNoteToEmbedInput, CreateFileCardInput,
+    CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult,
+    CreateNoteInput, EmbedCardDto, EmbedForMetadata, FileCardDto, FilesystemAliasDto, Frame,
+    ImageCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, NoteCardDto,
+    PlaceUnsortedCardInput, PortalTarget, QuickBoardDto, ReorderQuickBoardsInput, SearchResultDto,
+    SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
+    UpdateNoteInput, UpdateViewportInput, Viewport,
 };
 
 use super::super::db;
@@ -436,6 +436,46 @@ fn load_cards(
         }
     }
 
+    // File cards: copied text-like files with their bounded inline preview.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                    a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
+                    f.preview_text
+             FROM cards c
+             JOIN file_cards f ON f.card_id = c.id
+             JOIN assets a ON a.id = f.asset_id
+             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
+             ORDER BY c.z_index, c.id",
+        )?;
+        for row in stmt.query_map(params![board_id, unsorted_flag], |row| {
+            Ok(CardDto::File(FileCardDto {
+                id: row.get(0)?,
+                board_id: row.get(1)?,
+                frame: Frame {
+                    x: row.get(2)?,
+                    y: row.get(3)?,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                },
+                z_index: row.get(6)?,
+                revision: row.get(7)?,
+                asset: AssetDto {
+                    id: row.get(8)?,
+                    file_name: row.get(9)?,
+                    mime_type: row.get(10)?,
+                    width: row.get(11)?,
+                    height: row.get(12)?,
+                    size_bytes: row.get(13)?,
+                    file_path: row.get(14)?,
+                },
+                preview_text: row.get(15)?,
+            }))
+        })? {
+            out.push(row?);
+        }
+    }
+
     Ok(out)
 }
 
@@ -666,6 +706,16 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision, a.target_kind, a.path_hint, a.display_name FROM cards c JOIN filesystem_aliases a ON a.card_id = c.id WHERE c.id = ?1 AND c.deleted_at IS NULL",
             [card_id], |row| Ok(CardDto::FilesystemAlias(FilesystemAliasDto { id: row.get(0)?, board_id: row.get(1)?, frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? }, z_index: row.get(6)?, revision: row.get(7)?, target_kind: row.get(8)?, path_hint: row.get(9)?, display_name: row.get(10)? }))
         ).map_err(WorkspaceError::from),
+        "file" => conn.query_row(
+            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+                    a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
+                    f.preview_text
+             FROM cards c
+             JOIN file_cards f ON f.card_id = c.id
+             JOIN assets a ON a.id = f.asset_id
+             WHERE c.id = ?1 AND c.deleted_at IS NULL",
+            [card_id], |row| Ok(CardDto::File(FileCardDto { id: row.get(0)?, board_id: row.get(1)?, frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? }, z_index: row.get(6)?, revision: row.get(7)?, asset: AssetDto { id: row.get(8)?, file_name: row.get(9)?, mime_type: row.get(10)?, width: row.get(11)?, height: row.get(12)?, size_bytes: row.get(13)?, file_path: row.get(14)? }, preview_text: row.get(15)? }))
+        ).map_err(WorkspaceError::from),
         other => Err(WorkspaceError::ConstraintViolation(format!(
             "unknown card kind: {other}"
         ))),
@@ -704,6 +754,36 @@ pub fn create_filesystem_alias(
     Ok(())
 }
 
+/// Inserts a File Card: the asset must already be copied and its preview read
+/// before this call; the cards + file_cards rows are committed atomically.
+/// Idempotent replay by card id returns Ok without inserting a second row.
+pub fn create_file_card(
+    conn: &mut Connection,
+    input: &CreateFileCardInput,
+    asset_id: &str,
+    preview_text: &str,
+) -> Result<(), WorkspaceError> {
+    let existing_kind: Option<String> = conn
+        .query_row("SELECT kind FROM cards WHERE id = ?1", [&input.id], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if let Some(kind) = existing_kind {
+        if kind == "file" {
+            return Ok(());
+        }
+        return Err(WorkspaceError::ConstraintViolation(
+            "card id already in use with a different kind".into(),
+        ));
+    }
+    let now = db::migrations::now_millis();
+    let tx = conn.transaction()?;
+    tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'file', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
+    tx.execute("INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text) VALUES (?1, ?2, ?3, ?4)", params![input.id, asset_id, input.mime_type, preview_text])?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Internal-only authority lookup for Rust commands. No locator bytes appear in DTOs.
 pub fn load_filesystem_alias_locator(
     conn: &Connection,
@@ -713,6 +793,15 @@ pub fn load_filesystem_alias_locator(
         "SELECT a.locator_blob, a.path_hint, a.display_name FROM filesystem_aliases a JOIN cards c ON c.id = a.card_id WHERE a.card_id = ?1 AND c.deleted_at IS NULL",
         [card_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     ).map_err(WorkspaceError::from)
+}
+
+/// Returns the stored asset `file_path` for a File Card (for open-in-app).
+pub fn load_file_card_asset(conn: &Connection, card_id: &str) -> Result<String, WorkspaceError> {
+    conn.query_row(
+        "SELECT a.file_path FROM file_cards f JOIN assets a ON a.id = f.asset_id JOIN cards c ON c.id = f.card_id WHERE f.card_id = ?1 AND c.deleted_at IS NULL",
+        [card_id], |row| row.get(0),
+    )
+    .map_err(WorkspaceError::from)
 }
 
 /// Stale bookmark renewal is one durable transition: locator authority and
