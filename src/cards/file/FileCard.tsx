@@ -200,7 +200,10 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
     );
   }
 
-  // Text card with readable preview + per-format tint.
+  const isHtml = ext === "html" || ext === "htm";
+
+  // Text card with readable preview + per-format tint. HTML is rendered as a
+  // live (but inert) page inside the card, like a Finder thumbnail.
   return (
     <article
       className="file-card"
@@ -229,9 +232,20 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
         </div>
         {actions}
       </header>
-      <pre className="file-card__preview" data-testid="file-preview">
-        {file.previewText || "(no preview)"}
-      </pre>
+      {isHtml ? (
+        <iframe
+          className="file-card__html"
+          data-testid="file-preview"
+          title={file.asset.fileName}
+          srcDoc={file.previewText}
+          sandbox=""
+          tabIndex={-1}
+        />
+      ) : (
+        <pre className="file-card__preview" data-testid="file-preview">
+          {file.previewText || "(no preview)"}
+        </pre>
+      )}
       <div
         className="file-card__resize nodrag nopan"
         data-testid="file-resize"

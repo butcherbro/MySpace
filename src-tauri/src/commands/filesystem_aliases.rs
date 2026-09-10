@@ -245,18 +245,7 @@ pub fn create_file_card(
             .map(|e| e.to_ascii_lowercase())
             .as_deref(),
         Some(
-            "pdf"
-                | "doc"
-                | "docx"
-                | "xls"
-                | "xlsx"
-                | "ppt"
-                | "pptx"
-                | "html"
-                | "htm"
-                | "pages"
-                | "numbers"
-                | "key"
+            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "pages" | "numbers" | "key"
         )
     ) {
         let mut conn = db

@@ -111,6 +111,15 @@
   word-break: break-word;
 }
 
+/* HTML file cards render the page itself, like a Finder thumbnail. */
+.file-card__html {
+  flex: 1;
+  border: none;
+  background: #fff;
+  pointer-events: none;
+  width: 100%;
+}
+
 .file-card__resize {
   position: absolute;
   right: 0;
