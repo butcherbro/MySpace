@@ -156,6 +156,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .trash-drawer__thumb {
@@ -164,6 +165,7 @@
   place-items: center;
   width: 28px;
   height: 28px;
+  min-width: 0;
 }
 
 .trash-drawer__thumb-img {
@@ -174,8 +176,9 @@
 }
 
 .trash-drawer__kind {
-  flex: none;
-  min-width: 40px;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 56px;
   padding: 1px 6px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--edge-focus) 10%, transparent);
@@ -183,9 +186,14 @@
   font: 500 10px/16px var(--font-ui);
   text-align: center;
   text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .trash-drawer__item-title {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
