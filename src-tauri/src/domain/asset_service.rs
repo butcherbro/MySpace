@@ -282,3 +282,58 @@ pub fn read_text_preview(asset_dir: &Path, asset: &AssetDto, limit: usize) -> St
     let trimmed = preview.trim();
     trimmed.chars().take(limit).collect()
 }
+
+/// Generates a macOS Quick Look thumbnail (256px PNG) for a file and stores it as
+/// a managed asset. Returns the asset id, or None when the OS tool is unavailable
+/// or the file has no supported preview (never fails the File Card import).
+pub fn generate_thumbnail(
+    conn: &mut Connection,
+    asset_dir: &Path,
+    source_path: &str,
+) -> Result<Option<String>, WorkspaceError> {
+    #[cfg(target_os = "macos")]
+    {
+        let tmp = std::env::temp_dir().join(format!("myspace-thumb-{}", uuid::Uuid::now_v7()));
+        let status = std::process::Command::new("qlmanage")
+            .arg("-t")
+            .arg("-s")
+            .arg("256")
+            .arg("-o")
+            .arg(&tmp)
+            .arg(source_path)
+            .status();
+        let ok = matches!(status, Ok(s) if s.success());
+        if !ok {
+            return Ok(None);
+        }
+        // qlmanage writes `<filename>.png` next to `-o` (or for some types a dir).
+        let file = std::path::Path::new(source_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let png = tmp.join(format!("{file}.png"));
+        let bytes = match std::fs::read(&png) {
+            Ok(b) => b,
+            Err(_) => return Ok(None),
+        };
+        let _ = std::fs::remove_dir_all(&tmp);
+        let id = uuid::Uuid::now_v7().to_string();
+        let relative = format!("{id}.png");
+        fs::create_dir_all(asset_dir)
+            .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
+        fs::write(asset_dir.join(&relative), &bytes)
+            .map_err(|e| WorkspaceError::Database(format!("cannot store thumbnail: {e}")))?;
+        let now = db::migrations::now_millis();
+        conn.execute(
+            "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+             VALUES (?1, ?2, 'image/png', ?3, 256, 256, ?4, ?5)",
+            params![id, relative, "thumbnail.png", bytes.len() as i64, now],
+        )?;
+        Ok(Some(id))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (conn, asset_dir, source_path);
+        Ok(None)
+    }
+}

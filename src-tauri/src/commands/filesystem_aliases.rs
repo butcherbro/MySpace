@@ -237,6 +237,36 @@ pub fn create_file_card(
         asset_service::read_text_preview(&asset_dir, &asset, 8 * 1024)
     };
 
+    // Generate a Finder-like thumbnail for PDF/office/HTML via Quick Look.
+    let thumbnail_id = if matches!(
+        file_name
+            .rsplit('.')
+            .next()
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some(
+            "pdf"
+                | "doc"
+                | "docx"
+                | "xls"
+                | "xlsx"
+                | "ppt"
+                | "pptx"
+                | "html"
+                | "htm"
+                | "pages"
+                | "numbers"
+                | "key"
+        )
+    ) {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        asset_service::generate_thumbnail(&mut conn, &asset_dir, &source_path)?
+    } else {
+        None
+    };
+
     {
         let mut conn = db
             .lock()
@@ -254,6 +284,7 @@ pub fn create_file_card(
             },
             &asset.id,
             &preview,
+            thumbnail_id.as_deref(),
         )?;
     }
 
@@ -265,6 +296,7 @@ pub fn create_file_card(
         revision: 1,
         asset,
         preview_text: preview,
+        preview_asset: None,
     })
 }
 

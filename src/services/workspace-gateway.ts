@@ -155,6 +155,8 @@ export interface FileCardDto {
   revision: number;
   asset: AssetDto;
   previewText: string;
+  /** Generated thumbnail (PDF/office/HTML) when available. */
+  previewAsset: AssetDto | null;
 }
 
 export interface CreateFileCardInput {

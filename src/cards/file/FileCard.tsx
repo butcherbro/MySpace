@@ -167,7 +167,18 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
           {actions}
         </header>
         <div className="file-card__placeholder" data-testid="file-preview">
-          {officeLabel ? `${officeLabel} document` : "Archive"}
+          {file.previewAsset ? (
+            <img
+              className="file-card__thumb"
+              src={`myspace-asset://localhost/${file.previewAsset.filePath}`}
+              alt=""
+              draggable={false}
+            />
+          ) : officeLabel ? (
+            `${officeLabel} document`
+          ) : (
+            "Archive"
+          )}
         </div>
         <div
           className="file-card__resize nodrag nopan"

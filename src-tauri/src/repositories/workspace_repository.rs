@@ -441,14 +441,29 @@ fn load_cards(
         let mut stmt = conn.prepare(
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                     a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
-                    f.preview_text
+                    f.preview_text,
+                    pa.id, pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path
              FROM cards c
              JOIN file_cards f ON f.card_id = c.id
              JOIN assets a ON a.id = f.asset_id
+             LEFT JOIN assets pa ON pa.id = f.preview_asset_id
              WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
              ORDER BY c.z_index, c.id",
         )?;
         for row in stmt.query_map(params![board_id, unsorted_flag], |row| {
+            let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(16)?,
+                    file_name: row.get(17)?,
+                    mime_type: row.get(18)?,
+                    width: row.get(19)?,
+                    height: row.get(20)?,
+                    size_bytes: row.get(21)?,
+                    file_path: row.get(22)?,
+                })
+            } else {
+                None
+            };
             Ok(CardDto::File(FileCardDto {
                 id: row.get(0)?,
                 board_id: row.get(1)?,
@@ -470,6 +485,7 @@ fn load_cards(
                     file_path: row.get(14)?,
                 },
                 preview_text: row.get(15)?,
+                preview_asset,
             }))
         })? {
             out.push(row?);
@@ -709,12 +725,38 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
         "file" => conn.query_row(
             "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                     a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
-                    f.preview_text
+                    f.preview_text,
+                    pa.id, pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path
              FROM cards c
              JOIN file_cards f ON f.card_id = c.id
              JOIN assets a ON a.id = f.asset_id
+             LEFT JOIN assets pa ON pa.id = f.preview_asset_id
              WHERE c.id = ?1 AND c.deleted_at IS NULL",
-            [card_id], |row| Ok(CardDto::File(FileCardDto { id: row.get(0)?, board_id: row.get(1)?, frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? }, z_index: row.get(6)?, revision: row.get(7)?, asset: AssetDto { id: row.get(8)?, file_name: row.get(9)?, mime_type: row.get(10)?, width: row.get(11)?, height: row.get(12)?, size_bytes: row.get(13)?, file_path: row.get(14)? }, preview_text: row.get(15)? }))
+            [card_id], |row| {
+                let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
+                    Some(AssetDto {
+                        id: row.get(16)?,
+                        file_name: row.get(17)?,
+                        mime_type: row.get(18)?,
+                        width: row.get(19)?,
+                        height: row.get(20)?,
+                        size_bytes: row.get(21)?,
+                        file_path: row.get(22)?,
+                    })
+                } else {
+                    None
+                };
+                Ok(CardDto::File(FileCardDto {
+                    id: row.get(0)?,
+                    board_id: row.get(1)?,
+                    frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? },
+                    z_index: row.get(6)?,
+                    revision: row.get(7)?,
+                    asset: AssetDto { id: row.get(8)?, file_name: row.get(9)?, mime_type: row.get(10)?, width: row.get(11)?, height: row.get(12)?, size_bytes: row.get(13)?, file_path: row.get(14)? },
+                    preview_text: row.get(15)?,
+                    preview_asset,
+                }))
+            }
         ).map_err(WorkspaceError::from),
         other => Err(WorkspaceError::ConstraintViolation(format!(
             "unknown card kind: {other}"
@@ -762,6 +804,7 @@ pub fn create_file_card(
     input: &CreateFileCardInput,
     asset_id: &str,
     preview_text: &str,
+    preview_asset_id: Option<&str>,
 ) -> Result<(), WorkspaceError> {
     let existing_kind: Option<String> = conn
         .query_row("SELECT kind FROM cards WHERE id = ?1", [&input.id], |r| {
@@ -779,7 +822,7 @@ pub fn create_file_card(
     let now = db::migrations::now_millis();
     let tx = conn.transaction()?;
     tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'file', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
-    tx.execute("INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text, source_path) VALUES (?1, ?2, ?3, ?4, ?5)", params![input.id, asset_id, input.mime_type, preview_text, input.source_path])?;
+    tx.execute("INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text, source_path, preview_asset_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![input.id, asset_id, input.mime_type, preview_text, input.source_path, preview_asset_id])?;
     tx.commit()?;
     Ok(())
 }

@@ -202,6 +202,8 @@ pub struct FileCardDto {
     pub revision: i64,
     pub asset: AssetDto,
     pub preview_text: String,
+    /// Generated thumbnail (PDF/office/HTML) when available.
+    pub preview_asset: Option<AssetDto>,
 }
 
 /// Input for creating a File Card from a dropped text-like file.

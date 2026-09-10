@@ -490,6 +490,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         filePath: `${input.id}.${fileName.split(".").pop() ?? "bin"}`,
       },
       previewText: "mock preview of " + fileName,
+      previewAsset: null,
     };
     this.snapshot.cards.push(card);
     return Promise.resolve(structuredClone(card));

@@ -1519,6 +1519,7 @@ fn file_card_roundtrips_through_snapshot_and_read_card() {
         },
         "fa",
         "hello preview",
+        None,
     )
     .unwrap();
     let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
