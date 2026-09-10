@@ -779,7 +779,7 @@ pub fn create_file_card(
     let now = db::migrations::now_millis();
     let tx = conn.transaction()?;
     tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'file', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
-    tx.execute("INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text) VALUES (?1, ?2, ?3, ?4)", params![input.id, asset_id, input.mime_type, preview_text])?;
+    tx.execute("INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text, source_path) VALUES (?1, ?2, ?3, ?4, ?5)", params![input.id, asset_id, input.mime_type, preview_text, input.source_path])?;
     tx.commit()?;
     Ok(())
 }
@@ -821,6 +821,20 @@ pub fn refresh_filesystem_alias_locator(
         return Err(WorkspaceError::NotFound(card_id.to_owned()));
     }
     Ok(())
+}
+
+/// Returns the original source path of a File Card, if recorded (for reveal-in-
+/// Finder). Empty when the card predates migration 0014.
+pub fn load_file_card_source_path(
+    conn: &Connection,
+    card_id: &str,
+) -> Result<String, WorkspaceError> {
+    conn.query_row(
+        "SELECT f.source_path FROM file_cards f JOIN cards c ON c.id = f.card_id WHERE f.card_id = ?1 AND c.deleted_at IS NULL",
+        [card_id],
+        |row| row.get(0),
+    )
+    .map_err(WorkspaceError::from)
 }
 ///
 /// A failed insert must leave no orphaned `cards` row: both inserts share one

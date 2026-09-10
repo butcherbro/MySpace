@@ -5,6 +5,7 @@ import "./file-card.css";
 interface Props {
   file: FileCardDto;
   onOpen: (id: string) => void;
+  onReveal: (id: string) => void;
   onResize: (id: string, width: number, height: number) => void;
   onContextMenu: (id: string, x: number, y: number) => void;
 }
@@ -14,25 +15,65 @@ function extOf(name: string): string {
   return i > 0 ? name.slice(i + 1).toLowerCase() : "file";
 }
 
+const TEXT_EXTS = new Set(["txt", "md", "markdown", "json", "csv", "rtf", "log"]);
+
+// Brand-ish labels for office/archive types; the icon tile is derived from the
+// extension so no external icon set is needed.
+const OFFICE_LABELS: Record<string, string> = {
+  doc: "Word",
+  docx: "Word",
+  xls: "Excel",
+  xlsx: "Excel",
+  ppt: "PowerPoint",
+  pptx: "PowerPoint",
+  pdf: "PDF",
+  pages: "Pages",
+  numbers: "Numbers",
+  key: "Keynote",
+  odt: "Writer",
+  ods: "Calc",
+  odp: "Impress",
+};
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function FileCard({ file, onOpen, onResize, onContextMenu }: Props) {
+function extColor(ext: string): string {
+  switch (ext) {
+    case "json":
+      return "var(--text-yellow)";
+    case "md":
+    case "markdown":
+      return "var(--text-blue)";
+    case "csv":
+      return "var(--text-green)";
+    case "rtf":
+      return "var(--text-orange)";
+    case "log":
+      return "var(--text-gray)";
+    default:
+      return "";
+  }
+}
+
+export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Props) {
   const [draft, setDraft] = useState<{ width: number; height: number } | null>(null);
   const draftRef = useRef<{ width: number; height: number } | null>(null);
   const start = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
 
   const size = draft ?? { width: file.frame.width, height: file.frame.height };
   const ext = extOf(file.asset.fileName);
+  const isText = TEXT_EXTS.has(ext);
+  const officeLabel = OFFICE_LABELS[ext];
 
   const onMove = (event: PointerEvent) => {
     if (!start.current) return;
     const next = {
-      width: Math.max(280, start.current.width + event.clientX - start.current.x),
-      height: Math.max(180, start.current.height + event.clientY - start.current.y),
+      width: Math.max(140, start.current.width + event.clientX - start.current.x),
+      height: Math.max(120, start.current.height + event.clientY - start.current.y),
     };
     draftRef.current = next;
     setDraft(next);
@@ -49,12 +90,95 @@ export function FileCard({ file, onOpen, onResize, onContextMenu }: Props) {
     }
   };
 
+  const actions = (
+    <>
+      <button
+        type="button"
+        className="file-card__open nodrag nopan"
+        aria-label={`Open ${file.asset.fileName}`}
+        title="Open in app"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpen(file.id);
+        }}
+      >
+        ↗
+      </button>
+      <button
+        type="button"
+        className="file-card__open nodrag nopan"
+        aria-label={`Reveal ${file.asset.fileName} in Finder`}
+        title="Reveal in Finder"
+        onClick={(e) => {
+          e.stopPropagation();
+          onReveal(file.id);
+        }}
+      >
+        ⌘
+      </button>
+    </>
+  );
+
+  // Compact icon card for archives/office (no inline preview).
+  if (!isText) {
+    return (
+      <article
+        className="file-card file-card--icon"
+        data-testid="file-card"
+        data-ext={ext}
+        style={{ width: size.width, height: size.height }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onContextMenu(file.id, e.clientX, e.clientY);
+        }}
+      >
+        <header className="file-card__header">
+          <span className="file-card__ext" aria-hidden="true">
+            {officeLabel ?? ext}
+          </span>
+          <div className="file-card__meta">
+            <strong title={file.asset.fileName}>{file.asset.fileName}</strong>
+            <span>{formatSize(file.asset.sizeBytes)}</span>
+          </div>
+          {actions}
+        </header>
+        <div className="file-card__placeholder" data-testid="file-preview">
+          {officeLabel ? `${officeLabel} document` : "Archive"}
+        </div>
+        <div
+          className="file-card__resize nodrag nopan"
+          data-testid="file-resize"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            start.current = {
+              x: e.clientX,
+              y: e.clientY,
+              width: file.frame.width,
+              height: file.frame.height,
+            };
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+            window.addEventListener("pointermove", onMove);
+            window.addEventListener("pointerup", onUp);
+          }}
+        />
+      </article>
+    );
+  }
+
+  // Text card with readable preview + per-format tint.
   return (
     <article
       className="file-card"
       data-testid="file-card"
       data-ext={ext}
-      style={{ width: size.width, height: size.height }}
+      style={
+        {
+          width: size.width,
+          height: size.height,
+          "--file-tint": extColor(ext),
+        } as React.CSSProperties
+      }
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -62,24 +186,14 @@ export function FileCard({ file, onOpen, onResize, onContextMenu }: Props) {
       }}
     >
       <header className="file-card__header">
-        <span className="file-card__ext" aria-hidden="true">
+        <span className="file-card__ext" aria-hidden="true" style={extColor(ext) ? { background: `color-mix(in srgb, ${extColor(ext)} 16%, transparent)` } : undefined}>
           {ext}
         </span>
         <div className="file-card__meta">
           <strong title={file.asset.fileName}>{file.asset.fileName}</strong>
           <span>{formatSize(file.asset.sizeBytes)}</span>
         </div>
-        <button
-          type="button"
-          className="file-card__open nodrag nopan"
-          aria-label={`Open ${file.asset.fileName}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen(file.id);
-          }}
-        >
-          ↗
-        </button>
+        {actions}
       </header>
       <pre className="file-card__preview" data-testid="file-preview">
         {file.previewText || "(no preview)"}

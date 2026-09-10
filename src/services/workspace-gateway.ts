@@ -452,6 +452,7 @@ export interface WorkspaceGateway {
   openFolderInFinder(cardId: string): Promise<void>;
   createFileCard(input: CreateFileCardInput): Promise<FileCardDto>;
   openFileCard(cardId: string): Promise<void>;
+  revealFileCard(cardId: string): Promise<void>;
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
   convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto>;
   enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto>;

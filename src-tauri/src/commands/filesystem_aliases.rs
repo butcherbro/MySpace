@@ -296,3 +296,42 @@ pub fn open_file_card(
     let _ = asset_path;
     Ok(())
 }
+
+/// Reveals the File Card's original source file in Finder (selected). Falls back
+/// to the managed copy when the source path is unknown.
+#[tauri::command]
+pub fn reveal_file_card(
+    db: DbState<'_>,
+    app: tauri::AppHandle,
+    card_id: String,
+) -> Result<(), WorkspaceError> {
+    let (source, asset_file) = {
+        let conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        let source = workspace_repository::load_file_card_source_path(&conn, &card_id)?;
+        let asset_file = workspace_repository::load_file_card_asset(&conn, &card_id)?;
+        (source, asset_file)
+    };
+    let target = if !source.is_empty() && std::path::Path::new(&source).exists() {
+        source
+    } else {
+        let asset_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| WorkspaceError::Database(e.to_string()))?
+            .join("assets");
+        asset_service::asset_abs_path(&asset_dir, &asset_file)
+            .to_string_lossy()
+            .into_owned()
+    };
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(&target)
+        .status()
+        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = target;
+    Ok(())
+}

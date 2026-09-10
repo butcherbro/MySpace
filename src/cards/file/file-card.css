@@ -71,6 +71,28 @@
   color: var(--ink);
 }
 
+/* Compact icon card (zip/office): centered type badge, no large preview. */
+.file-card--icon .file-card__placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  color: var(--ink-tertiary);
+  font: 500 13px/1.4 var(--font-ui);
+}
+
+.file-card--icon {
+  min-width: 140px;
+  min-height: 120px;
+}
+
+.file-card--icon .file-card__ext {
+  width: 48px;
+  height: 48px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--edge-focus) 10%, transparent);
+}
+
 .file-card__preview {
   flex: 1;
   margin: 0;

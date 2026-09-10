@@ -148,6 +148,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<void>("open_file_card", { cardId });
   }
 
+  revealFileCard(cardId: string): Promise<void> {
+    return invoke<void>("reveal_file_card", { cardId });
+  }
+
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
     return invoke<void>("update_image_caption", { input });
   }

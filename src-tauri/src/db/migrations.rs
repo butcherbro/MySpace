@@ -80,6 +80,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "file_cards",
         sql: include_str!("../../migrations/0013_file_cards.sql"),
     },
+    Migration {
+        version: 14,
+        name: "file_card_source_path",
+        sql: include_str!("../../migrations/0014_file_card_source_path.sql"),
+    },
 ];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.

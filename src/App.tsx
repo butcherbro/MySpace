@@ -764,6 +764,13 @@ function App() {
     [gateway],
   );
 
+  const revealFileCard = useCallback(
+    (cardId: string) => {
+      void gateway.revealFileCard(cardId).catch((e) => dispatch({ type: "failed", message: errorMessage(e) }));
+    },
+    [gateway],
+  );
+
   // Native drag-drop: Rust classifies Finder paths before the UI creates Cards.
   useEffect(() => {
     return subscribeToNativeDrops((paths, x, y) => {
@@ -2225,11 +2232,18 @@ function App() {
               });
             }
             if (isFileCard) {
-              actions.push({
-                id: "open-file",
-                label: "Open",
-                onSelect: () => openFileCard(card.id),
-              });
+              actions.push(
+                {
+                  id: "open-file",
+                  label: "Open",
+                  onSelect: () => openFileCard(card.id),
+                },
+                {
+                  id: "reveal-file",
+                  label: "Reveal in Finder",
+                  onSelect: () => revealFileCard(card.id),
+                },
+              );
             }
             if (isPortal) {
               actions.push(
@@ -2393,6 +2407,7 @@ function App() {
                 onLoadFolderPreview: handleLoadFolderPreview,
                 onOpenFolderInFinder: handleOpenFolderInFinder,
                 onOpenFileCard: openFileCard,
+                onRevealFileCard: revealFileCard,
                 onResizeFileCard: handleResizeNote,
                 highlightedPortalId,
                 highlightQuery,

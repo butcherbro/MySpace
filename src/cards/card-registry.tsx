@@ -50,6 +50,8 @@ export interface CardRenderContext {
   onOpenFolderInFinder: (id: string) => void;
   /** Open a File Card's stored copy in the default external app. */
   onOpenFileCard: (id: string) => void;
+  /** Reveal a File Card's original source in Finder (selected). */
+  onRevealFileCard: (id: string) => void;
   /** Persist a manual resize for File Cards. */
   onResizeFileCard: (id: string, width: number, height: number) => void;
   /** The portal currently being hovered during a card drag, if any. */
@@ -118,6 +120,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
       <FileCard
         file={card}
         onOpen={ctx.onOpenFileCard}
+        onReveal={ctx.onRevealFileCard}
         onResize={ctx.onResizeFileCard}
         onContextMenu={ctx.onContextMenu}
       />

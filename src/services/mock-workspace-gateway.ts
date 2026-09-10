@@ -502,6 +502,13 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return card ? Promise.resolve() : Promise.reject(new Error(`file card not found: ${cardId}`));
   }
 
+  revealFileCard(cardId: string): Promise<void> {
+    const card = this.snapshot.cards.find(
+      (candidate) => candidate.kind === "file" && candidate.id === cardId,
+    );
+    return card ? Promise.resolve() : Promise.reject(new Error(`file card not found: ${cardId}`));
+  }
+
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "image" && c.id === input.id,
