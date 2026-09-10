@@ -30,14 +30,14 @@
   border-bottom: 1px solid var(--edge-subtle);
   user-select: none;
   z-index: 20;
+  -webkit-app-region: drag;
 }
 
-/* Empty drag region under the macOS traffic lights. It is the only element
-   with data-tauri-drag-region; breadcrumbs stay interactive. */
+/* Empty drag region under the macOS traffic lights. The whole title bar is a
+   drag surface; interactive chrome below opts out. */
 .app-shell__titlebar-drag {
   flex: 0 0 78px;
   align-self: stretch;
-  -webkit-app-region: drag;
 }
 
 .app-shell__titlebar-content {
@@ -46,6 +46,7 @@
   display: flex;
   align-items: center;
   height: 100%;
+  -webkit-app-region: no-drag;
 }
 
 /* Right-aligned command group: search field followed by Undo/Redo. */
