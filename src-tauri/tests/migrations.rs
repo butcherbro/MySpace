@@ -295,3 +295,47 @@ fn cards_accept_filesystem_alias_kind_and_foreign_keys_stay_clean() {
     let violations = stmt.query_map([], |_| Ok(())).unwrap().count();
     assert_eq!(violations, 0);
 }
+
+#[test]
+fn migration_creates_file_cards_table() {
+    let conn = open_in_memory().unwrap();
+    let tables = table_names(&conn);
+    assert!(
+        tables.iter().any(|t| t == "file_cards"),
+        "missing file_cards table; got {tables:?}"
+    );
+}
+
+#[test]
+fn cards_accept_file_kind_and_foreign_keys_stay_clean() {
+    let mut conn = open_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws2', 'Home', 'home2', 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) VALUES ('home2', 'ws2', NULL, 'Home', 'default', NULL, 1, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at) VALUES ('a1', 'a1.txt', 'text/plain', 'a1.txt', NULL, NULL, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES ('fc1', 'home2', 'file', 0, 0, 280, 180, 0, 1, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text) VALUES ('fc1', 'a1', 'text/plain', 'hello')",
+        [],
+    )
+    .unwrap();
+
+    let mut stmt = conn.prepare("PRAGMA foreign_key_check").unwrap();
+    let violations = stmt.query_map([], |_| Ok(())).unwrap().count();
+    assert_eq!(violations, 0);
+}

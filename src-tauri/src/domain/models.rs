@@ -190,6 +190,33 @@ pub struct AssetDto {
     pub file_path: String,
 }
 
+/// A File Card: a text-like file copied into the managed asset store with a
+/// bounded inline preview for display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileCardDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    pub asset: AssetDto,
+    pub preview_text: String,
+}
+
+/// Input for creating a File Card from a dropped text-like file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFileCardInput {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub source_path: String,
+    pub mime_type: String,
+    pub file_name: String,
+}
+
 /// The card kinds, tagged for the frontend.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -201,6 +228,8 @@ pub enum CardDto {
     Embed(EmbedCardDto),
     #[serde(rename = "filesystem_alias")]
     FilesystemAlias(FilesystemAliasDto),
+    #[serde(rename = "file")]
+    File(FileCardDto),
 }
 
 impl CardDto {
@@ -212,6 +241,7 @@ impl CardDto {
             CardDto::Image(i) => &i.id,
             CardDto::Embed(e) => &e.id,
             CardDto::FilesystemAlias(a) => &a.id,
+            CardDto::File(f) => &f.id,
         }
     }
 }
