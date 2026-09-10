@@ -2207,6 +2207,7 @@ function App() {
             const isImage = card?.kind === "image";
             const isPortal = card?.kind === "board_portal";
             const isFolderAlias = card?.kind === "filesystem_alias";
+            const isFileCard = card?.kind === "file";
             const actions: ContextMenuAction[] = [
               { id: "copy-link", label: "Copy MySpace Link", onSelect: () => void handleCopyLink() },
             ];
@@ -2221,6 +2222,13 @@ function App() {
                 id: "show-in-finder",
                 label: "Show in Finder",
                 onSelect: () => handleOpenFolderInFinder(card.id),
+              });
+            }
+            if (isFileCard) {
+              actions.push({
+                id: "open-file",
+                label: "Open",
+                onSelect: () => openFileCard(card.id),
               });
             }
             if (isPortal) {

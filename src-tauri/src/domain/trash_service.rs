@@ -21,7 +21,7 @@ pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, Worksp
     let batch_id = uuid::Uuid::now_v7().to_string();
     let changed = conn.execute(
         "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-         WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias') AND deleted_at IS NULL",
+         WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file') AND deleted_at IS NULL",
         params![now, batch_id, card_id],
     )?;
     if changed == 0 {
@@ -183,7 +183,7 @@ pub fn trash_selection(
                 // leaf card: note / image / embed / filesystem alias
                 let changed = tx.execute(
                     "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-                     WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias') AND deleted_at IS NULL",
+                     WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file') AND deleted_at IS NULL",
                     params![now, batch_id, item.id],
                 )?;
                 if changed == 0 {
@@ -270,6 +270,10 @@ pub fn empty_trash(
     )?;
     tx.execute(
         "DELETE FROM embed_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM file_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
         [],
     )?;
     tx.execute(

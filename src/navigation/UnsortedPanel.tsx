@@ -104,6 +104,15 @@ export function UnsortedPanel({ cards, onPlace, onDragStartCard, onClose }: Unso
                 </span>
               </div>
             )}
+            {card.kind === "file" && (
+              <div className="unsorted-panel__folder">
+                <span className="unsorted-panel__folder-icon" aria-hidden="true" />
+                <span className="unsorted-panel__folder-meta">
+                  <strong>{card.asset.fileName}</strong>
+                  <span>{card.asset.filePath}</span>
+                </span>
+              </div>
+            )}
             <button
               type="button"
               className="unsorted-panel__place"
