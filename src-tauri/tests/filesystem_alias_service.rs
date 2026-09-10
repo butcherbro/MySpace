@@ -212,7 +212,7 @@ fn classify_drop_marks_text_files() {
     assert_eq!(classify_drop(Path::new("/a/README.md")).0, "text_file");
     assert_eq!(classify_drop(Path::new("/a/data.json")).0, "text_file");
     assert_eq!(classify_drop(Path::new("/a/table.csv")).0, "text_file");
-    assert_eq!(classify_drop(Path::new("/a/doc.docx")).0, "unsupported");
-    assert_eq!(classify_drop(Path::new("/a/sheet.xlsx")).0, "unsupported");
-    assert_eq!(classify_drop(Path::new("/a/report.pdf")).0, "unsupported");
+    assert_eq!(classify_drop(Path::new("/a/doc.docx")).0, "office_file");
+    assert_eq!(classify_drop(Path::new("/a/sheet.xlsx")).0, "office_file");
+    assert_eq!(classify_drop(Path::new("/a/report.pdf")).0, "office_file");
 }

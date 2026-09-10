@@ -210,6 +210,29 @@ pub fn create_file_card(
     };
     let preview = if file_name.to_ascii_lowercase().ends_with(".zip") {
         "(zip archive)".to_string()
+    } else if matches!(
+        file_name
+            .rsplit('.')
+            .next()
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some(
+            "doc"
+                | "docx"
+                | "xls"
+                | "xlsx"
+                | "ppt"
+                | "pptx"
+                | "pdf"
+                | "pages"
+                | "numbers"
+                | "key"
+                | "odt"
+                | "ods"
+                | "odp"
+        )
+    ) {
+        "(office document)".to_string()
     } else {
         asset_service::read_text_preview(&asset_dir, &asset, 8 * 1024)
     };

@@ -268,6 +268,25 @@ pub fn classify_drop(path: &Path) -> (String, Option<String>, Option<String>) {
         "text_file"
     } else if ext_lower.as_deref() == Some("zip") {
         "archive"
+    } else if matches!(
+        ext_lower.as_deref(),
+        Some(
+            "doc"
+                | "docx"
+                | "xls"
+                | "xlsx"
+                | "ppt"
+                | "pptx"
+                | "pdf"
+                | "pages"
+                | "numbers"
+                | "key"
+                | "odt"
+                | "ods"
+                | "odp",
+        )
+    ) {
+        "office_file"
     } else {
         "unsupported"
     };
