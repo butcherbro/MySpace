@@ -1361,6 +1361,18 @@ function App() {
     }
   }, [contextMenu, state.cards, gateway]);
 
+  // Copy the actual source URL of a Link Card (embed).
+  const handleCopySourceUrl = useCallback(async () => {
+    if (!contextMenu) return;
+    const card = state.cards.find((c): c is EmbedCardDto => c.kind === "embed" && c.id === contextMenu.cardId);
+    if (!card) return;
+    try {
+      await copyText(card.sourceUrl);
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [contextMenu, state.cards]);
+
   // Copy the stable address of the currently-open board.
   const handleCopyBoardLink = useCallback(async () => {
     setPaneContextMenu(null);
@@ -2215,9 +2227,13 @@ function App() {
             const isPortal = card?.kind === "board_portal";
             const isFolderAlias = card?.kind === "filesystem_alias";
             const isFileCard = card?.kind === "file";
+            const isLinkCard = card?.kind === "embed";
             const actions: ContextMenuAction[] = [
               { id: "copy-link", label: "Copy MySpace Link", onSelect: () => void handleCopyLink() },
             ];
+            if (isLinkCard) {
+              actions.push({ id: "copy-url", label: "Copy URL", onSelect: () => void handleCopySourceUrl() });
+            }
             if (isImage) {
               actions.push(
                 { id: "copy-file-path", label: "Copy File Path", onSelect: () => void handleCopyFilePath() },

@@ -15,10 +15,10 @@ function extOf(name: string): string {
   return i > 0 ? name.slice(i + 1).toLowerCase() : "file";
 }
 
-const TEXT_EXTS = new Set(["txt", "md", "markdown", "json", "csv", "rtf", "log"]);
+const TEXT_EXTS = new Set(["txt", "md", "markdown", "json", "csv", "rtf", "log", "html", "htm"]);
 
-// Brand-ish labels for office/archive types; the icon tile is derived from the
-// extension so no external icon set is needed.
+// Brand-ish labels for office/archive types. The tile color matches the
+// canonical document color (Word blue, Excel green, PowerPoint red, PDF red).
 const OFFICE_LABELS: Record<string, string> = {
   doc: "Word",
   docx: "Word",
@@ -35,6 +35,20 @@ const OFFICE_LABELS: Record<string, string> = {
   odp: "Impress",
 };
 
+// Canonical document colors (Word blue, Excel green, PowerPoint red, PDF red).
+const OFFICE_COLORS: Record<string, string> = {
+  Word: "#2b579a",
+  Excel: "#217346",
+  PowerPoint: "#d24726",
+  PDF: "#d93025",
+  Pages: "#f8a000",
+  Numbers: "#f8a000",
+  Keynote: "#f8a000",
+  Writer: "#1a6f9c",
+  Calc: "#1a6f9c",
+  Impress: "#1a6f9c",
+};
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -43,8 +57,6 @@ function formatSize(bytes: number): string {
 
 function extColor(ext: string): string {
   switch (ext) {
-    case "json":
-      return "var(--text-yellow)";
     case "md":
     case "markdown":
       return "var(--text-blue)";
@@ -54,8 +66,11 @@ function extColor(ext: string): string {
       return "var(--text-orange)";
     case "log":
       return "var(--text-gray)";
+    case "html":
+    case "htm":
+      return "#e44d26"; // HTML orange
     default:
-      return "";
+      return ""; // txt/json stay neutral
   }
 }
 
@@ -134,7 +149,15 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
         }}
       >
         <header className="file-card__header">
-          <span className="file-card__ext" aria-hidden="true">
+          <span
+            className="file-card__ext"
+            aria-hidden="true"
+            style={
+              officeLabel
+                ? { background: OFFICE_COLORS[officeLabel], color: "#fff" }
+                : undefined
+            }
+          >
             {officeLabel ?? ext}
           </span>
           <div className="file-card__meta">
