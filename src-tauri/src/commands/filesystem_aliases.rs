@@ -208,7 +208,11 @@ pub fn create_file_card(
             &source_path,
         )?
     };
-    let preview = asset_service::read_text_preview(&asset_dir, &asset, 8 * 1024);
+    let preview = if file_name.to_ascii_lowercase().ends_with(".zip") {
+        "(zip archive)".to_string()
+    } else {
+        asset_service::read_text_preview(&asset_dir, &asset, 8 * 1024)
+    };
 
     {
         let mut conn = db

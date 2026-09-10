@@ -302,7 +302,7 @@ export interface CreateFolderAliasInput {
 
 export interface DropPathClassificationDto {
   path: string;
-  kind: "folder" | "image" | "text_file" | "unsupported";
+  kind: "folder" | "image" | "text_file" | "archive" | "unsupported";
   fileName: string;
   mimeType: string | null;
 }

@@ -36,7 +36,7 @@ export async function routeNativeDropItems({
     const point = { x: origin.x + placedIndex * 18, y: origin.y + placedIndex * 18 };
     placedIndex += 1;
     if (item.kind === "folder") await onFolder(item, point);
-    else if (item.kind === "text_file") await onFile(item, point);
+    else if (item.kind === "text_file" || item.kind === "archive") await onFile(item, point);
     else await onImage(item, point);
   }
 }

@@ -263,9 +263,11 @@ pub fn classify_drop(path: &Path) -> (String, Option<String>, Option<String>) {
         "image"
     } else if matches!(
         ext_lower.as_deref(),
-        Some("txt" | "md" | "markdown" | "json" | "csv")
+        Some("txt" | "md" | "markdown" | "json" | "csv" | "rtf" | "log")
     ) {
         "text_file"
+    } else if ext_lower.as_deref() == Some("zip") {
+        "archive"
     } else {
         "unsupported"
     };
