@@ -237,7 +237,7 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
           className="file-card__html"
           data-testid="file-preview"
           title={file.asset.fileName}
-          srcDoc={file.previewText}
+          src={`myspace-asset://localhost/${file.asset.filePath}`}
           sandbox=""
           tabIndex={-1}
         />

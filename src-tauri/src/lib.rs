@@ -174,6 +174,7 @@ pub fn mime_for_asset_name(name: &str) -> &'static str {
         "ico" => "image/x-icon",
         "svg" => "image/svg+xml",
         "heic" => "image/heic",
+        "html" | "htm" => "text/html",
         _ => "application/octet-stream",
     }
 }
