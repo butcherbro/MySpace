@@ -52,6 +52,7 @@ import type {
   BoardPortalDto,
   CardDto,
   EmbedCardDto,
+  FileCardDto,
   FilesystemAliasDto,
   ImageCardDto,
   NoteCardDto,
@@ -728,6 +729,41 @@ function App() {
     [gateway, idGenerator],
   );
 
+  const createFileCard = useCallback(
+    async (item: { path: string; fileName: string; mimeType: string }, boardX: number, boardY: number) => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard) return;
+      const frame = {
+        x: Number.isFinite(boardX) ? boardX : 80,
+        y: Number.isFinite(boardY) ? boardY : 80,
+        width: 320,
+        height: 240,
+      };
+      try {
+        const card: FileCardDto = await gateway.createFileCard({
+          id: idGenerator.nextId(),
+          boardId: currentBoard.id,
+          frame,
+          zIndex: cardsRef.current.length,
+          sourcePath: item.path,
+          mimeType: item.mimeType,
+          fileName: item.fileName,
+        });
+        dispatch({ type: "cardAdded", card });
+      } catch (e) {
+        dispatch({ type: "failed", message: errorMessage(e) });
+      }
+    },
+    [gateway, idGenerator],
+  );
+
+  const openFileCard = useCallback(
+    (cardId: string) => {
+      void gateway.openFileCard(cardId).catch((e) => dispatch({ type: "failed", message: errorMessage(e) }));
+    },
+    [gateway],
+  );
+
   // Native drag-drop: Rust classifies Finder paths before the UI creates Cards.
   useEffect(() => {
     return subscribeToNativeDrops((paths, x, y) => {
@@ -754,11 +790,21 @@ function App() {
             point.x + 20,
             point.y + 30,
           ),
+        onFile: (item, point) =>
+          createFileCard(
+            {
+              path: item.path,
+              fileName: item.fileName ?? "file",
+              mimeType: item.mimeType ?? "text/plain",
+            },
+            point.x,
+            point.y,
+          ),
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
       });
     });
-  }, [createFolderShortcut, gateway, importImageCard]);
+  }, [createFolderShortcut, createFileCard, gateway, importImageCard]);
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {
@@ -2338,6 +2384,8 @@ function App() {
                 onResizeFilesystemAlias: handleResizeNote,
                 onLoadFolderPreview: handleLoadFolderPreview,
                 onOpenFolderInFinder: handleOpenFolderInFinder,
+                onOpenFileCard: openFileCard,
+                onResizeFileCard: handleResizeNote,
                 highlightedPortalId,
                 highlightQuery,
                 onNoteCommands: handleNoteCommands,

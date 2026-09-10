@@ -47,6 +47,7 @@ describe("native drag-drop", () => {
     };
     const createFolder = vi.fn().mockResolvedValue(undefined);
     const createImage = vi.fn().mockResolvedValue(undefined);
+    const createFile = vi.fn().mockResolvedValue(undefined);
 
     await routeNativeDropItems({
       gateway,
@@ -54,6 +55,7 @@ describe("native drag-drop", () => {
       origin: { x: 400, y: 300 },
       onFolder: createFolder,
       onImage: createImage,
+      onFile: createFile,
     });
 
     expect(gateway.classifyDropPaths).toHaveBeenCalledWith([

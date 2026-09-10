@@ -145,6 +145,28 @@ export interface FilesystemAliasDto {
   displayName: string;
 }
 
+/** A File Card: a text-like file copied into the managed asset store. */
+export interface FileCardDto {
+  kind: "file";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  revision: number;
+  asset: AssetDto;
+  previewText: string;
+}
+
+export interface CreateFileCardInput {
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  sourcePath: string;
+  mimeType: string;
+  fileName: string;
+}
+
 export type FolderPreviewStatus = "ready" | "empty" | "missing" | "permission_lost" | "io_error";
 
 export interface FolderEntryDto {
@@ -162,7 +184,7 @@ export interface FolderPreviewDto {
   pathHint: string;
 }
 
-export type CardDto = NoteCardDto | BoardPortalDto | ImageCardDto | EmbedCardDto | FilesystemAliasDto;
+export type CardDto = NoteCardDto | BoardPortalDto | ImageCardDto | EmbedCardDto | FilesystemAliasDto | FileCardDto;
 
 export interface BoardSnapshot {
   board: BoardSummary;
@@ -280,7 +302,7 @@ export interface CreateFolderAliasInput {
 
 export interface DropPathClassificationDto {
   path: string;
-  kind: "folder" | "image" | "unsupported";
+  kind: "folder" | "image" | "text_file" | "unsupported";
   fileName: string;
   mimeType: string | null;
 }
@@ -362,7 +384,7 @@ export interface EmptyTrashResult {
 /** A single workspace search result. */
 export interface SearchResultDto {
   entityId: string;
-  kind: "board" | "note" | "link" | "image" | "folder";
+  kind: "board" | "note" | "link" | "image" | "folder" | "file";
   title: string;
   /** Bounded match-context snippet; `null` when the match is in the title. */
   excerpt: string | null;
@@ -428,6 +450,8 @@ export interface WorkspaceGateway {
   listFolderPreview(cardId: string, limit: number): Promise<FolderPreviewDto>;
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]>;
   openFolderInFinder(cardId: string): Promise<void>;
+  createFileCard(input: CreateFileCardInput): Promise<FileCardDto>;
+  openFileCard(cardId: string): Promise<void>;
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
   convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto>;
   enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto>;

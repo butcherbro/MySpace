@@ -17,6 +17,7 @@ interface RouteNativeDropItemsInput {
   origin: { x: number; y: number };
   onFolder: (item: DropPathClassificationDto, point: { x: number; y: number }) => Promise<void>;
   onImage: (item: DropPathClassificationDto, point: { x: number; y: number }) => Promise<void>;
+  onFile: (item: DropPathClassificationDto, point: { x: number; y: number }) => Promise<void>;
 }
 
 /** Classifies native paths in Rust and preserves source order with a small fan-out offset. */
@@ -26,6 +27,7 @@ export async function routeNativeDropItems({
   origin,
   onFolder,
   onImage,
+  onFile,
 }: RouteNativeDropItemsInput): Promise<void> {
   const items = await gateway.classifyDropPaths(paths);
   let placedIndex = 0;
@@ -34,6 +36,7 @@ export async function routeNativeDropItems({
     const point = { x: origin.x + placedIndex * 18, y: origin.y + placedIndex * 18 };
     placedIndex += 1;
     if (item.kind === "folder") await onFolder(item, point);
+    else if (item.kind === "text_file") await onFile(item, point);
     else await onImage(item, point);
   }
 }

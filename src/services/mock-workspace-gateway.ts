@@ -7,6 +7,7 @@ import type {
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateChildBoardInput,
+  CreateFileCardInput,
   CreateFolderAliasInput,
   CreateImageCardInput,
   CreateNoteInput,
@@ -14,6 +15,7 @@ import type {
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
   DropPathClassificationDto,
+  FileCardDto,
   FilesystemAliasDto,
   FolderPreviewDto,
   ImportAssetInput,
@@ -469,6 +471,37 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return card ? Promise.resolve() : Promise.reject(new Error(`folder alias not found: ${cardId}`));
   }
 
+  async createFileCard(input: CreateFileCardInput): Promise<FileCardDto> {
+    const fileName = input.fileName.split("/").pop() ?? input.fileName;
+    const card: FileCardDto = {
+      kind: "file",
+      id: input.id,
+      boardId: input.boardId,
+      frame: { ...input.frame },
+      zIndex: input.zIndex,
+      revision: 1,
+      asset: {
+        id: `asset-${input.id}`,
+        fileName,
+        mimeType: input.mimeType,
+        width: null,
+        height: null,
+        sizeBytes: 0,
+        filePath: `${input.id}.${fileName.split(".").pop() ?? "bin"}`,
+      },
+      previewText: "mock preview of " + fileName,
+    };
+    this.snapshot.cards.push(card);
+    return Promise.resolve(structuredClone(card));
+  }
+
+  openFileCard(cardId: string): Promise<void> {
+    const card = this.snapshot.cards.find(
+      (candidate) => candidate.kind === "file" && candidate.id === cardId,
+    );
+    return card ? Promise.resolve() : Promise.reject(new Error(`file card not found: ${cardId}`));
+  }
+
   updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "image" && c.id === input.id,
@@ -753,6 +786,25 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           });
         }
       }
+      if (card.kind === "file") {
+        const nameMatch = card.asset.fileName.toLowerCase().includes(q);
+        if (nameMatch) {
+          hits.push({
+            rank: 1,
+            result: {
+              entityId: card.id,
+              kind: "file",
+              title: card.asset.fileName,
+              excerpt: null,
+              boardId: card.boardId,
+              boardTrail: this.buildBreadcrumbs(card.boardId),
+              ...identity(card.boardId),
+              thumbnailAsset: null,
+              createdAt: Date.now(),
+            },
+          });
+        }
+      }
     }
 
     hits.sort(
@@ -960,6 +1012,8 @@ function cardTitle(card: CardDto): string {
       return card.title || card.sourceUrl || "";
     case "filesystem_alias":
       return card.displayName;
+    case "file":
+      return card.asset.fileName;
     default:
       return "";
   }
@@ -972,6 +1026,8 @@ function cardThumbnail(card: CardDto): AssetDto | null {
     case "embed":
       return card.previewAsset ?? card.faviconAsset;
     case "filesystem_alias":
+      return null;
+    case "file":
       return null;
     default:
       return null;
