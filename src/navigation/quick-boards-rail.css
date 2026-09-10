@@ -60,6 +60,17 @@
   padding-inline: var(--space-1);
 }
 
+/* In the collapsed icon strip there is nothing to scroll: hide the scrollbar
+   so it never overlaps the pinned icons. */
+.quick-boards-rail--collapsed .quick-boards-rail__list {
+  overflow: visible;
+  scrollbar-width: none;
+}
+
+.quick-boards-rail--collapsed .quick-boards-rail__list::-webkit-scrollbar {
+  display: none;
+}
+
 .quick-boards-rail--collapsed .quick-boards-rail__header,
 .quick-boards-rail--collapsed .quick-boards-rail__open {
   justify-content: center;

@@ -140,9 +140,10 @@ function App() {
     tabsRef.current = tabs;
   }, [tabs]);
 
-  // Quick Boards: persisted, ordered references to Boards.
+  // Quick Boards: persisted, ordered references to Boards. The rail starts
+  // collapsed so it never occupies full width on launch.
   const [quickBoards, setQuickBoards] = useState<QuickBoardDto[]>([]);
-  const [quickBoardsCollapsed, setQuickBoardsCollapsed] = useState(false);
+  const [quickBoardsCollapsed, setQuickBoardsCollapsed] = useState(true);
 
   // Unsorted drawer: shows when unsorted cards exist; Close hides it until the
   // next blind drop.

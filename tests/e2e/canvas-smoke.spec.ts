@@ -526,16 +526,17 @@ test("Back recreates a board tab that was closed while inactive", async ({ page 
 test("dropping a board portal pins a quick board; click opens; remove unpins", async ({ page }) => {
   await page.goto("/");
 
-  // The persistent rail is visible even before the first board is pinned.
+  // The persistent rail is visible even before the first board is pinned; it
+  // starts collapsed so the strip never occupies full width on launch.
   await expect(page.getByTestId("quick-boards")).toHaveCount(1);
   await expect(page.getByTestId("quick-board")).toHaveCount(0);
+  await expect(page.getByTestId("right-rail-region")).toHaveAttribute("data-collapsed", "true");
 
   // Create a child board portal.
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await expect(page.getByTestId("board-portal-card")).toHaveCount(1);
 
   // Свёрнутый край остаётся полноценной целью для закрепления доски.
-  await page.getByRole("button", { name: "Collapse quick boards" }).click();
   await expect(page.getByTestId("right-rail-region")).toHaveAttribute("data-collapsed", "true");
   await expect
     .poll(async () => (await page.getByTestId("right-rail-region").boundingBox())?.width)

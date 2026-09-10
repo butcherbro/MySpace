@@ -28,7 +28,8 @@ test("right rail renders content", async ({ page }) => {
   await page.locator(".board-portal-card__tile").dblclick({ force: true });
   await expect(page.getByTestId("unsorted-panel")).toBeVisible();
   await expect(page.getByTestId("unsorted-card")).toHaveCount(1);
-  // Right rail (bookmarks) should render its heading.
+  // Right rail (bookmarks) should render its heading; it starts collapsed.
+  await page.getByRole("button", { name: "Expand quick boards" }).click();
   await expect(page.getByText("Quick Boards")).toBeVisible();
 
   // После размещения последней карточки колонка Unsorted должна исчезнуть,

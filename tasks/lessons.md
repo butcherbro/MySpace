@@ -10,6 +10,22 @@
   `.continue-here.md`, and give the user one copy-paste prompt for the external
   agent.
 
+## 2026-09-10 — Window dragging needs the Tauri permission, not CSS
+
+- User-reported failure: after a refactor the window could not be dragged (only
+  resized) and a mousedown on the title bar painted a marquee on the canvas.
+- Root cause: WKWebView does not honor CSS `-webkit-app-region`, and even the
+  official `data-tauri-drag-region` attribute conflicts with full-width
+  interactive chrome. The explicit `getCurrentWindow().startDragging()` path
+  also fails silently unless `core:window:allow-start-dragging` is granted in
+  `src-tauri/capabilities/default.json` (the `core:default` set only has read
+  window commands).
+- Consequence: call `startDragging()` on title-bar mousedown (skipping
+  `button/input/a/[data-no-drag]`), and keep the capability granted. Verify
+  drag in the packaged `.app`, never just in `tauri dev`.
+- Related UX: Quick Boards starts collapsed; a collapsed icon strip hides its
+  scrollbar so it never overlaps the pinned icons.
+
 ## 2026-08-28 — Note pointer intent
 
 - User correction: a normal click on a Note must edit immediately. Holding the same click and moving must drag either a Note or Board Portal.
