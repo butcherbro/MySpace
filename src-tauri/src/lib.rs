@@ -89,6 +89,10 @@ pub fn run() {
             let mut conn = db::open_and_bootstrap(&db_path)
                 .expect("failed to open and bootstrap workspace database");
 
+            // Collapse duplicate favicons (10 YouTube links -> 1 asset), then
+            // GC can remove the orphaned copies. Best-effort; never blocks startup.
+            let _ = domain::link_metadata::collapse_favicon_duplicates(&mut conn);
+
             // Converge any interrupted asset GC: delete orphaned files + rows.
             // Best-effort; a failure never blocks startup.
             let _ = domain::asset_service::collect_orphaned_assets(&mut conn, &assets_dir);

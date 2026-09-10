@@ -339,3 +339,70 @@ fn downloaded_favicon_keeps_an_ico_extension() {
     assert!(asset.file_path.ends_with(".ico"));
     fs::remove_dir_all(&tmp).ok();
 }
+
+#[test]
+fn collapse_favicon_duplicates_reuses_one_asset_per_source() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home: String = conn
+        .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let tmp = std::env::temp_dir().join(format!("myspace-dedup-{}", uuid::Uuid::now_v7()));
+    let asset_dir = tmp.join("assets");
+    std::fs::create_dir_all(&asset_dir).unwrap();
+
+    // Two embed cards with the same source_url, each with its own favicon asset.
+    for (card, fav) in [("c1", "f1"), ("c2", "f2")] {
+        conn.execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'embed', 0, 0, 320, 240, 0, 1, 0, 0)",
+            rusqlite::params![card, home],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, metadata_status) VALUES (?1, 'https://youtube.com/watch?v=x', 'youtube.com', 'c', '{}', '', 'ready')",
+            [card],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at) VALUES (?1, ?2, 'image/x-icon', 'favicon.ico', NULL, NULL, 4, 0)",
+            rusqlite::params![fav, format!("{fav}.ico")],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE embed_cards SET favicon_asset_id = ?1 WHERE card_id = ?2",
+            rusqlite::params![fav, card],
+        )
+        .unwrap();
+    }
+
+    let collapsed =
+        myspace_lib::domain::link_metadata::collapse_favicon_duplicates(&mut conn).unwrap();
+    assert_eq!(collapsed, 1, "one duplicate favicon is re-pointed");
+
+    let ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT favicon_asset_id FROM embed_cards ORDER BY card_id")
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(
+        ids,
+        vec!["f1".to_string(), "f1".to_string()],
+        "both cards share f1"
+    );
+
+    let cached: Option<String> = conn
+        .query_row(
+            "SELECT asset_id FROM favicon_cache WHERE source_url = 'https://youtube.com/watch?v=x'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cached.as_deref(), Some("f1"));
+    fs::remove_dir_all(&tmp).ok();
+}

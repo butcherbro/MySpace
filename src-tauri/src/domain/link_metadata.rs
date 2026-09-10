@@ -19,6 +19,8 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::ApplyEmbedMetadataInput;
 use crate::repositories::workspace_repository;
 
+use rusqlite::OptionalExtension;
+
 const MAX_REDIRECTS: usize = 5;
 const TEXT_LIMIT: usize = 2 * 1024 * 1024;
 const IMAGE_LIMIT: usize = 8 * 1024 * 1024;
@@ -274,6 +276,61 @@ pub fn extract_html_metadata(base_url: &str, html: &str) -> Result<LinkMetadata,
     })
 }
 
+/// Collapses existing duplicate favicons: for each distinct favicon `source_url`
+/// that multiple Link Cards referenced, re-point every card to the first stored
+/// asset and record it in the dedup cache. Runs once at startup; orphaned files
+/// are cleaned by the regular asset GC.
+pub fn collapse_favicon_duplicates(conn: &mut rusqlite::Connection) -> Result<i64, WorkspaceError> {
+    // Favicon URLs live only in embed_cards (enrichment refreshes them); the
+    // simplest deterministic dedup is: per source_url, keep the lowest asset id
+    // among current favicon_asset_id values, re-point the rest, and fill cache.
+    let groups: Vec<(String, Vec<String>)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.source_url, a.id FROM embed_cards e
+                 JOIN assets a ON a.id = e.favicon_asset_id
+                 WHERE e.favicon_asset_id IS NOT NULL AND e.source_url <> ''
+                 ORDER BY e.source_url, a.id",
+            )
+            .map_err(WorkspaceError::from)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(WorkspaceError::from)?;
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for row in rows.flatten() {
+            map.entry(row.0).or_default().push(row.1);
+        }
+        map.into_iter().collect()
+    };
+
+    let mut collapsed = 0i64;
+    let tx = conn.transaction().map_err(WorkspaceError::from)?;
+    for (source_url, asset_ids) in &groups {
+        let Some(first) = asset_ids.first() else {
+            continue;
+        };
+        // Record the canonical mapping for future enrichment.
+        tx.execute(
+            "INSERT OR REPLACE INTO favicon_cache (source_url, asset_id) VALUES (?1, ?2)",
+            rusqlite::params![source_url, first],
+        )
+        .map_err(WorkspaceError::from)?;
+        // Re-point any embed that uses a later asset id.
+        for asset_id in asset_ids.iter().skip(1) {
+            let changed = tx
+                .execute(
+                    "UPDATE embed_cards SET favicon_asset_id = ?1 WHERE favicon_asset_id = ?2",
+                    rusqlite::params![first, asset_id],
+                )
+                .map_err(WorkspaceError::from)?;
+            collapsed += changed as i64;
+        }
+    }
+    tx.commit().map_err(WorkspaceError::from)?;
+    Ok(collapsed)
+}
+
 pub fn enrich_embed_with_metadata(
     conn: &mut rusqlite::Connection,
     asset_dir: &Path,
@@ -293,6 +350,7 @@ pub fn enrich_embed_with_metadata(
                 fetcher,
                 metadata.preview_url.as_deref(),
                 "preview",
+                None,
             )?;
             let favicon_asset_id = download_optional_image(
                 conn,
@@ -300,6 +358,7 @@ pub fn enrich_embed_with_metadata(
                 fetcher,
                 metadata.favicon_url.as_deref(),
                 "favicon",
+                metadata.favicon_url.as_deref(),
             )?;
             // A user-authored description is authoritative and never overwritten
             // by site metadata. Fall back to the site description only when empty.
@@ -423,12 +482,38 @@ fn download_optional_image(
     fetcher: &dyn MetadataFetcher,
     url: Option<&str>,
     fallback_name: &str,
+    cache_key: Option<&str>,
 ) -> Result<Option<String>, WorkspaceError> {
     let Some(url) = url else {
         return Ok(None);
     };
     validate_public_http_url(url)
         .map_err(|e| WorkspaceError::ConstraintViolation(e.to_string()))?;
+
+    // Favicon dedup: reuse one stored asset per source URL.
+    if let Some(key) = cache_key {
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT asset_id FROM favicon_cache WHERE source_url = ?1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(asset_id) = existing {
+            // Confirm the asset row still exists (it may have been GC'd).
+            let still = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM assets WHERE id = ?1",
+                    [&asset_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0);
+            if still > 0 {
+                return Ok(Some(asset_id));
+            }
+        }
+    }
+
     let response = match fetcher.fetch_image(url) {
         Ok(response) if is_supported_image_mime(&response.mime_type) => response,
         _ => return Ok(None),
@@ -442,6 +527,12 @@ fn download_optional_image(
         &response.mime_type,
         &response.bytes,
     )?;
+    if let Some(key) = cache_key {
+        conn.execute(
+            "INSERT OR REPLACE INTO favicon_cache (source_url, asset_id) VALUES (?1, ?2)",
+            rusqlite::params![key, asset.id],
+        )?;
+    }
     Ok(Some(asset.id))
 }
 

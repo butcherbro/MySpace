@@ -90,6 +90,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "file_card_preview_asset",
         sql: include_str!("../../migrations/0015_file_card_preview_asset.sql"),
     },
+    Migration {
+        version: 16,
+        name: "favicon_cache",
+        sql: include_str!("../../migrations/0016_favicon_cache.sql"),
+    },
 ];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.
