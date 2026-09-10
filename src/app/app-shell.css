@@ -30,7 +30,6 @@
   border-bottom: 1px solid var(--edge-subtle);
   user-select: none;
   z-index: 20;
-  -webkit-app-region: drag;
 }
 
 /* Empty drag region under the macOS traffic lights. The whole title bar is a
@@ -46,7 +45,6 @@
   display: flex;
   align-items: center;
   height: 100%;
-  -webkit-app-region: no-drag;
 }
 
 /* Right-aligned command group: search field followed by Undo/Redo. */
@@ -57,7 +55,6 @@
   margin-left: auto;
   padding-right: var(--space-2);
   flex: 0 0 auto;
-  -webkit-app-region: no-drag;
 }
 
 .app-shell__tool-rail {

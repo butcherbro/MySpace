@@ -20,19 +20,35 @@ export function AppShell({ topBar, toolRail, rightRail, rightRailCollapsed = fal
   ]
     .filter(Boolean)
     .join(" ");
+
+  // Window dragging is done explicitly: WKWebView does not honor CSS
+  // `-webkit-app-region`, and a wide `data-tauri-drag-region` header conflicts
+  // with interactive chrome. Starting the drag ourselves on mouse-down keeps
+  // buttons/inputs/search clickable while the rest of the bar moves the window.
+  function onTitleBarMouseDown(event: React.MouseEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, textarea, a, select, [data-no-drag]")) return;
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    event.preventDefault();
+    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      void getCurrentWindow().startDragging();
+    });
+  }
+
   return (
     <div
       className={className}
       data-testid="app-shell"
       data-theme="system"
     >
-      <header className="app-shell__title-bar" data-testid="title-bar-region" data-tauri-drag-region>
-        {/* Empty drag spacer under the macOS traffic lights. The header itself
-            is the drag surface; interactive chrome opts out below. */}
-        <div
-          className="app-shell__titlebar-drag"
-          data-testid="titlebar-drag-region"
-        />
+      <header
+        className="app-shell__title-bar"
+        data-testid="title-bar-region"
+        onMouseDown={onTitleBarMouseDown}
+      >
+        {/* Empty drag spacer under the macOS traffic lights. */}
+        <div className="app-shell__titlebar-drag" data-testid="titlebar-drag-region" />
         <div className="app-shell__titlebar-content" data-testid="top-bar-region">
           {topBar}
         </div>
