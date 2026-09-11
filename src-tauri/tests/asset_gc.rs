@@ -22,8 +22,10 @@ fn insert_asset(conn: &rusqlite::Connection, id: &str, file_path: &str) {
 }
 
 fn home_board_id(conn: &rusqlite::Connection) -> String {
-    conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| r.get(0))
-        .unwrap()
+    conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+        r.get(0)
+    })
+    .unwrap()
 }
 
 fn insert_card(conn: &rusqlite::Connection, id: &str, board_id: &str, kind: &str) {
@@ -36,8 +38,10 @@ fn insert_card(conn: &rusqlite::Connection, id: &str, board_id: &str, kind: &str
 }
 
 fn asset_row_count(conn: &rusqlite::Connection, id: &str) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM assets WHERE id = ?1", [id], |r| r.get(0))
-        .unwrap()
+    conn.query_row("SELECT COUNT(*) FROM assets WHERE id = ?1", [id], |r| {
+        r.get(0)
+    })
+    .unwrap()
 }
 
 #[test]
@@ -204,4 +208,25 @@ fn live_favicon_reference_survives_gc() {
     assert_eq!(collected, 0, "live favicon reference must survive");
     assert!(asset_dir.join("fav-live.ico").exists());
     assert_eq!(asset_row_count(&conn, "fav-live"), 1);
+}
+
+#[test]
+fn repeated_cleanup_converges_after_cache_only_orphan() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let asset_dir = temp_asset_dir();
+
+    insert_asset(&conn, "fav-repeat", "fav-repeat.ico");
+    fs::write(asset_dir.join("fav-repeat.ico"), b"f").unwrap();
+    conn.execute(
+        "INSERT INTO favicon_cache (source_url, asset_id) VALUES ('https://example.com/r.ico', 'fav-repeat')",
+        [],
+    )
+    .unwrap();
+
+    let first = asset_service::collect_orphaned_assets(&mut conn, &asset_dir).unwrap();
+    assert_eq!(first, 1, "first sweep collects the cache-only orphan");
+    let second = asset_service::collect_orphaned_assets(&mut conn, &asset_dir).unwrap();
+    assert_eq!(second, 0, "second sweep finds nothing left to collect");
+    assert_eq!(asset_row_count(&conn, "fav-repeat"), 0);
 }

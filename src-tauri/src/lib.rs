@@ -94,8 +94,15 @@ pub fn run() {
             let _ = domain::link_metadata::collapse_favicon_duplicates(&mut conn);
 
             // Converge any interrupted asset GC: delete orphaned files + rows.
-            // Best-effort; a failure never blocks startup.
-            let _ = domain::asset_service::collect_orphaned_assets(&mut conn, &assets_dir);
+            // Best-effort; a failure never blocks startup, but it is reported so
+            // a misbehaving sweep is observable instead of silently swallowed.
+            if let Err(err) = domain::asset_service::collect_orphaned_assets(&mut conn, &assets_dir)
+            {
+                eprintln!(
+                    "asset-gc: startup cleanup failed: {}",
+                    domain::asset_service::gc_failure_summary(&err)
+                );
+            }
 
             app.manage(DbHandle::new(conn));
             app.manage(AppPaths {

@@ -222,6 +222,19 @@ pub fn collect_orphaned_assets(
     Ok(collected)
 }
 
+/// Stable, content-free summary of a GC failure for startup logging. The full
+/// `WorkspaceError` message can embed user content (asset filenames, source
+/// paths, database text), so it must never be formatted into a log line.
+pub fn gc_failure_summary(err: &WorkspaceError) -> &'static str {
+    match err {
+        WorkspaceError::ConstraintViolation(_) => "unsafe asset filename",
+        WorkspaceError::Database(_) => "database failure",
+        WorkspaceError::NotFound(_) => "not found",
+        WorkspaceError::StaleRevision { .. } => "stale revision",
+        WorkspaceError::RootBoardProtected => "root board protected",
+    }
+}
+
 /// Copies a text-like file into the managed asset store under a UUID, preserving
 /// the original extension, and returns its metadata. `file_name` is the original
 /// basename (kept for display); the on-disk name is `<uuid>.<ext>`.
