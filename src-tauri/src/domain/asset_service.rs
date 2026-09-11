@@ -161,10 +161,15 @@ fn extension_for_mime(mime_type: &str) -> &'static str {
     }
 }
 
-/// Mark-and-sweep collection of orphaned managed assets. An asset is referenced
-/// if any remaining `image_cards`/`embed_cards`/`boards` row points at it; every
-/// other asset file is deleted (file first, then its metadata row). A missing
-/// file counts as success so an interrupted sweep converges on the next run.
+/// Mark-and-sweep collection of orphaned managed assets. An asset is orphaned
+/// only when no durable owner references it: `image_cards.asset_id`,
+/// `embed_cards.asset_id`, `embed_cards.favicon_asset_id`, `boards.cover_asset_id`,
+/// `file_cards.asset_id`, or `file_cards.preview_asset_id`. `favicon_cache` is an
+/// acceleration index, not an owner: a cache-only asset may be collected, but its
+/// cache row is removed transactionally first. The metadata row is deleted inside
+/// a transaction before the physical file, so an unknown durable foreign key
+/// blocks collection before any bytes are removed. A missing physical file counts
+/// as success so an interrupted sweep converges on the next run.
 /// Returns the number of assets collected.
 pub fn collect_orphaned_assets(
     conn: &mut Connection,
@@ -172,16 +177,14 @@ pub fn collect_orphaned_assets(
 ) -> Result<i64, WorkspaceError> {
     let orphans: Vec<(String, String)> = {
         let mut stmt = conn.prepare(
-            "SELECT a.id, a.file_path FROM assets a
-             WHERE a.id NOT IN (
-                 SELECT asset_id FROM image_cards WHERE asset_id IS NOT NULL
-                 UNION
-                 SELECT asset_id FROM embed_cards WHERE asset_id IS NOT NULL
-                 UNION
-                 SELECT favicon_asset_id FROM embed_cards WHERE favicon_asset_id IS NOT NULL
-                 UNION
-                 SELECT cover_asset_id FROM boards WHERE cover_asset_id IS NOT NULL
-             )",
+            "SELECT a.id, a.file_path
+             FROM assets a
+             WHERE NOT EXISTS (SELECT 1 FROM image_cards i WHERE i.asset_id = a.id)
+               AND NOT EXISTS (SELECT 1 FROM embed_cards e WHERE e.asset_id = a.id)
+               AND NOT EXISTS (SELECT 1 FROM embed_cards e WHERE e.favicon_asset_id = a.id)
+               AND NOT EXISTS (SELECT 1 FROM boards b WHERE b.cover_asset_id = a.id)
+               AND NOT EXISTS (SELECT 1 FROM file_cards f WHERE f.asset_id = a.id)
+               AND NOT EXISTS (SELECT 1 FROM file_cards f WHERE f.preview_asset_id = a.id)",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -196,6 +199,14 @@ pub fn collect_orphaned_assets(
                 "unsafe asset filename: {file_path}"
             )));
         }
+        // Delete the cache index and the metadata row transactionally FIRST, so a
+        // surviving durable FK blocks before any physical file is removed. Then
+        // remove the file; NotFound is success (converged cleanup).
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM favicon_cache WHERE asset_id = ?1", params![id])?;
+        tx.execute("DELETE FROM assets WHERE id = ?1", params![id])?;
+        tx.commit()?;
+
         let abs = asset_dir.join(&file_path);
         match fs::remove_file(&abs) {
             Ok(()) => {}
@@ -206,7 +217,6 @@ pub fn collect_orphaned_assets(
                 )))
             }
         }
-        conn.execute("DELETE FROM assets WHERE id = ?1", params![id])?;
         collected += 1;
     }
     Ok(collected)

@@ -21,6 +21,25 @@ fn insert_asset(conn: &rusqlite::Connection, id: &str, file_path: &str) {
     .unwrap();
 }
 
+fn home_board_id(conn: &rusqlite::Connection) -> String {
+    conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| r.get(0))
+        .unwrap()
+}
+
+fn insert_card(conn: &rusqlite::Connection, id: &str, board_id: &str, kind: &str) {
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 0, 0, 320, 240, 0, 1, 0, 0)",
+        rusqlite::params![id, board_id, kind],
+    )
+    .unwrap();
+}
+
+fn asset_row_count(conn: &rusqlite::Connection, id: &str) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM assets WHERE id = ?1", [id], |r| r.get(0))
+        .unwrap()
+}
+
 #[test]
 fn referenced_asset_survives() {
     let mut conn = open_in_memory().unwrap();
@@ -75,4 +94,114 @@ fn missing_orphan_file_still_removes_metadata() {
         })
         .unwrap();
     assert_eq!(remaining, 0);
+}
+
+#[test]
+fn file_card_primary_asset_survives_gc() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let asset_dir = temp_asset_dir();
+    let home = home_board_id(&conn);
+
+    insert_asset(&conn, "fc-primary", "fc-primary.txt");
+    fs::write(asset_dir.join("fc-primary.txt"), b"x").unwrap();
+    insert_card(&conn, "fc-card", &home, "file");
+    conn.execute(
+        "INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text) VALUES ('fc-card', 'fc-primary', 'text/plain', 'hi')",
+        [],
+    )
+    .unwrap();
+
+    let collected = asset_service::collect_orphaned_assets(&mut conn, &asset_dir).unwrap();
+    assert_eq!(collected, 0, "primary file-card asset must not be orphaned");
+    assert!(asset_dir.join("fc-primary.txt").exists());
+    assert_eq!(asset_row_count(&conn, "fc-primary"), 1);
+}
+
+#[test]
+fn file_card_preview_asset_survives_gc() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let asset_dir = temp_asset_dir();
+    let home = home_board_id(&conn);
+
+    insert_asset(&conn, "fc-primary", "fc-primary.txt");
+    insert_asset(&conn, "fc-preview", "fc-preview.png");
+    fs::write(asset_dir.join("fc-primary.txt"), b"x").unwrap();
+    fs::write(asset_dir.join("fc-preview.png"), b"y").unwrap();
+    insert_card(&conn, "fc-card", &home, "file");
+    conn.execute(
+        "INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text, preview_asset_id) VALUES ('fc-card', 'fc-primary', 'text/plain', 'hi', 'fc-preview')",
+        [],
+    )
+    .unwrap();
+
+    let collected = asset_service::collect_orphaned_assets(&mut conn, &asset_dir).unwrap();
+    assert_eq!(collected, 0, "preview file-card asset must not be orphaned");
+    assert!(asset_dir.join("fc-primary.txt").exists());
+    assert!(asset_dir.join("fc-preview.png").exists());
+    assert_eq!(asset_row_count(&conn, "fc-primary"), 1);
+    assert_eq!(asset_row_count(&conn, "fc-preview"), 1);
+}
+
+#[test]
+fn cache_only_favicon_is_collected_without_fk_failure() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let asset_dir = temp_asset_dir();
+
+    insert_asset(&conn, "fav-cache", "fav-cache.ico");
+    fs::write(asset_dir.join("fav-cache.ico"), b"f").unwrap();
+    // favicon_cache is an acceleration index, not an owner.
+    conn.execute(
+        "INSERT INTO favicon_cache (source_url, asset_id) VALUES ('https://example.com/favicon.ico', 'fav-cache')",
+        [],
+    )
+    .unwrap();
+
+    let collected = asset_service::collect_orphaned_assets(&mut conn, &asset_dir).unwrap();
+    assert_eq!(collected, 1);
+    assert!(!asset_dir.join("fav-cache.ico").exists());
+    assert_eq!(asset_row_count(&conn, "fav-cache"), 0);
+    let cache_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM favicon_cache WHERE asset_id = 'fav-cache'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cache_rows, 0, "cache row must be removed transactionally");
+}
+
+#[test]
+fn live_favicon_reference_survives_gc() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let asset_dir = temp_asset_dir();
+    let home = home_board_id(&conn);
+
+    insert_asset(&conn, "fav-live", "fav-live.ico");
+    fs::write(asset_dir.join("fav-live.ico"), b"f").unwrap();
+    insert_card(&conn, "embed-card", &home, "embed");
+    conn.execute(
+        "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, metadata_status) VALUES ('embed-card', 'https://example.com', 'example.com', 't', '{}', '', 'ready')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE embed_cards SET favicon_asset_id = 'fav-live' WHERE card_id = 'embed-card'",
+        [],
+    )
+    .unwrap();
+    // Cache also references the same favicon; the durable owner still wins.
+    conn.execute(
+        "INSERT INTO favicon_cache (source_url, asset_id) VALUES ('https://example.com', 'fav-live')",
+        [],
+    )
+    .unwrap();
+
+    let collected = asset_service::collect_orphaned_assets(&mut conn, &asset_dir).unwrap();
+    assert_eq!(collected, 0, "live favicon reference must survive");
+    assert!(asset_dir.join("fav-live.ico").exists());
+    assert_eq!(asset_row_count(&conn, "fav-live"), 1);
 }
