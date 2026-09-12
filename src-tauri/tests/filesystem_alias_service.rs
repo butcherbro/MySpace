@@ -61,6 +61,20 @@ fn macos_locator_persists_bookmark_data_not_source_path_bytes() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_locator_round_trips_regular_bookmark() {
+    use myspace_lib::domain::filesystem_alias_service::{FolderLocator, MacosBookmarkLocator};
+    let root = std::env::temp_dir().join(format!("myspace-bookmark-rt-{}", uuid::Uuid::now_v7()));
+    fs::create_dir_all(&root).unwrap();
+    let blob = MacosBookmarkLocator.create(&root).unwrap();
+    let resolved = MacosBookmarkLocator.resolve(&blob).unwrap();
+    // The temp dir may live behind /var -> /private/var, so compare canonical paths.
+    let expected = root.canonicalize().unwrap();
+    assert_eq!(resolved.path.canonicalize().unwrap(), expected);
+    fs::remove_dir_all(root).unwrap();
+}
+
 struct StaleFake {
     path: std::path::PathBuf,
 }

@@ -178,9 +178,11 @@ impl FolderLocator for MacosBookmarkLocator {
         use objc2_foundation::{NSString, NSURLBookmarkCreationOptions, NSURL};
         let value = path.to_str().ok_or(LocatorError::Io)?;
         let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(value), true);
+        // The app is not sandboxed, so a plain bookmark is sufficient. The
+        // security-scoped variant fails outside App Sandbox on current macOS
+        // (NSCocoaErrorDomain 256: "The file couldn't be opened").
         url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
-            NSURLBookmarkCreationOptions::WithSecurityScope
-                | NSURLBookmarkCreationOptions::SecurityScopeAllowOnlyReadAccess,
+            NSURLBookmarkCreationOptions::empty(),
             None,
             None,
         )
@@ -197,21 +199,17 @@ impl FolderLocator for MacosBookmarkLocator {
         let url = unsafe {
             NSURL::URLByResolvingBookmarkData_options_relativeToURL_bookmarkDataIsStale_error(
                 &data,
-                NSURLBookmarkResolutionOptions::WithSecurityScope,
+                NSURLBookmarkResolutionOptions::WithoutUI,
                 None,
                 &mut stale,
             )
         }
         .map_err(|_| LocatorError::Missing)?;
-        if !unsafe { url.startAccessingSecurityScopedResource() } {
-            return Err(LocatorError::PermissionLost);
-        }
         let path = url.path().ok_or(LocatorError::Missing)?.to_string();
         let refreshed_locator = if stale.as_bool() {
             Some(
                 url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
-                    NSURLBookmarkCreationOptions::WithSecurityScope
-                        | NSURLBookmarkCreationOptions::SecurityScopeAllowOnlyReadAccess,
+                    NSURLBookmarkCreationOptions::empty(),
                     None,
                     None,
                 )
@@ -221,11 +219,10 @@ impl FolderLocator for MacosBookmarkLocator {
         } else {
             None
         };
-        let scope = SecurityScopeGuard { url };
         Ok(ResolvedFolder {
             path: PathBuf::from(path),
             refreshed_locator,
-            _scope: Some(scope),
+            _scope: None,
         })
     }
 }
