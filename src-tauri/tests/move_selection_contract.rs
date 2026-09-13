@@ -405,3 +405,74 @@ fn pre_state_reads_frames_unsorted_and_rejects_bad_leaves() {
         Some(home.as_str())
     );
 }
+
+#[test]
+fn expectations_validate_revisions_and_reject_the_destination_board() {
+    use myspace_lib::domain::errors::WorkspaceError;
+    use myspace_lib::domain::move_selection::{
+        validate_destination_not_selected, validate_expectations, SelectedBoardState,
+        SelectedCardState, SelectionPreState,
+    };
+
+    let state = SelectionPreState {
+        cards: vec![SelectedCardState {
+            id: "n1".into(),
+            kind: "note".into(),
+            board_id: "home".into(),
+            unsorted: false,
+            frame: frame(1.0, 2.0),
+            revision: 3,
+        }],
+        boards: vec![SelectedBoardState {
+            board_id: "board-a".into(),
+            parent_board_id: Some("home".into()),
+            board_revision: 5,
+            portal_card_id: "pa".into(),
+            portal_frame: frame(0.0, 0.0),
+            portal_revision: 7,
+        }],
+    };
+
+    assert!(validate_expectations(&sample_input(), &state).is_ok());
+
+    let mut stale_leaf = sample_input();
+    stale_leaf.cards[0].expected_revision = 4;
+    assert!(matches!(
+        validate_expectations(&stale_leaf, &state),
+        Err(WorkspaceError::StaleRevision { .. })
+    ));
+
+    let mut stale_board = sample_input();
+    stale_board.boards[0].expected_board_revision = 6;
+    assert!(matches!(
+        validate_expectations(&stale_board, &state),
+        Err(WorkspaceError::StaleRevision { .. })
+    ));
+
+    let mut stale_portal = sample_input();
+    stale_portal.boards[0].expected_portal_revision = 8;
+    assert!(matches!(
+        validate_expectations(&stale_portal, &state),
+        Err(WorkspaceError::StaleRevision { .. })
+    ));
+
+    // A selection that somehow still carries the destination board is refused.
+    assert!(validate_destination_not_selected("board-b", &state).is_ok());
+    let target_in_selection = SelectionPreState {
+        cards: vec![],
+        boards: vec![SelectedBoardState {
+            board_id: "board-b".into(),
+            parent_board_id: Some("home".into()),
+            board_revision: 1,
+            portal_card_id: "pb".into(),
+            portal_frame: frame(0.0, 0.0),
+            portal_revision: 1,
+        }],
+    };
+    match validate_destination_not_selected("board-b", &target_in_selection) {
+        Err(WorkspaceError::ConstraintViolation(message)) => {
+            assert!(message.contains("destination board"), "got: {message}");
+        }
+        other => panic!("expected a ConstraintViolation, got {other:?}"),
+    }
+}

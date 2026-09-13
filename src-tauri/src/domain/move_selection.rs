@@ -106,3 +106,66 @@ pub struct SelectionPreState {
     pub cards: Vec<SelectedCardState>,
     pub boards: Vec<SelectedBoardState>,
 }
+
+/// Rejects a selection that contains the destination board itself. Silently
+/// dropping it would hide part of the selection from the user, so the whole
+/// operation is refused and nothing is moved (ADR-0007).
+pub fn validate_destination_not_selected(
+    target_board_id: &str,
+    state: &SelectionPreState,
+) -> Result<(), WorkspaceError> {
+    if state
+        .boards
+        .iter()
+        .any(|board| board.board_id == target_board_id)
+    {
+        return Err(WorkspaceError::ConstraintViolation(
+            "The selection contains the destination board. Nothing was moved.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Checks every expectation against the state read inside the transaction. Any
+/// mismatch rejects the whole move before the first write, so a partially
+/// applied selection is impossible.
+pub fn validate_expectations(
+    input: &MoveSelectionToBoardInput,
+    state: &SelectionPreState,
+) -> Result<(), WorkspaceError> {
+    for expectation in &input.cards {
+        let actual = state
+            .cards
+            .iter()
+            .find(|card| card.id == expectation.id)
+            .ok_or_else(|| WorkspaceError::NotFound(expectation.id.clone()))?;
+        if actual.revision != expectation.expected_revision {
+            return Err(WorkspaceError::StaleRevision {
+                expected: expectation.expected_revision,
+                actual: actual.revision,
+            });
+        }
+    }
+
+    for expectation in &input.boards {
+        let actual = state
+            .boards
+            .iter()
+            .find(|board| board.board_id == expectation.board_id)
+            .ok_or_else(|| WorkspaceError::NotFound(expectation.board_id.clone()))?;
+        if actual.board_revision != expectation.expected_board_revision {
+            return Err(WorkspaceError::StaleRevision {
+                expected: expectation.expected_board_revision,
+                actual: actual.board_revision,
+            });
+        }
+        if actual.portal_revision != expectation.expected_portal_revision {
+            return Err(WorkspaceError::StaleRevision {
+                expected: expectation.expected_portal_revision,
+                actual: actual.portal_revision,
+            });
+        }
+    }
+
+    Ok(())
+}
