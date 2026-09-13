@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 async function beginMarquee(page: import("@playwright/test").Page) {
   const pane = page.locator(".react-flow__pane");

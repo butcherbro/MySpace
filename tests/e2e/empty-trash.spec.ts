@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Irreversible Empty Trash: requires the exact token EMPTY, then clears the
 // Trash and the rail badge. Runs against the in-memory mock.

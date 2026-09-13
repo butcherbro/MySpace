@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Mixed group moves onto a board tab. ADR-0007 makes the backend refuse a
 // selection that contains the destination board's own portal, and move loose

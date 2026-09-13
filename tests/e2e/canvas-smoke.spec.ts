@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Smoke test of the core canvas interactions: open Home, create a note,
 // single-click enters edit mode, and dragging does NOT enter edit mode. Text

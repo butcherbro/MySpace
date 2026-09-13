@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Reversible Trash acceptance: delete a Note + child Board in one selection,
 // navigate away and back (projection rebuild must not resurrect them), inspect

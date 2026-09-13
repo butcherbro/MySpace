@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Group move: dragging one card of a multi-selection onto a breadcrumb moves the
 // whole selection into that board's Unsorted panel. Runs against the in-memory mock.

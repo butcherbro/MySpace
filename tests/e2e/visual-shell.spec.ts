@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Dense-board visual acceptance: lock the Quiet Desk shell geometry and prove all
 // object classes render together and stay scannable. Uses the test-only dense

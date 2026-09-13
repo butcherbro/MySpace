@@ -1,14 +1,12 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Cross-board drag onto a board tab: hovering a tab opens that board, and
 // releasing the pointer moves the card there. Runs against the in-memory mock.
 
+// A cross-board drop replaces the board snapshot mid-drag. Runtime errors raised
+// while the drag session finishes now fail the test through the shared fixture
+// in `fixtures.ts`, which every spec in this directory loads automatically.
 test("dragging a note onto a board tab moves it to that board", async ({ page }) => {
-  // A cross-board drop replaces the board snapshot mid-drag. Any runtime error
-  // raised while the drag session finishes must fail this test.
-  const pageErrors: string[] = [];
-  page.on("pageerror", (error) => pageErrors.push(String(error)));
-
   await page.goto("/");
 
   // Create a child board, open it (so a tab exists), then return Home.
@@ -50,6 +48,4 @@ test("dragging a note onto a board tab moves it to that board", async ({ page })
   // The note now lives on the child board.
   await expect(page.getByTestId("note-card")).toHaveCount(1);
   await expect(page.getByTestId("breadcrumbs")).toContainText("New Board");
-
-  expect(pageErrors, "cross-board drag must not raise page errors").toEqual([]);
 });

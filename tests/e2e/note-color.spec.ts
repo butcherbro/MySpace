@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Note background color: selecting a note swaps the left rail to note tools with
 // a "Note color" palette; choosing a preset changes the card color and survives

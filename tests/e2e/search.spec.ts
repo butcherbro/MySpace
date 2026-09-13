@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Search field acceptance: create a note with distinctive text inside a child
 // board, return Home, type into the top-bar search field, and navigate back to

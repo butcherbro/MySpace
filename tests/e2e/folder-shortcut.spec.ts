@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Folder shortcut lifecycle (browser/mock): render, Search by name, and
 // Trash/restore. The dense fixture provides one folder alias via ?fixture=dense.
