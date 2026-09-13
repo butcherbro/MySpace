@@ -312,3 +312,41 @@ fn search_matches_cyrillic_case_insensitively() {
     assert_eq!(results[0].kind, "note");
     assert_eq!(results[0].title, "Путь мыслителя");
 }
+
+#[test]
+fn search_excerpt_survives_case_folding_that_changes_length() {
+    // `İ` (U+0130) lowercases to "i" plus a combining dot, so the folded copy of
+    // the text is one byte longer than the text itself. A byte offset measured in
+    // the folded copy therefore lands *inside* a later multibyte character, and
+    // applying it to the original text panics. The excerpt must be centered on
+    // the match and built from original characters only.
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    let text = format!("İ{}{}{}", "а".repeat(50), "Ж", "б".repeat(50));
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", &text)).unwrap();
+
+    let results = workspace_repository::search_workspace(&conn, "ж").unwrap();
+    assert_eq!(results.len(), 1);
+    let excerpt = &results[0].title;
+
+    assert!(
+        excerpt.contains('Ж'),
+        "the excerpt keeps the match: {excerpt}"
+    );
+    assert!(
+        excerpt.starts_with('…') && excerpt.ends_with('…'),
+        "a window into the middle of the text is marked on both sides: {excerpt}"
+    );
+    assert!(
+        excerpt.chars().count() < text.chars().count(),
+        "the excerpt is a window, not the whole text: {excerpt}"
+    );
+    // The match sits in the middle of the window, not at an arbitrary offset.
+    let position = excerpt.chars().position(|c| c == 'Ж').unwrap();
+    assert!(
+        (35..=45).contains(&position),
+        "the match is centered, found at {position}: {excerpt}"
+    );
+}

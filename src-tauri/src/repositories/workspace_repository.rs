@@ -2037,18 +2037,14 @@ fn bound_text(text: &str) -> String {
 /// match of `query`, with ellipses where text is trimmed. Falls back to the
 /// start of the text when there is no match.
 fn search_excerpt(text: &str, query: &str) -> String {
-    let lower = text.to_lowercase();
-    let q = query.to_lowercase();
-    let Some(byte_start) = lower.find(&q) else {
+    let chars: Vec<char> = text.chars().collect();
+    let query_folded: Vec<char> = query.to_lowercase().chars().collect();
+    let Some(match_range) = folded_match_range(&chars, &query_folded) else {
         return bound_text(text);
     };
 
-    let chars: Vec<char> = text.chars().collect();
-    let match_char_start = text[..byte_start].chars().count();
-    let match_char_len = q.chars().count();
-
-    let context_start = match_char_start.saturating_sub(40);
-    let context_end = (match_char_start + match_char_len + 40).min(chars.len());
+    let context_start = match_range.start.saturating_sub(40);
+    let context_end = (match_range.end + 40).min(chars.len());
 
     let mut out = String::new();
     if context_start > 0 {
@@ -2061,6 +2057,39 @@ fn search_excerpt(text: &str, query: &str) -> String {
         out.push('…');
     }
     out.trim().to_string()
+}
+
+/// Where the first case-insensitive match of `needle_folded` (an already
+/// lowercased query) sits in `chars`, as original character indices.
+///
+/// Case folding changes length: `İ` folds to `i` plus a combining dot and `ß` to
+/// two `s`, so an offset measured in the folded text means nothing for the
+/// original one — applying it slices inside a multibyte character. Every folded
+/// character therefore remembers the original character it came from, and only
+/// original indices are ever returned.
+fn folded_match_range(chars: &[char], needle_folded: &[char]) -> Option<std::ops::Range<usize>> {
+    if needle_folded.is_empty() {
+        return None;
+    }
+
+    let mut folded: Vec<char> = Vec::new();
+    let mut origin: Vec<usize> = Vec::new();
+    for (index, ch) in chars.iter().enumerate() {
+        for piece in ch.to_lowercase() {
+            folded.push(piece);
+            origin.push(index);
+        }
+    }
+
+    if folded.len() < needle_folded.len() {
+        return None;
+    }
+    let start = folded
+        .windows(needle_folded.len())
+        .position(|window| window == needle_folded)?;
+    let first = origin[start];
+    let last = origin[start + needle_folded.len() - 1];
+    Some(first..last + 1)
 }
 
 /// Unicode-aware case-insensitive substring test. SQLite's `LIKE` is only
