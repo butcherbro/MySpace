@@ -21,18 +21,46 @@ fn asset_dir(app: &AppHandle) -> PathBuf {
 }
 
 /// Imports a file into the asset store by copying it into the app's asset
-/// directory and recording metadata. Returns the stored asset DTO.
+/// directory and recording metadata. Returns the stored asset DTO. The copy runs
+/// without holding the database lock; the lock is taken only for the row insert.
 #[tauri::command]
 pub fn import_asset(
     app: AppHandle,
     db: DbState<'_>,
     input: ImportAssetInput,
 ) -> Result<AssetDto, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     let dir = asset_dir(&app);
-    asset_service::import_asset(&mut conn, &dir, &input)
+
+    // Idempotent replay under a brief lock, before any bytes are copied.
+    let replay = {
+        let conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        asset_service::load_asset(&conn, &input.id)?
+    };
+    if let Some(existing) = replay {
+        return Ok(existing);
+    }
+
+    let staged = asset_service::stage_image_asset(
+        &dir,
+        &input.id,
+        &input.file_name,
+        &input.mime_type,
+        &input.source_path,
+    )?;
+
+    let inserted = {
+        let conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        asset_service::insert_asset_row(&conn, &staged.asset)
+    };
+    if let Err(error) = inserted {
+        asset_service::discard_staged(&staged);
+        return Err(error);
+    }
+    Ok(staged.asset)
 }
 
 /// Resolves an asset id to its absolute on-disk path. Used by "Copy File Path"

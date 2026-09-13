@@ -3,7 +3,7 @@
 //! SQLite is authoritative (ADR-003). These functions are the only place that
 //! maps database rows to domain DTOs and back.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
@@ -796,17 +796,18 @@ pub fn create_filesystem_alias(
     Ok(())
 }
 
-/// Inserts a File Card: the asset must already be copied and its preview read
-/// before this call; the cards + file_cards rows are committed atomically.
-/// Idempotent replay by card id returns Ok without inserting a second row.
-pub fn create_file_card(
-    conn: &mut Connection,
+/// Inserts the File Card rows (`cards` + `file_cards`) inside the caller's
+/// transaction, so the staged asset rows and the card commit atomically. The
+/// asset must already be copied and its preview read before this call. Idempotent
+/// replay by card id returns Ok without inserting a second row.
+pub fn insert_file_card_rows(
+    tx: &Transaction<'_>,
     input: &CreateFileCardInput,
     asset_id: &str,
     preview_text: &str,
     preview_asset_id: Option<&str>,
 ) -> Result<(), WorkspaceError> {
-    let existing_kind: Option<String> = conn
+    let existing_kind: Option<String> = tx
         .query_row("SELECT kind FROM cards WHERE id = ?1", [&input.id], |r| {
             r.get(0)
         })
@@ -820,10 +821,8 @@ pub fn create_file_card(
         ));
     }
     let now = db::migrations::now_millis();
-    let tx = conn.transaction()?;
     tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'file', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
     tx.execute("INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text, source_path, preview_asset_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![input.id, asset_id, input.mime_type, preview_text, input.source_path, preview_asset_id])?;
-    tx.commit()?;
     Ok(())
 }
 

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::{AssetDto, ImportAssetInput};
+use crate::domain::models::{AssetDto, CreateFileCardInput, ImportAssetInput};
 
 use super::super::db;
 
@@ -41,44 +41,18 @@ pub fn import_asset(
         return Ok(existing);
     }
 
-    let source = Path::new(&input.source_path);
-    let meta = fs::metadata(source)
-        .map_err(|e| WorkspaceError::ConstraintViolation(format!("cannot read source: {e}")))?;
-    if !meta.is_file() {
-        return Err(WorkspaceError::ConstraintViolation(
-            "asset source is not a file".into(),
-        ));
-    }
-    let size_bytes = meta.len() as i64;
-
-    // The extension is derived from the provided mime type to stay stable across
-    // filesystems; a fallback of ".bin" keeps the path valid for unknown types.
-    let ext = extension_for_mime(&input.mime_type);
-    // `file_path` is relative to `asset_dir` (the assets root), e.g. "abc.png".
-    let relative = format!("{}.{}", input.id, ext);
-    let dest = asset_dir.join(&relative);
-
-    fs::create_dir_all(asset_dir)
-        .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
-    fs::copy(source, &dest)
-        .map_err(|e| WorkspaceError::Database(format!("cannot copy asset: {e}")))?;
-
-    let now = db::migrations::now_millis();
-    conn.execute(
-        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6)",
-        params![input.id, relative, input.mime_type, input.file_name, size_bytes, now],
+    let staged = stage_image_asset(
+        asset_dir,
+        &input.id,
+        &input.file_name,
+        &input.mime_type,
+        &input.source_path,
     )?;
-
-    Ok(AssetDto {
-        id: input.id.clone(),
-        file_name: input.file_name.clone(),
-        mime_type: input.mime_type.clone(),
-        width: None,
-        height: None,
-        size_bytes,
-        file_path: relative.clone(),
-    })
+    if let Err(error) = insert_asset_row(conn, &staged.asset) {
+        discard_staged(&staged);
+        return Err(error);
+    }
+    Ok(staged.asset)
 }
 
 /// Stores already-validated downloaded bytes as a managed asset. Metadata
@@ -235,85 +209,210 @@ pub fn gc_failure_summary(err: &WorkspaceError) -> &'static str {
     }
 }
 
-/// Copies a text-like file into the managed asset store under a UUID, preserving
-/// the original extension, and returns its metadata. `file_name` is the original
-/// basename (kept for display); the on-disk name is `<uuid>.<ext>`.
-pub fn import_file_asset(
-    conn: &mut Connection,
+/// A managed file written into the asset directory whose metadata row has not
+/// been inserted yet. Keeping the file separate from the row is what allows slow
+/// I/O (copy, Quick Look) to run outside the database lock, and lets a failed
+/// commit remove exactly the files that commit created.
+pub struct StagedAsset {
+    pub asset: AssetDto,
+    /// Absolute path of the file created for this asset.
+    pub file_abs: PathBuf,
+}
+
+/// Removes the file created by a staging step. Used to unwind a failed commit;
+/// it never touches the original source file.
+pub fn discard_staged(staged: &StagedAsset) {
+    let _ = fs::remove_file(&staged.file_abs);
+}
+
+/// Validates `id`, confirms `source_path` is a readable file, and copies it to
+/// `asset_dir/<id>.<extension>`. No database access: the caller decides when the
+/// lock is taken.
+fn stage_copy(
     asset_dir: &Path,
     id: &str,
+    extension: &str,
     file_name: &str,
     mime_type: &str,
     source_path: &str,
-) -> Result<AssetDto, WorkspaceError> {
+    not_a_file: &str,
+) -> Result<StagedAsset, WorkspaceError> {
     validate_uuid(id)?;
-    if let Some(existing) = load_asset(conn, id)? {
-        return Ok(existing);
-    }
 
     let source = Path::new(source_path);
     let meta = fs::metadata(source)
         .map_err(|e| WorkspaceError::ConstraintViolation(format!("cannot read source: {e}")))?;
     if !meta.is_file() {
-        return Err(WorkspaceError::ConstraintViolation(
-            "file card target must be an existing file".into(),
-        ));
+        return Err(WorkspaceError::ConstraintViolation(not_a_file.into()));
     }
-    let size_bytes = meta.len() as i64;
 
-    // Keep the original extension on the stored copy.
-    let ext = Path::new(file_name)
+    let relative = format!("{id}.{extension}");
+    let dest = asset_dir.join(&relative);
+    fs::create_dir_all(asset_dir)
+        .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
+    if let Err(e) = fs::copy(source, &dest) {
+        let _ = fs::remove_file(&dest);
+        return Err(WorkspaceError::Database(format!("cannot copy asset: {e}")));
+    }
+
+    Ok(StagedAsset {
+        file_abs: dest,
+        asset: AssetDto {
+            id: id.to_string(),
+            file_name: file_name.to_string(),
+            mime_type: mime_type.to_string(),
+            width: None,
+            height: None,
+            size_bytes: meta.len() as i64,
+            file_path: relative,
+        },
+    })
+}
+
+/// Stages an image asset. The extension comes from the mime type so it stays
+/// stable across filesystems; unknown types fall back to `.bin`.
+pub fn stage_image_asset(
+    asset_dir: &Path,
+    id: &str,
+    file_name: &str,
+    mime_type: &str,
+    source_path: &str,
+) -> Result<StagedAsset, WorkspaceError> {
+    stage_copy(
+        asset_dir,
+        id,
+        extension_for_mime(mime_type),
+        file_name,
+        mime_type,
+        source_path,
+        "asset source is not a file",
+    )
+}
+
+/// Stages a text-like File Card asset, keeping the source file's own extension.
+pub fn stage_file_card_asset(
+    asset_dir: &Path,
+    id: &str,
+    file_name: &str,
+    mime_type: &str,
+    source_path: &str,
+) -> Result<StagedAsset, WorkspaceError> {
+    let extension = Path::new(file_name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_else(|| "bin".to_string());
-    let relative = format!("{id}.{ext}");
-    let dest = asset_dir.join(&relative);
-    fs::create_dir_all(asset_dir)
-        .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
-    fs::copy(source, &dest)
-        .map_err(|e| WorkspaceError::Database(format!("cannot copy asset: {e}")))?;
+    stage_copy(
+        asset_dir,
+        id,
+        &extension,
+        file_name,
+        mime_type,
+        source_path,
+        "file card target must be an existing file",
+    )
+}
 
-    let now = db::migrations::now_millis();
+/// Inserts an asset metadata row. Runs on the caller's connection or transaction,
+/// so the caller owns the atomicity boundary.
+pub fn insert_asset_row(conn: &Connection, asset: &AssetDto) -> Result<(), WorkspaceError> {
     conn.execute(
         "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6)",
-        params![id, relative, mime_type, file_name, size_bytes, now],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            asset.id,
+            asset.file_path,
+            asset.mime_type,
+            asset.file_name,
+            asset.width,
+            asset.height,
+            asset.size_bytes,
+            db::migrations::now_millis()
+        ],
     )?;
+    Ok(())
+}
 
-    Ok(AssetDto {
-        id: id.to_string(),
-        file_name: file_name.to_string(),
-        mime_type: mime_type.to_string(),
-        width: None,
-        height: None,
-        size_bytes,
-        file_path: relative,
-    })
+/// Commits a File Card in one short transaction: the staged asset rows and the
+/// card rows. On failure the transaction rolls back and only the files this call
+/// staged are removed — never a pre-existing asset file and never the source.
+pub fn commit_file_card(
+    conn: &mut Connection,
+    input: &CreateFileCardInput,
+    asset: &AssetDto,
+    new_asset: Option<&StagedAsset>,
+    preview_text: &str,
+    thumbnail: Option<&StagedAsset>,
+) -> Result<(), WorkspaceError> {
+    let outcome = commit_file_card_rows(conn, input, asset, new_asset, preview_text, thumbnail);
+    if outcome.is_err() {
+        if let Some(new_asset) = new_asset {
+            discard_staged(new_asset);
+        }
+        if let Some(thumbnail) = thumbnail {
+            discard_staged(thumbnail);
+        }
+    }
+    outcome
+}
+
+fn commit_file_card_rows(
+    conn: &mut Connection,
+    input: &CreateFileCardInput,
+    asset: &AssetDto,
+    new_asset: Option<&StagedAsset>,
+    preview_text: &str,
+    thumbnail: Option<&StagedAsset>,
+) -> Result<(), WorkspaceError> {
+    let tx = conn.transaction()?;
+    if new_asset.is_some() {
+        insert_asset_row(&tx, asset)?;
+    }
+    if let Some(thumbnail) = thumbnail {
+        insert_asset_row(&tx, &thumbnail.asset)?;
+    }
+    crate::repositories::workspace_repository::insert_file_card_rows(
+        &tx,
+        input,
+        &asset.id,
+        preview_text,
+        thumbnail.map(|t| t.asset.id.as_str()),
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 /// Bounded inline preview for a text-like file: reads at most `limit` bytes from
-/// the stored asset and returns them as UTF-8 (lossy), trimmed. Binary content
-/// yields an empty preview without error.
+/// the stored asset and returns them as UTF-8 (lossy), trimmed. The read is
+/// bounded by `take`, so the whole file is never allocated. Binary content yields
+/// an empty preview without error.
 pub fn read_text_preview(asset_dir: &Path, asset: &AssetDto, limit: usize) -> String {
+    use std::io::Read;
     let path = asset_abs_path(asset_dir, &asset.file_path);
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
         Err(_) => return String::new(),
     };
-    let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(limit)]).into_owned();
-    let trimmed = preview.trim();
-    trimmed.chars().take(limit).collect()
+    let mut buffer = Vec::new();
+    if file
+        .take((limit as u64).saturating_add(1))
+        .read_to_end(&mut buffer)
+        .is_err()
+    {
+        return String::new();
+    }
+    let preview = String::from_utf8_lossy(&buffer[..buffer.len().min(limit)]).into_owned();
+    preview.trim().chars().take(limit).collect()
 }
 
-/// Generates a macOS Quick Look thumbnail (256px PNG) for a file and stores it as
-/// a managed asset. Returns the asset id, or None when the OS tool is unavailable
-/// or the file has no supported preview (never fails the File Card import).
-pub fn generate_thumbnail(
-    conn: &mut Connection,
+/// Renders a macOS Quick Look thumbnail (256px PNG) and stores it as a managed
+/// file without touching the database. Returns None when the OS tool is
+/// unavailable or the file has no supported preview (never fails the File Card
+/// import).
+pub fn stage_thumbnail(
     asset_dir: &Path,
     source_path: &str,
-) -> Result<Option<String>, WorkspaceError> {
+) -> Result<Option<StagedAsset>, WorkspaceError> {
     #[cfg(target_os = "macos")]
     {
         let tmp = std::env::temp_dir().join(format!("myspace-thumb-{}", uuid::Uuid::now_v7()));
@@ -340,23 +439,34 @@ pub fn generate_thumbnail(
             Err(_) => return Ok(None),
         };
         let _ = std::fs::remove_dir_all(&tmp);
+
         let id = uuid::Uuid::now_v7().to_string();
         let relative = format!("{id}.png");
         fs::create_dir_all(asset_dir)
             .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
-        fs::write(asset_dir.join(&relative), &bytes)
-            .map_err(|e| WorkspaceError::Database(format!("cannot store thumbnail: {e}")))?;
-        let now = db::migrations::now_millis();
-        conn.execute(
-            "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
-             VALUES (?1, ?2, 'image/png', ?3, 256, 256, ?4, ?5)",
-            params![id, relative, "thumbnail.png", bytes.len() as i64, now],
-        )?;
-        Ok(Some(id))
+        let dest = asset_dir.join(&relative);
+        if let Err(e) = fs::write(&dest, &bytes) {
+            let _ = fs::remove_file(&dest);
+            return Err(WorkspaceError::Database(format!(
+                "cannot store thumbnail: {e}"
+            )));
+        }
+        Ok(Some(StagedAsset {
+            file_abs: dest,
+            asset: AssetDto {
+                id,
+                file_name: "thumbnail.png".to_string(),
+                mime_type: "image/png".to_string(),
+                width: Some(256),
+                height: Some(256),
+                size_bytes: bytes.len() as i64,
+                file_path: relative,
+            },
+        }))
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (conn, asset_dir, source_path);
+        let _ = (asset_dir, source_path);
         Ok(None)
     }
 }

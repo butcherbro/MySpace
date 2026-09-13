@@ -1501,8 +1501,9 @@ fn file_card_roundtrips_through_snapshot_and_read_card() {
         [],
     )
     .unwrap();
-    workspace_repository::create_file_card(
-        &mut conn,
+    let tx = conn.transaction().unwrap();
+    workspace_repository::insert_file_card_rows(
+        &tx,
         &CreateFileCardInput {
             id: "fc".into(),
             board_id: board_id.clone(),
@@ -1522,6 +1523,7 @@ fn file_card_roundtrips_through_snapshot_and_read_card() {
         None,
     )
     .unwrap();
+    tx.commit().unwrap();
     let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
     let file = snapshot.cards.iter().find_map(|c| match c {
         CardDto::File(f) if f.id == "fc" => Some(f),

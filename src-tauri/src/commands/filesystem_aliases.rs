@@ -181,7 +181,9 @@ pub fn open_folder_in_finder(db: DbState<'_>, card_id: String) -> Result<(), Wor
 }
 
 /// Copies a dropped text-like file into the managed asset store, reads a bounded
-/// preview, and creates the File Card atomically.
+/// preview, and creates the File Card. All slow work (copy, preview, Quick Look)
+/// happens without holding the database lock; the lock is taken once for a single
+/// short transaction that writes the asset rows and the card rows together.
 #[tauri::command]
 pub fn create_file_card(
     db: DbState<'_>,
@@ -195,25 +197,37 @@ pub fn create_file_card(
         .join("assets");
 
     let id = input.id.clone();
-    let board_id = input.board_id.clone();
-    let frame = input.frame;
-    let z_index = input.z_index;
     let file_name = input.file_name.clone();
     let mime_type = input.mime_type.clone();
     let source_path = input.source_path.clone();
-    let asset = {
-        let mut conn = db
+
+    // Stage 1: idempotent replay lookup (brief lock, no I/O).
+    let replay = {
+        let conn = db
             .lock()
             .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-        asset_service::import_file_asset(
-            &mut conn,
+        asset_service::load_asset(&conn, &id)?
+    };
+
+    // Stage 2: copy the bytes and read the preview without holding the lock.
+    // A replay (the asset row already exists) stages nothing: that file is
+    // already managed and must never be treated as ours to delete.
+    let new_asset = match &replay {
+        Some(_) => None,
+        None => Some(asset_service::stage_file_card_asset(
             &asset_dir,
             &id,
             &file_name,
             &mime_type,
             &source_path,
-        )?
+        )?),
     };
+    let asset = match (&replay, &new_asset) {
+        (Some(existing), _) => existing.clone(),
+        (None, Some(staged)) => staged.asset.clone(),
+        (None, None) => unreachable!("staging produces an asset when there is no replay"),
+    };
+
     let preview = if file_name.to_ascii_lowercase().ends_with(".zip") {
         "(zip archive)".to_string()
     } else if matches!(
@@ -243,45 +257,58 @@ pub fn create_file_card(
         asset_service::read_text_preview(&asset_dir, &asset, 8 * 1024)
     };
 
-    // Generate a Finder-like thumbnail for PDF/office/HTML via Quick Look.
-    let thumbnail_id = if matches!(
-        file_name
-            .rsplit('.')
-            .next()
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some(
-            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "pages" | "numbers" | "key"
-        )
-    ) {
-        let mut conn = db
-            .lock()
-            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-        asset_service::generate_thumbnail(&mut conn, &asset_dir, &source_path)?
+    // Stage 2b: Quick Look thumbnail, also outside the lock (it is a subprocess).
+    let thumbnail = if new_asset.is_some()
+        && matches!(
+            file_name
+                .rsplit('.')
+                .next()
+                .map(|e| e.to_ascii_lowercase())
+                .as_deref(),
+            Some(
+                "pdf"
+                    | "doc"
+                    | "docx"
+                    | "xls"
+                    | "xlsx"
+                    | "ppt"
+                    | "pptx"
+                    | "pages"
+                    | "numbers"
+                    | "key"
+            )
+        ) {
+        asset_service::stage_thumbnail(&asset_dir, &source_path)?
     } else {
         None
     };
 
+    // Stage 3: one short transaction for the asset rows and the card rows. A
+    // failure rolls the rows back and removes only the files staged above.
+    let model = CreateFileCardInput {
+        id: id.clone(),
+        board_id: input.board_id.clone(),
+        frame: input.frame,
+        z_index: input.z_index,
+        source_path: source_path.clone(),
+        mime_type: mime_type.clone(),
+        file_name: file_name.clone(),
+    };
     {
         let mut conn = db
             .lock()
             .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-        workspace_repository::create_file_card(
+        asset_service::commit_file_card(
             &mut conn,
-            &CreateFileCardInput {
-                id,
-                board_id,
-                frame,
-                z_index,
-                source_path,
-                mime_type,
-                file_name,
-            },
-            &asset.id,
+            &model,
+            &asset,
+            new_asset.as_ref(),
             &preview,
-            thumbnail_id.as_deref(),
+            thumbnail.as_ref(),
         )?;
     }
+
+    let preview_asset = thumbnail.as_ref().map(|staged| staged.asset.clone());
 
     Ok(FileCardDto {
         id: input.id,
@@ -291,7 +318,7 @@ pub fn create_file_card(
         revision: 1,
         asset,
         preview_text: preview,
-        preview_asset: None,
+        preview_asset,
     })
 }
 
