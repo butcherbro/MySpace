@@ -268,3 +268,39 @@ fn operation_receipts_store_find_and_roll_back_with_the_transaction() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn receipt_encodes_and_decodes_unchanged_for_the_replay_path() {
+    use myspace_lib::domain::move_selection::{
+        decode_receipt, encode_receipt, MOVE_SELECTION_OPERATION_KIND,
+    };
+
+    let receipt = MoveSelectionToBoardReceipt {
+        operation_id: "operation-1".into(),
+        target_board_id: "board-b".into(),
+        cards: vec![MovedCardReceipt {
+            id: "n1".into(),
+            previous_board_id: "home".into(),
+            previous_unsorted: true,
+            previous_frame: frame(5.0, 6.0),
+            before_revision: 3,
+            after_revision: 4,
+        }],
+        boards: vec![MovedBoardReceipt {
+            board_id: "board-a".into(),
+            portal_card_id: "pa".into(),
+            previous_parent_board_id: "home".into(),
+            previous_portal_frame: frame(0.0, 0.0),
+            destination_portal_frame: frame(40.0, 40.0),
+            before_board_revision: 5,
+            after_board_revision: 6,
+            before_portal_revision: 7,
+            after_portal_revision: 8,
+        }],
+    };
+
+    let encoded = encode_receipt(&receipt).unwrap();
+    assert_eq!(decode_receipt(&encoded).unwrap(), receipt);
+    assert_eq!(MOVE_SELECTION_OPERATION_KIND, "move_selection_to_board");
+    assert!(decode_receipt("not json").is_err());
+}

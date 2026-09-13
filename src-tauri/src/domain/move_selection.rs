@@ -2,7 +2,7 @@
 //! command and its receipt share; the atomic transaction lands here next.
 
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::MoveSelectionToBoardInput;
+use crate::domain::models::{MoveSelectionToBoardInput, MoveSelectionToBoardReceipt};
 use std::collections::HashSet;
 
 /// Canonical fingerprint of a mixed-selection request.
@@ -62,4 +62,20 @@ pub fn validate_selection_shape(input: &MoveSelectionToBoardInput) -> Result<(),
     }
 
     Ok(())
+}
+
+/// The `operation_kind` every receipt of this operation is stored under.
+pub const MOVE_SELECTION_OPERATION_KIND: &str = "move_selection_to_board";
+
+/// Serialises a receipt for storage in `operation_receipts.receipt_json`.
+pub fn encode_receipt(receipt: &MoveSelectionToBoardReceipt) -> Result<String, WorkspaceError> {
+    serde_json::to_string(receipt)
+        .map_err(|error| WorkspaceError::Database(format!("cannot encode receipt: {error}")))
+}
+
+/// Decodes a stored receipt. The replay path returns it unchanged, so the caller
+/// must be able to hand the frontend exactly what the original call produced.
+pub fn decode_receipt(json: &str) -> Result<MoveSelectionToBoardReceipt, WorkspaceError> {
+    serde_json::from_str(json)
+        .map_err(|error| WorkspaceError::Database(format!("cannot decode stored receipt: {error}")))
 }
