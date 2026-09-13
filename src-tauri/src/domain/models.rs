@@ -227,7 +227,7 @@ pub enum CardDto {
     #[serde(rename = "board_portal")]
     BoardPortal(BoardPortalDto),
     Image(ImageCardDto),
-    Embed(EmbedCardDto),
+    Embed(Box<EmbedCardDto>),
     #[serde(rename = "filesystem_alias")]
     FilesystemAlias(FilesystemAliasDto),
     #[serde(rename = "file")]

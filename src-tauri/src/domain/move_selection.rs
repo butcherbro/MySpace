@@ -284,7 +284,7 @@ pub fn move_selection_to_board(
             board_id: board.board_id.clone(),
             portal_card_id: board.portal_card_id.clone(),
             previous_parent_board_id: board.parent_board_id.clone().unwrap_or_default(),
-            previous_portal_frame: board.portal_frame.clone(),
+            previous_portal_frame: board.portal_frame,
             destination_portal_frame: Frame {
                 x: slot.0,
                 y: slot.1,
@@ -308,7 +308,7 @@ pub fn move_selection_to_board(
                 id: card.id.clone(),
                 previous_board_id: card.board_id.clone(),
                 previous_unsorted: card.unsorted,
-                previous_frame: card.frame.clone(),
+                previous_frame: card.frame,
                 before_revision: card.revision,
                 after_revision: card.revision + 1,
             })

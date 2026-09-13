@@ -376,7 +376,7 @@ fn load_cards(
                 None
             };
 
-            Ok(CardDto::Embed(EmbedCardDto {
+            Ok(CardDto::Embed(Box::new(EmbedCardDto {
                 id: row.get(0)?,
                 board_id: row.get(1)?,
                 frame: Frame {
@@ -400,7 +400,7 @@ fn load_cards(
                 preview_origin: row.get(18)?,
                 metadata_status: row.get(19)?,
                 metadata_error: row.get(20)?,
-            }))
+            })))
         })?;
 
         for r in rows {
@@ -689,7 +689,7 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                         None
                     };
 
-                    Ok(CardDto::Embed(EmbedCardDto {
+                    Ok(CardDto::Embed(Box::new(EmbedCardDto {
                         id: row.get(0)?,
                         board_id: row.get(1)?,
                         frame: Frame {
@@ -713,7 +713,7 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                         preview_origin: row.get(18)?,
                         metadata_status: row.get(19)?,
                         metadata_error: row.get(20)?,
-                    }))
+                    })))
                 },
             )
             .map_err(WorkspaceError::from)

@@ -1072,6 +1072,46 @@ fn convert_note_to_embed_roundtrips_through_snapshot() {
 }
 
 #[test]
+fn embed_card_serializes_as_a_flat_tagged_object() {
+    // Guards the IPC contract while `CardDto::Embed` is boxed to keep the enum
+    // small: the payload must stay inline under `kind: "embed"`, never nested
+    // one level deeper.
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = create_test_note(&mut conn);
+
+    workspace_repository::convert_note_to_embed(
+        &mut conn,
+        &myspace_lib::domain::models::ConvertNoteToEmbedInput {
+            id: "note-to-embed".to_string(),
+            expected_revision: 1,
+            source_url: "https://example.com".to_string(),
+            display_url: "example.com".to_string(),
+            title: "https://example.com".to_string(),
+            description_json: serde_json::json!({ "type": "doc" }),
+            description_plain_text: "".to_string(),
+        },
+    )
+    .unwrap();
+
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    let value = serde_json::to_value(&snapshot.cards[0]).unwrap();
+
+    assert_eq!(value["kind"], "embed");
+    assert_eq!(value["sourceUrl"], "https://example.com");
+    assert_eq!(value["metadataStatus"], "pending");
+    let object = value
+        .as_object()
+        .expect("a card must serialize as an object");
+    for nested in ["embed", "Embed", "0"] {
+        assert!(
+            !object.contains_key(nested),
+            "the embed payload must stay flat, found `{nested}` in {value}"
+        );
+    }
+}
+
+#[test]
 fn convert_note_to_embed_rejects_stale_revision() {
     let mut conn = open_in_memory().unwrap();
     bootstrap::bootstrap(&mut conn).unwrap();
