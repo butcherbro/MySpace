@@ -95,6 +95,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "favicon_cache",
         sql: include_str!("../../migrations/0016_favicon_cache.sql"),
     },
+    Migration {
+        version: 17,
+        name: "operation_receipts",
+        sql: include_str!("../../migrations/0017_operation_receipts.sql"),
+    },
 ];
 
 /// Creates the `schema_migrations` bookkeeping table if it does not yet exist.
