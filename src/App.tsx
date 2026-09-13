@@ -1649,8 +1649,15 @@ function App() {
           if (drag.cardIds.length > 1) {
             const leafSanps = drag.cards.filter((c) => c.kind !== "board_portal");
             const portals = drag.cards.filter(
-              (c): c is (typeof drag.cards)[number] & { targetBoardId: string; boardRevision: number } =>
-                c.kind === "board_portal" && c.targetBoardId !== undefined && c.boardRevision !== undefined && c.targetBoardId !== target,
+              (
+                c,
+              ): c is (typeof drag.cards)[number] & {
+                targetBoardId: string;
+                boardRevision: number;
+              } =>
+                c.kind === "board_portal" &&
+                c.targetBoardId !== undefined &&
+                c.boardRevision !== undefined,
             );
 
             const finish = () => {
@@ -1659,10 +1666,7 @@ function App() {
               void navigateTo(target, { tabMode: "sync" });
             };
 
-            if (leafSanps.length > 0) {
-              // Refresh each card's revision (a draft save may have bumped it
-              // after drag start) before the batch move, mirroring the single
-              // leaf-card path.
+            if (leafSanps.length > 0 || portals.length > 0) {
               void Promise.all(
                 leafSanps.map((c) =>
                   gateway
@@ -1677,7 +1681,21 @@ function App() {
                     .catch(() => ({ id: c.cardId, expectedRevision: c.revision })),
                 ),
               )
-                .then((items) => gateway.moveCardsToBoardUnsorted({ targetBoardId: target, cards: items }))
+                .then((cards) =>
+                  dispatcher.execute(
+                    new MoveSelectionCommand(idGenerator.nextId(), {
+                      idempotencyKey: idGenerator.nextId(),
+                      targetBoardId: target,
+                      cards,
+                      boards: portals.map((p) => ({
+                        boardId: p.targetBoardId,
+                        expectedBoardRevision: p.boardRevision,
+                        expectedPortalRevision: p.revision,
+                      })),
+                      leafPlacement: "unsorted",
+                    }),
+                  ),
+                )
                 .then(finish)
                 .catch((err) => {
                   dispatch({ type: "failed", message: errorMessage(err) });
@@ -1686,25 +1704,6 @@ function App() {
                 });
             } else {
               finish();
-            }
-
-            for (const portal of portals) {
-              void dispatcher
-                .execute(
-                  new MoveBoardCommand(
-                    idGenerator.nextId(),
-                    portal.targetBoardId,
-                    portal.boardId,
-                    portal.frame,
-                    target,
-                    { x: 40, y: 40, width: portal.frame.width, height: portal.frame.height },
-                    portal.boardRevision,
-                    portal.revision,
-                  ),
-                )
-                .catch((err) => {
-                  dispatch({ type: "failed", message: errorMessage(err) });
-                });
             }
             return true; // consumed
           }
