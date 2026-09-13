@@ -564,3 +564,167 @@ fn cycle_validation_rejects_the_own_subtree_and_the_workspace_root() {
         other => panic!("expected a root rejection, got {other:?}"),
     }
 }
+
+/// Home with two sibling boards (each with its portal card on Home) and one note
+/// on Home. Returns the Home board id.
+fn mixed_fixture(conn: &rusqlite::Connection) -> String {
+    let home: String = conn
+        .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    for (board, portal, title) in [("a", "pa", "A"), ("b", "pb", "B")] {
+        conn.execute(
+            "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) SELECT ?1, w.id, w.root_board_id, ?2, 'default', NULL, 1, 0, 0 FROM workspaces w",
+            rusqlite::params![board, title],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, unsorted, created_at, updated_at) VALUES (?1, ?2, 'board_portal', 0, 0, 120, 112, 0, 1, 0, 0, 0)",
+            rusqlite::params![portal, home],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO board_portal_cards (card_id, target_board_id) VALUES (?1, ?2)",
+            rusqlite::params![portal, board],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, unsorted, created_at, updated_at) VALUES ('n1', ?1, 'note', 10, 20, 200, 80, 0, 1, 0, 0, 0)",
+        [home.clone()],
+    )
+    .unwrap();
+    home
+}
+
+fn mixed_move(key: &str) -> MoveSelectionToBoardInput {
+    MoveSelectionToBoardInput {
+        idempotency_key: key.into(),
+        target_board_id: "b".into(),
+        cards: vec![MoveSelectionCard {
+            id: "n1".into(),
+            expected_revision: 1,
+        }],
+        boards: vec![MoveSelectionBoard {
+            board_id: "a".into(),
+            expected_board_revision: 1,
+            expected_portal_revision: 1,
+        }],
+        leaf_placement: SelectionLeafPlacement::Unsorted,
+    }
+}
+
+#[test]
+fn mixed_selection_moves_leaf_and_portal_in_one_call_and_replays_by_key() {
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::domain::move_selection::move_selection_to_board;
+
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = mixed_fixture(&conn);
+
+    let input = mixed_move("op-1");
+    let receipt = move_selection_to_board(&mut conn, &input).unwrap();
+
+    assert_eq!(receipt.target_board_id, "b");
+    assert_eq!(receipt.cards.len(), 1);
+    assert_eq!(receipt.boards.len(), 1);
+    assert_eq!(receipt.cards[0].previous_board_id, home);
+    assert_eq!(receipt.cards[0].before_revision, 1);
+    assert_eq!(receipt.cards[0].after_revision, 2);
+    assert_eq!(receipt.boards[0].previous_parent_board_id, home);
+    assert_eq!(receipt.boards[0].portal_card_id, "pa");
+    assert_eq!(receipt.boards[0].before_portal_revision, 1);
+    assert_eq!(receipt.boards[0].after_portal_revision, 2);
+    assert_eq!(receipt.boards[0].destination_portal_frame.width, 120.0);
+
+    // The note lands in the destination's Unsorted panel.
+    let note: (String, i64, i64) = conn
+        .query_row(
+            "SELECT board_id, unsorted, revision FROM cards WHERE id = 'n1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(note, ("b".to_string(), 1, 2));
+
+    // The board is reparented and its portal follows it onto the destination.
+    let parent: Option<String> = conn
+        .query_row(
+            "SELECT parent_board_id FROM boards WHERE id = 'a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent.as_deref(), Some("b"));
+    let portal: (String, i64) = conn
+        .query_row(
+            "SELECT board_id, revision FROM cards WHERE id = 'pa'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(portal, ("b".to_string(), 2));
+
+    // Replaying the same key returns the original receipt, not a stale-revision error.
+    let again = move_selection_to_board(&mut conn, &input).unwrap();
+    assert_eq!(again.operation_id, receipt.operation_id);
+    assert_eq!(again.cards, receipt.cards);
+
+    // The same key with a different payload is refused.
+    let mut different = input.clone();
+    different.cards[0].expected_revision = 5;
+    assert!(move_selection_to_board(&mut conn, &different).is_err());
+
+    // A second key moves nothing: the selection has already left Home.
+    let mut second = mixed_move("op-2");
+    second.cards[0].expected_revision = 2;
+    second.boards[0].expected_board_revision = 2;
+    second.boards[0].expected_portal_revision = 2;
+    assert!(move_selection_to_board(&mut conn, &second).is_ok());
+}
+
+#[test]
+fn a_stale_member_rejects_the_whole_mixed_move() {
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::domain::move_selection::move_selection_to_board;
+    use myspace_lib::repositories::workspace_repository::find_operation_receipt;
+
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = mixed_fixture(&conn);
+
+    let mut input = mixed_move("op-stale");
+    input.cards[0].expected_revision = 99; // the leaf expectation is stale
+    assert!(move_selection_to_board(&mut conn, &input).is_err());
+
+    // All-or-nothing: the valid board member did not move either.
+    let note_board: String = conn
+        .query_row("SELECT board_id FROM cards WHERE id = 'n1'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(note_board, home);
+    let parent: Option<String> = conn
+        .query_row(
+            "SELECT parent_board_id FROM boards WHERE id = 'a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent.as_deref(), Some(home.as_str()));
+    let portal_board: String = conn
+        .query_row("SELECT board_id FROM cards WHERE id = 'pa'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(portal_board, home);
+
+    // No receipt survives the rollback, so the move stays retryable.
+    assert!(
+        find_operation_receipt(&conn, "move_selection_to_board", "op-stale")
+            .unwrap()
+            .is_none()
+    );
+}
