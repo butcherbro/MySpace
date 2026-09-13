@@ -85,6 +85,39 @@ squashed together with the refactors, so each stays reviewable and revertible.
 | 18 | `aebdfc7`…`9ac9cb9` | `workspace_repository.rs` 2601 → 14 lines, seven aggregate modules, public paths unchanged |
 | SECURITY-HARDENING | `4292e3a` | production CSP + `devCsp`; `sandbox=""` preview guard test; packaged checklist |
 
+## Plan compliance, step by step
+
+The commit list proves each task landed; it does not prove each task's *steps* did.
+Audited against the plan text, so a reviewer does not have to re-derive it:
+
+| Task | Step-level requirement | Where it stands |
+| --- | --- | --- |
+| 4 | bounded read via `File::open().take(limit + 1)` | `read_text_preview` does exactly that; `read_text_preview_reads_a_bounded_head_of_large_files` |
+| 4 | failure cleanup for unknown board, conflicting card id, failed insert, thumbnail failure | all four cases covered in `tests/asset_service.rs` |
+| 5 | return the persisted DTO, not a rebuilt one | `load_card` in the command; `preview_asset.expect("the generated thumbnail is projected")` plus the gateway test |
+| 6 | deferred-promise latest-request-wins test | `use-workspace-search.test.ts` drives two deferred requests |
+| 7 | board-switch test for the captured revision | `writes the board id and revision captured when the viewport settled` |
+| 8 | cleanup-before-listen test | `tears down a listener that registers after cleanup and never delivers to it` |
+| 9 | component regression test + e2e | `finishes a drag whose node disappeared with the snapshot without throwing` |
+| 11 | document the selected package versions | commit body records that no ESLint/typescript-eslint change was needed, per the architect's ruling |
+| 14–18 | as written | see the commit map above; Task 18's one deviation is below |
+
+Three deliberate deviations, stated rather than buried:
+
+1. **Task 9's page-error step was superseded by Task 12.** It asked for a
+   `pageerror` collector in `tab-drop.spec.ts`; Task 12 replaced it with a shared
+   auto-fixture that fails *every* spec on a runtime error, which is strictly
+   stronger than one spec having its own collector. The spec keeps a comment
+   saying where the guard now lives.
+2. **Task 18 asked for a `trash.rs` module; none was created** because this
+   repository file had no trash code — trash lives in `domain/trash_service.rs`
+   and only calls cards and boards here. Inventing an empty module to match a
+   suggested file list would have been noise.
+3. **Task 9/11 fix commits were not entangled with refactoring**, as the plan's
+   commit-order section requires: every data-integrity commit touches only
+   modified or newly added files, with no renames or moves, so each stays
+   independently reviewable and revertible.
+
 ## The asset-loss incident
 
 - **What happened.** Before the fix of Task 1–2, the startup asset GC did not know
