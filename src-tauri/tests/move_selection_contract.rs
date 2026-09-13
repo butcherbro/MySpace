@@ -728,3 +728,91 @@ fn a_stale_member_rejects_the_whole_mixed_move() {
             .is_none()
     );
 }
+
+#[test]
+fn undo_restores_the_moved_leaf_and_portal() {
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::domain::move_selection::{move_selection_to_board, undo_move_selection};
+
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = mixed_fixture(&conn);
+
+    let receipt = move_selection_to_board(&mut conn, &mixed_move("op-undo")).unwrap();
+    undo_move_selection(&mut conn, &receipt).unwrap();
+
+    // The note is back on Home, placed again at its old frame.
+    let note: (String, i64, f64, f64, i64) = conn
+        .query_row(
+            "SELECT board_id, unsorted, x, y, revision FROM cards WHERE id = 'n1'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(note, (home.clone(), 0, 10.0, 20.0, 3));
+
+    // The board is back under Home and its portal is back on Home, too.
+    let parent: Option<String> = conn
+        .query_row(
+            "SELECT parent_board_id FROM boards WHERE id = 'a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent.as_deref(), Some(home.as_str()));
+    let portal: (String, f64, f64, i64) = conn
+        .query_row(
+            "SELECT board_id, x, y, revision FROM cards WHERE id = 'pa'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(portal, (home.clone(), 0.0, 0.0, 3));
+}
+
+#[test]
+fn undo_is_all_or_nothing_when_a_member_changed_since_the_move() {
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::domain::move_selection::{move_selection_to_board, undo_move_selection};
+
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let _home = mixed_fixture(&conn);
+
+    let receipt = move_selection_to_board(&mut conn, &mixed_move("op-undo-stale")).unwrap();
+
+    // Somebody edits the note after the move, so its revision moves on.
+    conn.execute(
+        "UPDATE cards SET revision = revision + 1 WHERE id = 'n1'",
+        [],
+    )
+    .unwrap();
+
+    assert!(undo_move_selection(&mut conn, &receipt).is_err());
+
+    // Nothing was restored: the board is still under B and the note still unsorted there.
+    let parent: Option<String> = conn
+        .query_row(
+            "SELECT parent_board_id FROM boards WHERE id = 'a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent.as_deref(), Some("b"));
+    let note: (String, i64) = conn
+        .query_row(
+            "SELECT board_id, unsorted FROM cards WHERE id = 'n1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(note, ("b".to_string(), 1));
+}

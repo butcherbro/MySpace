@@ -329,3 +329,82 @@ pub fn move_selection_to_board(
 
     Ok(receipt)
 }
+
+/// Reverses one mixed-selection move from its receipt: a second Immediate
+/// transaction that is itself all-or-nothing.
+///
+/// The receipt carries the post-move revisions, so an undo against a selection
+/// somebody changed afterwards is refused instead of restoring half of it. Undo
+/// must not loop over the older single-entity commands, which cannot be atomic
+/// together (ADR-0007).
+pub fn undo_move_selection(
+    conn: &mut rusqlite::Connection,
+    receipt: &MoveSelectionToBoardReceipt,
+) -> Result<(), WorkspaceError> {
+    use rusqlite::{params, TransactionBehavior};
+
+    let now = crate::db::migrations::now_millis();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+    for card in &receipt.cards {
+        let restored = tx.execute(
+            "UPDATE cards SET board_id = ?1, unsorted = ?2, x = ?3, y = ?4, revision = revision + 1, updated_at = ?5
+             WHERE id = ?6 AND revision = ?7",
+            params![
+                card.previous_board_id,
+                if card.previous_unsorted { 1 } else { 0 },
+                card.previous_frame.x,
+                card.previous_frame.y,
+                now,
+                card.id,
+                card.after_revision
+            ],
+        )?;
+        if restored == 0 {
+            return Err(WorkspaceError::StaleRevision {
+                expected: card.after_revision,
+                actual: card.after_revision,
+            });
+        }
+    }
+
+    for board in &receipt.boards {
+        let restored_board = tx.execute(
+            "UPDATE boards SET parent_board_id = ?1, revision = revision + 1, updated_at = ?2
+             WHERE id = ?3 AND revision = ?4",
+            params![
+                board.previous_parent_board_id,
+                now,
+                board.board_id,
+                board.after_board_revision
+            ],
+        )?;
+        if restored_board == 0 {
+            return Err(WorkspaceError::StaleRevision {
+                expected: board.after_board_revision,
+                actual: board.after_board_revision,
+            });
+        }
+        let restored_portal = tx.execute(
+            "UPDATE cards SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4
+             WHERE id = ?5 AND revision = ?6",
+            params![
+                board.previous_parent_board_id,
+                board.previous_portal_frame.x,
+                board.previous_portal_frame.y,
+                now,
+                board.portal_card_id,
+                board.after_portal_revision
+            ],
+        )?;
+        if restored_portal == 0 {
+            return Err(WorkspaceError::StaleRevision {
+                expected: board.after_portal_revision,
+                actual: board.after_portal_revision,
+            });
+        }
+    }
+
+    tx.commit()?;
+    Ok(())
+}
