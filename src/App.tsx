@@ -1098,19 +1098,37 @@ function App() {
         // One atomic call for the whole selection, and the state is mirrored from
         // the receipt the backend returned rather than recomputed locally.
         const currentBoardId = boardRef.current?.id;
-        void dispatcher
-          .execute(
-            new MoveSelectionCommand(idGenerator.nextId(), {
-              idempotencyKey: idGenerator.nextId(),
-              targetBoardId,
-              cards: leafCards.map((c) => ({ id: c.id, expectedRevision: c.revision })),
-              boards: portals.map((p) => ({
-                boardId: p.target.id,
-                expectedBoardRevision: p.target.boardRevision,
-                expectedPortalRevision: p.revision,
-              })),
-              leafPlacement: "unsorted",
-            }),
+        // Refresh each leaf's revision first: the backend rejects the WHOLE atomic
+        // move on one stale expectation, so a draft save that bumped a revision
+        // after the drag began must not abort the group.
+        void Promise.all(
+          leafCards.map((c) =>
+            gateway
+              .readCard(c.id)
+              .then((fresh) => ({
+                id: c.id,
+                expectedRevision:
+                  fresh && "revision" in fresh
+                    ? (fresh as { revision: number }).revision
+                    : c.revision,
+              }))
+              .catch(() => ({ id: c.id, expectedRevision: c.revision })),
+          ),
+        )
+          .then((cards) =>
+            dispatcher.execute(
+              new MoveSelectionCommand(idGenerator.nextId(), {
+                idempotencyKey: idGenerator.nextId(),
+                targetBoardId,
+                cards,
+                boards: portals.map((p) => ({
+                  boardId: p.target.id,
+                  expectedBoardRevision: p.target.boardRevision,
+                  expectedPortalRevision: p.revision,
+                })),
+                leafPlacement: "unsorted",
+              }),
+            ),
           )
           .then((receipt) => {
             if (receipt.cards.length > 0) {
