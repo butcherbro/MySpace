@@ -475,3 +475,62 @@ export interface WorkspaceGateway {
   moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void>;
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void>;
 }
+
+/**
+ * Wire contract for the atomic mixed-selection move (ADR-0007). It mirrors the
+ * Rust DTOs: the backend resolves the portal from `boardId` and picks the
+ * destination slot itself, so the frontend sends neither a portal id nor a frame.
+ */
+export interface MoveSelectionCard {
+  id: string;
+  expectedRevision: number;
+}
+
+export interface MoveSelectionBoard {
+  boardId: string;
+  expectedBoardRevision: number;
+  expectedPortalRevision: number;
+}
+
+/** Where the leaf cards land. Only `unsorted` exists today. */
+export type SelectionLeafPlacement = "unsorted";
+
+export interface MoveSelectionToBoardInput {
+  /** Replay guard: the same key must return the original receipt. */
+  idempotencyKey: string;
+  targetBoardId: string;
+  cards: MoveSelectionCard[];
+  boards: MoveSelectionBoard[];
+  leafPlacement: SelectionLeafPlacement;
+}
+
+/** One moved leaf, carrying everything the atomic undo needs to put it back. */
+export interface MovedCardReceipt {
+  id: string;
+  previousBoardId: string;
+  previousUnsorted: boolean;
+  previousFrame: Frame;
+  beforeRevision: number;
+  afterRevision: number;
+}
+
+/** One reparented board, carrying both portal positions and both revisions. */
+export interface MovedBoardReceipt {
+  boardId: string;
+  portalCardId: string;
+  previousParentBoardId: string;
+  previousPortalFrame: Frame;
+  destinationPortalFrame: Frame;
+  beforeBoardRevision: number;
+  afterBoardRevision: number;
+  beforePortalRevision: number;
+  afterPortalRevision: number;
+}
+
+/** The receipt of one mixed-selection move; also the undo's input. */
+export interface MoveSelectionToBoardReceipt {
+  operationId: string;
+  targetBoardId: string;
+  cards: MovedCardReceipt[];
+  boards: MovedBoardReceipt[];
+}
