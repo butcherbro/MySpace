@@ -385,4 +385,41 @@ describe("CanvasAdapter", () => {
       "image",
     );
   });
+
+  it("finishes a drag whose node disappeared with the snapshot without throwing", () => {
+    reactFlowProps.length = 0;
+    const onCardDragEnd = vi.fn(() => false);
+    const onCardsMoved = vi.fn();
+
+    render(
+      <CanvasAdapter
+        cards={cards}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        viewportResetToken={1}
+        events={{ onCardDragEnd, onCardsMoved }}
+        renderCard={(card) => <span data-testid={`card-${card.id}`}>{card.id}</span>}
+      />,
+    );
+
+    const props = reactFlowProps[reactFlowProps.length - 1] as {
+      onNodeDragStart?: (event: MouseEvent, node: { id: string }) => void;
+      onNodeDragStop?: (event: MouseEvent, node?: { id: string }) => void;
+    };
+
+    props.onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "a" });
+
+    // A cross-board drop replaced the board snapshot, so drag-stop comes back
+    // without the node the session started on: the drag must still finish.
+    expect(() => props.onNodeDragStop?.(new MouseEvent("pointerup"))).not.toThrow();
+
+    // The session ended through the normal cleanup path.
+    expect(onCardDragEnd).toHaveBeenCalled();
+
+    // Persistence is never handed an entry without a frame.
+    for (const [payload] of onCardsMoved.mock.calls as Array<[{ cards: Array<{ frame?: unknown }> }]>) {
+      for (const card of payload.cards) {
+        expect(card.frame).toBeDefined();
+      }
+    }
+  });
 });

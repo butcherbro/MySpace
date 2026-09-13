@@ -282,9 +282,18 @@ export function CanvasAdapter({
     events.onSelectionChanged?.({ ids });
   };
 
-  const handleNodeDragStop = (_: unknown, node: Node<CardNodeData>) => {
+  const handleNodeDragStop = (_: unknown, node: Node<CardNodeData> | undefined) => {
+    // The drag session owns the dragged card id. A cross-board drop replaces the
+    // board snapshot, so the React Flow node can already be gone when drag-stop
+    // fires; `node` is then absent and must never be dereferenced.
+    const draggedCardId = draggingCardIdRef.current ?? node?.id ?? null;
     const selected = selectedIdsRef.current;
-    const ids = selected.has(node.id) && selected.size > 1 ? [...selected] : [node.id];
+    const ids =
+      draggedCardId !== null && selected.has(draggedCardId) && selected.size > 1
+        ? [...selected]
+        : draggedCardId !== null
+          ? [draggedCardId]
+          : [];
 
     // Stop the raw-pointer tracking opened at drag start.
     cleanupWindowDragListeners();
@@ -303,6 +312,10 @@ export function CanvasAdapter({
     if (events.onCardDragEnd?.()) {
       return;
     }
+
+    // No card id means the node was taken away by a snapshot replacement: the
+    // drag is over, cleanup above already ran, and nothing is left to persist.
+    if (ids.length === 0) return;
 
     // Drop onto a portal: if the dragged card (or group) lands inside a board
     // portal, move the whole selection there instead of repositioning.
