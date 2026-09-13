@@ -162,6 +162,15 @@ pub fn list_preview_with_refresh(
 
 #[cfg(target_os = "macos")]
 pub struct MacosBookmarkLocator;
+
+/// Bookmark creation options for folder locators.
+///
+/// Kept as a named constant so a regression guard can assert it stays a *plain*
+/// bookmark: this app is not sandboxed, and requesting a security scope fails
+/// outside App Sandbox (see ADR-0006).
+#[cfg(target_os = "macos")]
+pub const FOLDER_BOOKMARK_CREATION_OPTIONS: objc2_foundation::NSURLBookmarkCreationOptions =
+    objc2_foundation::NSURLBookmarkCreationOptions::empty();
 #[cfg(target_os = "macos")]
 impl Default for MacosBookmarkLocator {
     fn default() -> Self {
@@ -182,15 +191,13 @@ fn describe_ns_error(error: &objc2_foundation::NSError) -> String {
 #[cfg(target_os = "macos")]
 impl FolderLocator for MacosBookmarkLocator {
     fn create(&self, path: &Path) -> Result<Vec<u8>, LocatorError> {
-        use objc2_foundation::{NSString, NSURLBookmarkCreationOptions, NSURL};
+        use objc2_foundation::{NSString, NSURL};
         let value = path
             .to_str()
             .ok_or_else(|| LocatorError::Io("path is not valid UTF-8".into()))?;
         let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(value), true);
-        // The app is not sandboxed, so a plain bookmark is sufficient. The
-        // security-scoped variant fails outside App Sandbox on current macOS.
         url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
-            NSURLBookmarkCreationOptions::empty(),
+            FOLDER_BOOKMARK_CREATION_OPTIONS,
             None,
             None,
         )
@@ -199,9 +206,7 @@ impl FolderLocator for MacosBookmarkLocator {
     }
     fn resolve(&self, bytes: &[u8]) -> Result<ResolvedFolder, LocatorError> {
         use objc2::runtime::Bool;
-        use objc2_foundation::{
-            NSData, NSURLBookmarkCreationOptions, NSURLBookmarkResolutionOptions, NSURL,
-        };
+        use objc2_foundation::{NSData, NSURLBookmarkResolutionOptions, NSURL};
         let data = NSData::with_bytes(bytes);
         let mut stale = Bool::default();
         let url = unsafe {
@@ -217,7 +222,7 @@ impl FolderLocator for MacosBookmarkLocator {
         let refreshed_locator = if stale.as_bool() {
             Some(
                 url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
-                    NSURLBookmarkCreationOptions::empty(),
+                    FOLDER_BOOKMARK_CREATION_OPTIONS,
                     None,
                     None,
                 )

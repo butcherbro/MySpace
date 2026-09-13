@@ -74,6 +74,19 @@ fn macos_locator_round_trips_regular_bookmark() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_locator_creation_options_are_plain() {
+    // Regression guard for ADR-0006: a security-scoped bookmark cannot be created
+    // outside App Sandbox, and this app is not sandboxed. Re-adding the scope bit
+    // must fail here in every environment, not only in a sandboxed one.
+    use myspace_lib::domain::filesystem_alias_service::FOLDER_BOOKMARK_CREATION_OPTIONS;
+    assert!(
+        FOLDER_BOOKMARK_CREATION_OPTIONS.is_empty(),
+        "folder locators must use plain bookmarks (ADR-0006)"
+    );
+}
+
 struct StaleFake {
     path: std::path::PathBuf,
 }
