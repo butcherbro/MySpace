@@ -5,6 +5,60 @@ use myspace_lib::domain::models::{
     Frame, MoveSelectionBoard, MoveSelectionCard, MoveSelectionToBoardInput,
     MoveSelectionToBoardReceipt, MovedBoardReceipt, MovedCardReceipt, SelectionLeafPlacement,
 };
+use myspace_lib::domain::move_selection::request_fingerprint;
+
+fn sample_input() -> MoveSelectionToBoardInput {
+    MoveSelectionToBoardInput {
+        idempotency_key: "op-1".into(),
+        target_board_id: "board-b".into(),
+        cards: vec![MoveSelectionCard {
+            id: "n1".into(),
+            expected_revision: 3,
+        }],
+        boards: vec![MoveSelectionBoard {
+            board_id: "board-a".into(),
+            expected_board_revision: 5,
+            expected_portal_revision: 7,
+        }],
+        leaf_placement: SelectionLeafPlacement::Unsorted,
+    }
+}
+
+#[test]
+fn request_fingerprint_is_stable_and_payload_sensitive() {
+    let base = sample_input();
+    assert_eq!(
+        request_fingerprint(&base).unwrap(),
+        request_fingerprint(&sample_input()).unwrap(),
+        "an identical payload fingerprints identically"
+    );
+
+    let mut different_card = sample_input();
+    different_card.cards[0].expected_revision = 99;
+    assert_ne!(
+        request_fingerprint(&base).unwrap(),
+        request_fingerprint(&different_card).unwrap(),
+        "a reused key with a different card revision must fingerprint differently"
+    );
+
+    let mut different_boards = sample_input();
+    different_boards.boards[0].expected_portal_revision = 8;
+    assert_ne!(
+        request_fingerprint(&base).unwrap(),
+        request_fingerprint(&different_boards).unwrap(),
+        "a reused key with different board expectations must fingerprint differently"
+    );
+}
+
+#[test]
+fn request_fingerprint_covers_the_idempotency_key() {
+    let mut other_key = sample_input();
+    other_key.idempotency_key = "op-2".into();
+    assert_ne!(
+        request_fingerprint(&sample_input()).unwrap(),
+        request_fingerprint(&other_key).unwrap()
+    );
+}
 
 fn frame(x: f64, y: f64) -> Frame {
     Frame {

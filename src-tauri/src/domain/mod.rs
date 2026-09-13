@@ -6,4 +6,5 @@ pub mod errors;
 pub mod filesystem_alias_service;
 pub mod link_metadata;
 pub mod models;
+pub mod move_selection;
 pub mod trash_service;
