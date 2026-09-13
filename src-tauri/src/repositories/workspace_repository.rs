@@ -2525,3 +2525,48 @@ pub fn read_selection_pre_state(
 
     Ok(SelectionPreState { cards, boards })
 }
+
+/// True when `candidate_board_id` lies inside the subtree rooted at
+/// `root_board_id` (the root itself counts).
+fn is_in_subtree(
+    conn: &Connection,
+    root_board_id: &str,
+    candidate_board_id: &str,
+) -> Result<bool, WorkspaceError> {
+    let count: i64 = conn.query_row(
+        "WITH RECURSIVE subtree(id) AS (
+            SELECT id FROM boards WHERE id = ?1
+            UNION ALL
+            SELECT b.id FROM boards b JOIN subtree s ON b.parent_board_id = s.id
+         )
+         SELECT COUNT(*) FROM subtree WHERE id = ?2",
+        params![root_board_id, candidate_board_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Rejects a mixed-selection move that would detach a subtree from the workspace
+/// root: the root board may not travel at all, and the destination may not sit
+/// inside a board that moves with the selection (ADR-0007 rule 2).
+pub fn validate_selection_cycle(
+    conn: &Connection,
+    target_board_id: &str,
+    state: &crate::domain::move_selection::SelectionPreState,
+) -> Result<(), WorkspaceError> {
+    for board in &state.boards {
+        if board.parent_board_id.is_none() {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "board {} is the workspace root and cannot be moved",
+                board.board_id
+            )));
+        }
+        if is_in_subtree(conn, &board.board_id, target_board_id)? {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "board {} cannot be moved inside its own subtree",
+                board.board_id
+            )));
+        }
+    }
+    Ok(())
+}

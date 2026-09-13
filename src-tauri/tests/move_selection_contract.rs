@@ -476,3 +476,91 @@ fn expectations_validate_revisions_and_reject_the_destination_board() {
         other => panic!("expected a ConstraintViolation, got {other:?}"),
     }
 }
+
+#[test]
+fn cycle_validation_rejects_the_own_subtree_and_the_workspace_root() {
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::domain::errors::WorkspaceError;
+    use myspace_lib::domain::move_selection::{SelectedBoardState, SelectionPreState};
+    use myspace_lib::repositories::workspace_repository::{
+        read_selection_pre_state, validate_selection_cycle,
+    };
+
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home: String = conn
+        .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+
+    // home -> a -> b, each board with its portal card on its parent.
+    conn.execute(
+        "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) SELECT 'a', w.id, w.root_board_id, 'A', 'default', NULL, 1, 0, 0 FROM workspaces w",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, unsorted, created_at, updated_at) VALUES ('pa', ?1, 'board_portal', 0, 0, 120, 112, 0, 1, 0, 0, 0)",
+        [home.clone()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO board_portal_cards (card_id, target_board_id) VALUES ('pa', 'a')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) SELECT 'b', w.id, 'a', 'B', 'default', NULL, 1, 0, 0 FROM workspaces w",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, unsorted, created_at, updated_at) VALUES ('pb', 'a', 'board_portal', 0, 0, 120, 112, 0, 1, 0, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO board_portal_cards (card_id, target_board_id) VALUES ('pb', 'b')",
+        [],
+    )
+    .unwrap();
+
+    let mut moving_a = sample_input();
+    moving_a.cards.clear();
+    moving_a.boards = vec![MoveSelectionBoard {
+        board_id: "a".into(),
+        expected_board_revision: 1,
+        expected_portal_revision: 1,
+    }];
+    let state = read_selection_pre_state(&conn, &moving_a).unwrap();
+
+    // Dropping A inside its own descendant B would detach A's subtree.
+    match validate_selection_cycle(&conn, "b", &state) {
+        Err(WorkspaceError::ConstraintViolation(message)) => {
+            assert!(message.contains("subtree"), "got: {message}");
+        }
+        other => panic!("expected a subtree rejection, got {other:?}"),
+    }
+    // Dropping A onto Home is fine: Home is not inside A's subtree.
+    assert!(validate_selection_cycle(&conn, &home, &state).is_ok());
+
+    // The workspace root cannot travel at all.
+    let root_state = SelectionPreState {
+        cards: vec![],
+        boards: vec![SelectedBoardState {
+            board_id: home.clone(),
+            parent_board_id: None,
+            board_revision: 1,
+            portal_card_id: "none".into(),
+            portal_frame: frame(0.0, 0.0),
+            portal_revision: 1,
+        }],
+    };
+    match validate_selection_cycle(&conn, "a", &root_state) {
+        Err(WorkspaceError::ConstraintViolation(message)) => {
+            assert!(message.contains("root"), "got: {message}");
+        }
+        other => panic!("expected a root rejection, got {other:?}"),
+    }
+}
