@@ -70,8 +70,8 @@ pub fn create_folder_alias(
         .unwrap_or("Folder")
         .to_string();
     let locator = PlatformLocator::default();
-    let locator_blob = locator.create(&path).map_err(|_| {
-        WorkspaceError::ConstraintViolation("could not create folder locator".into())
+    let locator_blob = locator.create(&path).map_err(|error| {
+        WorkspaceError::ConstraintViolation(format!("could not create folder locator: {error}"))
     })?;
     let model = CreateFilesystemAliasInput {
         id: input.id,

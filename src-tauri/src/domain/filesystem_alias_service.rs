@@ -8,32 +8,28 @@ use std::path::{Path, PathBuf};
 pub enum LocatorError {
     Missing,
     PermissionLost,
-    Io,
+    /// A platform-level failure, carrying a short system diagnostic (NSError
+    /// domain/code/description). Keeping the reason stops a broken locator from
+    /// collapsing into an opaque "could not create folder locator" and makes a
+    /// future regression diagnosable from the error text alone.
+    Io(String),
 }
 
-/// RAII guard that stops a macOS security-scoped access when dropped.
-pub struct SecurityScopeGuard {
-    #[cfg(target_os = "macos")]
-    url: objc2::rc::Retained<objc2_foundation::NSURL>,
-}
-#[cfg(target_os = "macos")]
-impl Drop for SecurityScopeGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = self.url.stopAccessingSecurityScopedResource();
+impl std::fmt::Display for LocatorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LocatorError::Missing => write!(f, "bookmark not found"),
+            LocatorError::PermissionLost => write!(f, "permission lost"),
+            LocatorError::Io(message) => write!(f, "{message}"),
         }
     }
 }
-#[cfg(not(target_os = "macos"))]
-pub struct SecurityScopeGuard;
 
-/// A resolved folder plus an active security scope that must live as long as the
-/// returned path is read. Callers hold this value until done; dropping it stops
-/// the scope.
+/// A folder resolved from a stored bookmark. The app is not sandboxed, so the
+/// bookmark is a plain one and there is no security scope to hold open.
 pub struct ResolvedFolder {
     pub path: PathBuf,
     pub refreshed_locator: Option<Vec<u8>>,
-    pub _scope: Option<SecurityScopeGuard>,
 }
 
 /// Platform-specific bookmark implementation. Tests inject a fake locator so
@@ -92,7 +88,7 @@ pub fn list_preview_with_refresh(
                 None,
             )
         }
-        Err(LocatorError::Io) => return (base(), None, None),
+        Err(LocatorError::Io(_)) => return (base(), None, None),
     };
     let path = resolved.path;
     let read = match std::fs::read_dir(&path) {
@@ -172,22 +168,34 @@ impl Default for MacosBookmarkLocator {
         Self
     }
 }
+/// Short, stable description of a Foundation error for diagnostics.
+#[cfg(target_os = "macos")]
+fn describe_ns_error(error: &objc2_foundation::NSError) -> String {
+    format!(
+        "{} {}: {}",
+        error.domain(),
+        error.code(),
+        error.localizedDescription()
+    )
+}
+
 #[cfg(target_os = "macos")]
 impl FolderLocator for MacosBookmarkLocator {
     fn create(&self, path: &Path) -> Result<Vec<u8>, LocatorError> {
         use objc2_foundation::{NSString, NSURLBookmarkCreationOptions, NSURL};
-        let value = path.to_str().ok_or(LocatorError::Io)?;
+        let value = path
+            .to_str()
+            .ok_or_else(|| LocatorError::Io("path is not valid UTF-8".into()))?;
         let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(value), true);
         // The app is not sandboxed, so a plain bookmark is sufficient. The
-        // security-scoped variant fails outside App Sandbox on current macOS
-        // (NSCocoaErrorDomain 256: "The file couldn't be opened").
+        // security-scoped variant fails outside App Sandbox on current macOS.
         url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
             NSURLBookmarkCreationOptions::empty(),
             None,
             None,
         )
         .map(|data| data.to_vec())
-        .map_err(|_| LocatorError::Io)
+        .map_err(|error| LocatorError::Io(describe_ns_error(&error)))
     }
     fn resolve(&self, bytes: &[u8]) -> Result<ResolvedFolder, LocatorError> {
         use objc2::runtime::Bool;
@@ -213,7 +221,7 @@ impl FolderLocator for MacosBookmarkLocator {
                     None,
                     None,
                 )
-                .map_err(|_| LocatorError::Io)?
+                .map_err(|error| LocatorError::Io(describe_ns_error(&error)))?
                 .to_vec(),
             )
         } else {
@@ -222,7 +230,6 @@ impl FolderLocator for MacosBookmarkLocator {
         Ok(ResolvedFolder {
             path: PathBuf::from(path),
             refreshed_locator,
-            _scope: None,
         })
     }
 }
@@ -238,10 +245,14 @@ impl Default for UnsupportedPlatformLocator {
 #[cfg(not(target_os = "macos"))]
 impl FolderLocator for UnsupportedPlatformLocator {
     fn create(&self, _: &Path) -> Result<Vec<u8>, LocatorError> {
-        Err(LocatorError::Io)
+        Err(LocatorError::Io(
+            "folder shortcuts require a macOS build".into(),
+        ))
     }
     fn resolve(&self, _: &[u8]) -> Result<ResolvedFolder, LocatorError> {
-        Err(LocatorError::Io)
+        Err(LocatorError::Io(
+            "folder shortcuts require a macOS build".into(),
+        ))
     }
 }
 

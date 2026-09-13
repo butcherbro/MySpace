@@ -13,7 +13,6 @@ impl FolderLocator for Fake {
         Ok(ResolvedFolder {
             path: std::path::PathBuf::from(String::from_utf8_lossy(bytes).to_string()),
             refreshed_locator: None,
-            _scope: None,
         })
     }
 }
@@ -86,7 +85,6 @@ impl FolderLocator for StaleFake {
         Ok(ResolvedFolder {
             path: self.path.clone(),
             refreshed_locator: Some(b"new-locator".to_vec()),
-            _scope: None,
         })
     }
 }
