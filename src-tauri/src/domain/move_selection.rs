@@ -79,3 +79,30 @@ pub fn decode_receipt(json: &str) -> Result<MoveSelectionToBoardReceipt, Workspa
     serde_json::from_str(json)
         .map_err(|error| WorkspaceError::Database(format!("cannot decode stored receipt: {error}")))
 }
+
+/// The pre-move state of one selected leaf: everything the receipt must record
+/// and every expectation the transaction must check.
+pub struct SelectedCardState {
+    pub id: String,
+    pub kind: String,
+    pub board_id: String,
+    pub unsorted: bool,
+    pub frame: crate::domain::models::Frame,
+    pub revision: i64,
+}
+
+/// The pre-move state of one selected board together with its unique portal.
+pub struct SelectedBoardState {
+    pub board_id: String,
+    pub parent_board_id: Option<String>,
+    pub board_revision: i64,
+    pub portal_card_id: String,
+    pub portal_frame: crate::domain::models::Frame,
+    pub portal_revision: i64,
+}
+
+/// Everything an atomic mixed-selection move reads before it changes anything.
+pub struct SelectionPreState {
+    pub cards: Vec<SelectedCardState>,
+    pub boards: Vec<SelectedBoardState>,
+}

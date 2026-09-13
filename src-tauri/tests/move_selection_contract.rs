@@ -304,3 +304,104 @@ fn receipt_encodes_and_decodes_unchanged_for_the_replay_path() {
     assert_eq!(MOVE_SELECTION_OPERATION_KIND, "move_selection_to_board");
     assert!(decode_receipt("not json").is_err());
 }
+
+#[test]
+fn pre_state_reads_frames_unsorted_and_rejects_bad_leaves() {
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::domain::errors::WorkspaceError;
+    use myspace_lib::repositories::workspace_repository::read_selection_pre_state;
+
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home: String = conn
+        .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, unsorted, created_at, updated_at) VALUES ('placed', ?1, 'note', 10, 20, 200, 80, 0, 4, 0, 0, 0)",
+        [home.clone()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, unsorted, created_at, updated_at) VALUES ('loose', ?1, 'note', 0, 0, 200, 80, 0, 2, 1, 0, 0)",
+        [home.clone()],
+    )
+    .unwrap();
+
+    let mut input = sample_input();
+    input.boards.clear();
+    input.cards = vec![
+        MoveSelectionCard {
+            id: "placed".into(),
+            expected_revision: 4,
+        },
+        MoveSelectionCard {
+            id: "loose".into(),
+            expected_revision: 2,
+        },
+    ];
+    let state = read_selection_pre_state(&conn, &input).unwrap();
+    assert_eq!(state.cards.len(), 2);
+    assert_eq!(state.cards[0].board_id, home);
+    assert_eq!(state.cards[0].frame.x, 10.0);
+    assert_eq!(state.cards[0].frame.height, 80.0);
+    assert_eq!(state.cards[0].revision, 4);
+    assert!(!state.cards[0].unsorted, "a placed card is not unsorted");
+    assert!(state.cards[1].unsorted, "an unsorted card keeps its flag");
+
+    let mut missing = sample_input();
+    missing.boards.clear();
+    missing.cards = vec![MoveSelectionCard {
+        id: "nope".into(),
+        expected_revision: 1,
+    }];
+    assert!(matches!(
+        read_selection_pre_state(&conn, &missing),
+        Err(WorkspaceError::NotFound(_))
+    ));
+
+    conn.execute(
+        "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) SELECT 'child', w.id, w.root_board_id, 'Child', 'default', NULL, 1, 0, 0 FROM workspaces w",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, unsorted, created_at, updated_at) VALUES ('portal', ?1, 'board_portal', 0, 0, 120, 112, 0, 1, 0, 0, 0)",
+        [home.clone()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO board_portal_cards (card_id, target_board_id) VALUES ('portal', 'child')",
+        [],
+    )
+    .unwrap();
+
+    let mut portal_as_leaf = sample_input();
+    portal_as_leaf.boards.clear();
+    portal_as_leaf.cards = vec![MoveSelectionCard {
+        id: "portal".into(),
+        expected_revision: 1,
+    }];
+    assert!(matches!(
+        read_selection_pre_state(&conn, &portal_as_leaf),
+        Err(WorkspaceError::ConstraintViolation(_))
+    ));
+
+    let mut as_board = sample_input();
+    as_board.cards.clear();
+    as_board.boards = vec![MoveSelectionBoard {
+        board_id: "child".into(),
+        expected_board_revision: 1,
+        expected_portal_revision: 1,
+    }];
+    let state = read_selection_pre_state(&conn, &as_board).unwrap();
+    assert_eq!(state.boards.len(), 1);
+    assert_eq!(state.boards[0].portal_card_id, "portal");
+    assert_eq!(state.boards[0].portal_frame.width, 120.0);
+    assert_eq!(
+        state.boards[0].parent_board_id.as_deref(),
+        Some(home.as_str())
+    );
+}
