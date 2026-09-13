@@ -15,7 +15,7 @@ import {
   targetBoardLoaded,
   type CrossBoardDragState,
 } from "./canvas/cross-board-drag";
-import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
+import type { CanvasCard } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand, SetNoteColorCommand } from "./commands/card-commands";
 import {
@@ -36,7 +36,7 @@ import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
 import { SearchBar } from "./search/SearchBar";
 import { useSearchController } from "./search/use-search-controller";
-import { useViewportPersistence } from "./state/use-viewport-persistence";
+import { useViewportController } from "./state/use-viewport-controller";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -261,11 +261,6 @@ function App() {
   useEffect(() => {
     boardRef.current = board;
   }, [board]);
-
-  const viewportRevisionRef = useRef(viewportRevision);
-  useEffect(() => {
-    viewportRevisionRef.current = viewportRevision;
-  }, [viewportRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1205,49 +1200,26 @@ function App() {
   }, [state.selection, state.cards, dispatcher, idGenerator, loadTrash]);
 
   // Viewport saves are debounced, flushed on navigation, and pinned to the board
-  // revision captured when the viewport settled (see the hook for why).
-  const viewportPersistence = useViewportPersistence(gateway, {
-    onSaved: (save) => {
-      if (board?.id !== save.boardId) return;
-      dispatch({ type: "viewportSaved", revision: save.revision + 1 });
-    },
-    onError: (error, save) => {
-      // A rejection belongs to the board that scheduled it; surfacing it on the
-      // board the user has since opened is the stale-revision banner bug.
-      if (board?.id !== save.boardId) return;
-      dispatch({ type: "failed", message: errorMessage(error) });
-    },
+  // revision captured when the viewport settled. The board-scoped policy around
+  // that (origin pinning, late-save guard) lives in the controller.
+  const viewportController = useViewportController({
+    gateway,
+    boardId: board?.id ?? null,
+    revision: viewportRevision,
+    onSettled: (settled) => dispatch({ type: "viewportChanged", viewport: settled }),
+    onSaved: (revision) => dispatch({ type: "viewportSaved", revision }),
+    onError: (message) => dispatch({ type: "failed", message }),
   });
 
   // Closing the window must not lose the last edit: the note/caption queue and
   // the viewport queue are flushed before the window is allowed to go. See
   // src/app/use-close-flush.ts — the queues keep their own owners.
   useCloseFlush({
-    flushes: [() => queueRef.current.flush(), () => viewportPersistence.flush()],
+    flushes: [() => queueRef.current.flush(), () => viewportController.flush()],
     close: destroyWindow,
     confirmAbandon: confirmAbandonWithDialog,
     onError: (error) => dispatch({ type: "failed", message: errorMessage(error) }),
   });
-
-  const handleViewportChanged = useCallback(
-    (e: { viewport: CanvasViewport }) => {
-      // The board is pinned to its top-left origin; position is never persisted
-      // (see the reducer's snapshotLoaded reset), only zoom is remembered.
-      const settled: CanvasViewport = {
-        x: 0,
-        y: 0,
-        zoom: e.viewport.zoom,
-      };
-      dispatch({ type: "viewportChanged", viewport: settled });
-      if (!board) return;
-      viewportPersistence.schedule({
-        boardId: board.id,
-        revision: viewportRevisionRef.current,
-        viewport: settled,
-      });
-    },
-    [board, viewportPersistence],
-  );
 
   const handleCardsSelected = useCallback((e: { ids: string[] }) => {
     const prev = state.selection;
@@ -1427,7 +1399,7 @@ function App() {
       // The viewport flush writes the OUTGOING board with its captured revision,
       // so board A lands before board B's snapshot replaces the state.
       await queueRef.current.flush();
-      await viewportPersistence.flush();
+      await viewportController.flush();
       if (navigationTokenRef.current !== token) return; // a newer navigation started
       const snapshot = await gateway.loadBoardSnapshot(boardId);
       if (navigationTokenRef.current !== token) return; // superseded while loading
@@ -1468,7 +1440,7 @@ function App() {
         ),
       });
     },
-    [gateway, viewportPersistence],
+    [gateway, viewportController],
   );
 
   // Search: query, results, and what selecting a result does to the board.
@@ -2391,7 +2363,7 @@ function App() {
             }}
             events={{
               onCardsMoved: handleCardsMoved,
-              onViewportChanged: handleViewportChanged,
+              onViewportChanged: viewportController.handleViewportChanged,
               onSelectionChanged: handleCardsSelected,
               onCardActivated: handleCardActivated,
               onCardOpened: handleCardOpened,
