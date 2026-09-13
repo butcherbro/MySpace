@@ -418,12 +418,12 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                         let image_file: Option<String> = row.get(9)?;
                         image_caption
                             .filter(|s| !s.trim().is_empty())
-                            .or_else(|| image_file)
+                            .or(image_file)
                             .unwrap_or_default()
                     }
                     "embed" => embed_title
                         .filter(|s| !s.trim().is_empty())
-                        .or_else(|| embed_source)
+                        .or(embed_source)
                         .unwrap_or_default(),
                     "filesystem_alias" => row.get::<_, Option<String>>(30)?.unwrap_or_default(),
                     _ => String::new(),

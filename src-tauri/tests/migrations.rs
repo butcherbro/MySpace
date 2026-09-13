@@ -269,7 +269,7 @@ fn migration_creates_filesystem_aliases_table() {
 
 #[test]
 fn cards_accept_filesystem_alias_kind_and_foreign_keys_stay_clean() {
-    let mut conn = open_in_memory().unwrap();
+    let conn = open_in_memory().unwrap();
     conn.execute(
         "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws1', 'Home', 'home', 0, 0)",
         [],
@@ -308,7 +308,7 @@ fn migration_creates_file_cards_table() {
 
 #[test]
 fn cards_accept_file_kind_and_foreign_keys_stay_clean() {
-    let mut conn = open_in_memory().unwrap();
+    let conn = open_in_memory().unwrap();
     conn.execute(
         "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws2', 'Home', 'home2', 0, 0)",
         [],

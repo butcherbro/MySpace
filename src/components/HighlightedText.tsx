@@ -18,7 +18,7 @@ interface Part {
  * (not a RegExp), so special characters like `.`, `(`, `[` are matched
  * literally and Cyrillic is handled by `toLowerCase`.
  */
-export function splitMatches(text: string, query: string): Part[] {
+function splitMatches(text: string, query: string): Part[] {
   const q = query.trim();
   if (!q) return [{ text, match: false }];
 
