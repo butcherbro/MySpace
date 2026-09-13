@@ -37,15 +37,7 @@ import { BoardTabs } from "./navigation/BoardTabs";
 import { QuickBoardsRail } from "./navigation/QuickBoardsRail";
 import { UndoRedoControls } from "./navigation/UndoRedoControls";
 import { UnsortedPanel } from "./navigation/UnsortedPanel";
-import {
-  activateBoardTab,
-  createBoardTabs,
-  closeBoardTab,
-  navigateBoardTab,
-  type BoardTab,
-  type BoardTabsState,
-} from "./navigation/board-tabs";
-import { BoardHistory } from "./navigation/board-history";
+import { useBoardNavigation } from "./navigation/use-board-navigation";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import { errorMessage } from "./services/error-message";
@@ -62,6 +54,7 @@ import type {
   ImageCardDto,
   NoteCardDto,
   QuickBoardDto,
+  BoardSnapshot,
   WorkspaceGateway,
 } from "./services/workspace-gateway";
 import {
@@ -97,16 +90,6 @@ function App() {
     : undefined;
   const noteColor = (activeNote?.colorToken as NoteColorId | undefined) ?? "default";
 
-  // Browser-style navigation history. Initialized lazily once Home is known.
-  const historyRef = useRef<BoardHistory | null>(null);
-
-  // Browser-like open-board tabs (session-only). Initialized lazily once Home is
-  // known; the active tab always mirrors the currently loaded board.
-  const [tabs, setTabs] = useState<BoardTabsState | null>(null);
-  const tabsRef = useRef<BoardTabsState | null>(null);
-  useEffect(() => {
-    tabsRef.current = tabs;
-  }, [tabs]);
 
   // Quick Boards: persisted, ordered references to Boards. The rail starts
   // collapsed so it never occupies full width on launch.
@@ -209,52 +192,6 @@ function App() {
     boardRef.current = board;
   }, [board]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      dispatch({ type: "loading" });
-      try {
-        const home = await gateway.getHomeBoard();
-        const snapshot = await gateway.loadBoardSnapshot(home.id);
-        if (cancelled) return;
-        historyRef.current = new BoardHistory(home.id);
-        setTabs(
-          createBoardTabs({
-            boardId: snapshot.board.id,
-            title: snapshot.board.title,
-            colorToken: snapshot.board.colorToken,
-            symbol: snapshot.board.symbol,
-            coverAsset: snapshot.board.coverAsset,
-          }),
-        );
-        dispatch({
-          type: "snapshotLoaded",
-          board: snapshot.board,
-          breadcrumbs: snapshot.breadcrumbs,
-          viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
-          viewportRevision: snapshot.viewport.revision,
-          cards: snapshot.cards.map((c) =>
-            c.kind === "note"
-              ? { ...c, documentJson: normalizeDocument(c.documentJson) }
-              : c,
-          ),
-          unsortedCards: snapshot.unsortedCards.map((c) =>
-            c.kind === "note"
-              ? { ...c, documentJson: normalizeDocument(c.documentJson) }
-              : c,
-          ),
-        });
-      } catch (e) {
-        if (!cancelled) {
-          dispatch({ type: "failed", message: errorMessage(e) });
-        }
-      }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [gateway]);
 
   // Load persisted Quick Board references once at startup.
   const loadQuickBoards = useCallback(() => {
@@ -1288,46 +1225,11 @@ function App() {
       });
   }, [state.selection, state.cards, gateway]);
 
-  // Latest-wins navigation guard: a slow snapshot load must never overwrite a
-  // newer navigation. Each call claims a monotonically increasing token before
-  // awaiting; the snapshot is applied only if no newer call has started.
-  const navigationTokenRef = useRef(0);
-
-  // Load a board's snapshot into the store.
-  const navigateTo = useCallback(
-    async (
-      boardId: string,
-      opts?: { pushHistory?: boolean; tabMode?: "open" | "sync" },
-    ) => {
-      const token = ++navigationTokenRef.current;
-      // Flush any pending note/viewport writes before replacing the projection,
-      // so a debounced save cannot be abandoned by navigation (plan Section H).
-      // The viewport flush writes the OUTGOING board with its captured revision,
-      // so board A lands before board B's snapshot replaces the state.
-      await queueRef.current.flush();
-      await viewportController.flush();
-      if (navigationTokenRef.current !== token) return; // a newer navigation started
-      const snapshot = await gateway.loadBoardSnapshot(boardId);
-      if (navigationTokenRef.current !== token) return; // superseded while loading
-      if (opts?.pushHistory && historyRef.current) {
-        historyRef.current.push(boardId);
-      }
-      const tabMode = opts?.tabMode ?? "sync";
-      // Track the board as an open tab: explicit navigation opens/activates a
-      // tab; a reload just re-syncs the active id to the loaded board.
-      setTabs((prev) => {
-        const tab: BoardTab = {
-          boardId: snapshot.board.id,
-          title: snapshot.board.title,
-          colorToken: snapshot.board.colorToken,
-          symbol: snapshot.board.symbol,
-          coverAsset: snapshot.board.coverAsset,
-        };
-        const base = prev ?? createBoardTabs(tab);
-        const withHome = base.tabs.length === 0 ? createBoardTabs(tab) : base;
-        const next = navigateBoardTab(withHome, tab, tabMode);
-        return tabMode === "sync" ? activateBoardTab(next, snapshot.board.id) : next;
-      });
+  // Applying a loaded snapshot is the store's concern, not navigation's: note
+  // documents are normalized here, and both the startup load and every later
+  // navigation go through this one place.
+  const applySnapshot = useCallback(
+    (snapshot: BoardSnapshot) => {
       dispatch({
         type: "snapshotLoaded",
         board: snapshot.board,
@@ -1346,11 +1248,48 @@ function App() {
         ),
       });
     },
-    [gateway, viewportController],
+    [dispatch],
   );
 
-  // Search: query, results, and what selecting a result does to the board.
-  // The debounce and latest-request-wins live in the hook's own module.
+  // The navigation spine: snapshot loading, open-board tabs, back/forward
+  // history, and the latest-wins guard that keeps a slow load from overwriting a
+  // newer navigation. Pending writes are drained through the queue and viewport
+  // barriers before the projection is replaced.
+  const navigation = useBoardNavigation({
+    gateway,
+    drainPendingWrites: useCallback(async () => {
+      await queueRef.current.flush();
+      await viewportController.flush();
+    }, [viewportController]),
+    onSnapshotLoaded: applySnapshot,
+  });
+  const navigateTo = navigation.navigateTo;
+  const initializeNavigation = navigation.initialize;
+
+  // Initial board load. Lives after the navigation controller because it seeds
+  // the tabs and history through it.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      dispatch({ type: "loading" });
+      try {
+        const home = await gateway.getHomeBoard();
+        const snapshot = await gateway.loadBoardSnapshot(home.id);
+        if (cancelled) return;
+        initializeNavigation(snapshot);
+        applySnapshot(snapshot);
+      } catch (e) {
+        if (!cancelled) {
+          dispatch({ type: "failed", message: errorMessage(e) });
+        }
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [applySnapshot, gateway, initializeNavigation]);
+
   const search = useSearchController({
     gateway,
     navigateTo,
@@ -1769,37 +1708,10 @@ function App() {
     [state.cards, navigateTo],
   );
 
-  const handleNavigateBack = useCallback(() => {
-    const prev = historyRef.current?.back();
-    if (prev) void navigateTo(prev, { tabMode: "open" });
-  }, [navigateTo]);
-
-  const handleNavigateForward = useCallback(() => {
-    const next = historyRef.current?.forward();
-    if (next) void navigateTo(next, { tabMode: "open" });
-  }, [navigateTo]);
-
-  // Tab interactions: switching loads the board (no history push); closing
-  // removes the tab and, if it was active, navigates to the neighbor.
-  const handleTabActivate = useCallback(
-    (boardId: string) => {
-      void navigateTo(boardId, { tabMode: "sync" });
-    },
-    [navigateTo],
-  );
-
-  const handleTabClose = useCallback(
-    (boardId: string) => {
-      const prev = tabsRef.current;
-      if (!prev) return;
-      const next = closeBoardTab(prev, boardId);
-      setTabs(next);
-      if (next.activeBoardId !== prev.activeBoardId) {
-        void navigateTo(next.activeBoardId, { tabMode: "sync" });
-      }
-    },
-    [navigateTo],
-  );
+  const handleNavigateBack = navigation.goBack;
+  const handleNavigateForward = navigation.goForward;
+  const handleTabActivate = navigation.activateTab;
+  const handleTabClose = navigation.closeTab;
 
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -1915,11 +1827,11 @@ function App() {
       rightRailCollapsed={quickBoardsCollapsed}
     >
       <div className="workspace">
-        {tabs && (
+        {navigation.tabs && (
           <BoardTabs
-            homeBoardId={tabs.homeBoardId}
-            tabs={tabs.tabs}
-            activeBoardId={tabs.activeBoardId}
+            homeBoardId={navigation.tabs.homeBoardId}
+            tabs={navigation.tabs.tabs}
+            activeBoardId={navigation.tabs.activeBoardId}
             onActivate={handleTabActivate}
             onClose={handleTabClose}
           />
