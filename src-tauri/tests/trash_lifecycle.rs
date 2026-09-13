@@ -304,6 +304,85 @@ fn note_input(board_id: &str, id: &str, plain_text: &str) -> CreateNoteInput {
     }
 }
 
+/// Turns a note into a Link Card, optionally with an imported favicon asset.
+/// Mirrors what enrichment does: a favicon row plus the card pointing at it.
+fn link_card(conn: &mut rusqlite::Connection, board_id: &str, id: &str, favicon: bool) {
+    workspace_repository::create_note(conn, &note_input(board_id, id, "https://example.com"))
+        .unwrap();
+    workspace_repository::convert_note_to_embed(
+        conn,
+        &myspace_lib::domain::models::ConvertNoteToEmbedInput {
+            id: id.to_string(),
+            expected_revision: 1,
+            source_url: "https://example.com/article".to_string(),
+            display_url: "example.com".to_string(),
+            title: "An article worth keeping".to_string(),
+            description_json: serde_json::json!({ "type": "doc" }),
+            description_plain_text: String::new(),
+        },
+    )
+    .unwrap();
+
+    if favicon {
+        let asset = if id == "link-favicon" {
+            "fav-1"
+        } else {
+            "fav-x"
+        };
+        conn.execute(
+            "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+             VALUES (?1, ?2, 'image/png', 'favicon_32x32.png', 32, 32, 4, 0)",
+            rusqlite::params![asset, format!("{asset}.png")],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE embed_cards SET favicon_asset_id = ?1 WHERE card_id = ?2",
+            rusqlite::params![asset, id],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn list_trash_reports_a_link_card_without_a_favicon() {
+    // A Link Card enriched before any favicon was fetched leaves
+    // `favicon_asset_id` NULL, and a trashed card is still listed. Reading that
+    // column as a required value made the whole drawer fail with
+    // "Invalid column type Null at index: 17, name: favicon_asset_id".
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    link_card(&mut conn, &home, "link-plain", false);
+    trash_service::trash_note(&mut conn, "link-plain").unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    assert_eq!(summary.card_count, 1);
+    let item = &summary.batches[0].items[0];
+    assert_eq!(item.kind, "embed");
+    assert_eq!(item.title, "An article worth keeping");
+    assert!(item.thumbnail_asset.is_none());
+}
+
+#[test]
+fn list_trash_reports_a_link_card_that_has_a_favicon() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    link_card(&mut conn, &home, "link-favicon", true);
+    trash_service::trash_note(&mut conn, "link-favicon").unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    let item = &summary.batches[0].items[0];
+    assert_eq!(item.title, "An article worth keeping");
+    let thumbnail = item
+        .thumbnail_asset
+        .as_ref()
+        .expect("the favicon is the thumbnail when there is no preview image");
+    assert_eq!(thumbnail.id, "fav-1");
+    assert_eq!(thumbnail.file_path, "fav-1.png");
+    assert_eq!(thumbnail.width, Some(32));
+}
+
 #[test]
 fn list_trash_is_empty_initially() {
     let mut conn = open_in_memory().unwrap();
@@ -314,6 +393,139 @@ fn list_trash_is_empty_initially() {
     assert!(summary.batches.is_empty());
     assert_eq!(summary.board_count, 0);
     assert_eq!(summary.card_count, 0);
+}
+
+#[test]
+fn list_trash_reports_a_file_card_by_its_file() {
+    // A File Card carries no text of its own, so an empty row is what the drawer
+    // shows if the projection forgets it — and its own asset is the document,
+    // never a thumbnail to render.
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+         VALUES ('file-asset', 'file-asset.md', 'text/markdown', 'meeting-notes.md', NULL, NULL, 2048, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
+         VALUES ('fc1', ?1, 'file', 0, 0, 320, 240, 0, 1, 0, 0)",
+        [&home],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text) VALUES ('fc1', 'file-asset', 'text/markdown', 'body')",
+        [],
+    )
+    .unwrap();
+    trash_service::trash_note(&mut conn, "fc1").unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    let item = &summary.batches[0].items[0];
+    assert_eq!(item.kind, "file");
+    assert_eq!(item.title, "meeting-notes.md");
+    assert!(
+        item.thumbnail_asset.is_none(),
+        "without a generated thumbnail there is nothing to render"
+    );
+}
+
+#[test]
+fn list_trash_shows_a_file_cards_generated_thumbnail() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    for (id, path, name, mime) in [
+        (
+            "file-asset",
+            "file-asset.pdf",
+            "deck.pdf",
+            "application/pdf",
+        ),
+        (
+            "file-thumb",
+            "file-thumb.png",
+            "file-thumb.png",
+            "image/png",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL, 2048, 0)",
+            rusqlite::params![id, path, mime, name],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
+         VALUES ('fc1', ?1, 'file', 0, 0, 320, 240, 0, 1, 0, 0)",
+        [&home],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text, preview_asset_id)
+         VALUES ('fc1', 'file-asset', 'application/pdf', 'body', 'file-thumb')",
+        [],
+    )
+    .unwrap();
+    trash_service::trash_note(&mut conn, "fc1").unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    let item = &summary.batches[0].items[0];
+    assert_eq!(item.title, "deck.pdf");
+    let thumbnail = item
+        .thumbnail_asset
+        .as_ref()
+        .expect("the generated thumbnail");
+    assert_eq!(thumbnail.id, "file-thumb");
+    assert_eq!(thumbnail.file_path, "file-thumb.png");
+}
+
+#[test]
+fn list_trash_reports_an_image_card_with_its_asset() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+         VALUES ('img-1', 'img-1.png', 'image/png', 'screenshot.png', 640, 480, 1234, 0)",
+        [],
+    )
+    .unwrap();
+    workspace_repository::create_image_card(
+        &mut conn,
+        &myspace_lib::domain::models::CreateImageCardInput {
+            id: "ic1".to_string(),
+            board_id: home.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 240.0,
+            },
+            z_index: 0,
+            asset_id: "img-1".to_string(),
+            caption_json: serde_json::json!({ "type": "doc" }),
+            caption_plain_text: "Screenshot of dashboard".to_string(),
+        },
+    )
+    .unwrap();
+    trash_service::trash_note(&mut conn, "ic1").unwrap();
+
+    let summary = trash_service::list_trash(&conn).unwrap();
+    let item = &summary.batches[0].items[0];
+    assert_eq!(item.kind, "image");
+    assert_eq!(item.title, "Screenshot of dashboard");
+    let thumbnail = item
+        .thumbnail_asset
+        .as_ref()
+        .expect("the image is its own thumbnail");
+    assert_eq!(thumbnail.id, "img-1");
+    assert_eq!(thumbnail.file_name, "screenshot.png");
+    assert_eq!(thumbnail.size_bytes, 1234);
+    assert_eq!(thumbnail.file_path, "img-1.png");
 }
 
 #[test]

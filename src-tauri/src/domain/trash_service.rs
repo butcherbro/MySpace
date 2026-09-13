@@ -332,6 +332,34 @@ struct TrashedCard {
     thumbnail_asset: Option<AssetDto>,
 }
 
+/// Projects an optional asset from the joined columns, keyed off the owning
+/// card's asset id. No asset when that id is NULL — a Link Card enriched before
+/// any favicon was fetched, for instance.
+#[allow(clippy::too_many_arguments)]
+fn asset_from_row(
+    row: &rusqlite::Row<'_>,
+    id_column: &str,
+    file_name_column: &str,
+    mime_type_column: &str,
+    width_column: &str,
+    height_column: &str,
+    size_bytes_column: &str,
+    file_path_column: &str,
+) -> rusqlite::Result<Option<AssetDto>> {
+    let Some(id) = row.get::<_, Option<String>>(id_column)? else {
+        return Ok(None);
+    };
+    Ok(Some(AssetDto {
+        id,
+        file_name: row.get(file_name_column)?,
+        mime_type: row.get(mime_type_column)?,
+        width: row.get(width_column)?,
+        height: row.get(height_column)?,
+        size_bytes: row.get(size_bytes_column)?,
+        file_path: row.get(file_path_column)?,
+    }))
+}
+
 fn bound_excerpt(text: &str) -> String {
     text.trim().chars().take(EXCERPT_LIMIT).collect()
 }
@@ -383,15 +411,36 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
 
     let mut cards = Vec::<TrashedCard>::new();
     {
+        // Columns are aliased and read by name. The old code used positional
+        // indices and had drifted out of step with this SELECT, so the embed
+        // branch read `pa`/`fa` columns from the wrong positions: a Link Card
+        // without a favicon made the whole drawer fail with
+        // "Invalid column type Null at index: 17, name: favicon_asset_id",
+        // and a card with one showed someone else's fields.
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, c.kind, c.trash_batch_id, c.deleted_at,
-                    n.plain_text,
-                    i.caption_plain_text, i.asset_id,
-                    ia.file_name, ia.mime_type, ia.width, ia.height, ia.size_bytes, ia.file_path,
-                    e.title, e.source_url, e.asset_id, e.favicon_asset_id,
-                    pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
-                    fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path,
-                    fsa.display_name
+            "SELECT c.id AS card_id, c.board_id AS board_id, c.kind AS kind,
+                    c.trash_batch_id AS batch_id, c.deleted_at AS deleted_at,
+                    n.plain_text AS note_plain_text,
+                    i.caption_plain_text AS image_caption, i.asset_id AS image_asset_id,
+                    ia.file_name AS image_file_name, ia.mime_type AS image_mime_type,
+                    ia.width AS image_width, ia.height AS image_height,
+                    ia.size_bytes AS image_size_bytes, ia.file_path AS image_file_path,
+                    e.title AS embed_title, e.source_url AS embed_source_url,
+                    e.asset_id AS embed_asset_id, e.favicon_asset_id AS embed_favicon_asset_id,
+                    pa.file_name AS preview_file_name, pa.mime_type AS preview_mime_type,
+                    pa.width AS preview_width, pa.height AS preview_height,
+                    pa.size_bytes AS preview_size_bytes, pa.file_path AS preview_file_path,
+                    fa.file_name AS favicon_file_name, fa.mime_type AS favicon_mime_type,
+                    fa.width AS favicon_width, fa.height AS favicon_height,
+                    fa.size_bytes AS favicon_size_bytes, fa.file_path AS favicon_file_path,
+                    fsa.display_name AS alias_display_name,
+                    filea.file_name AS file_asset_file_name,
+                    fpa.file_name AS file_preview_file_name,
+                    fpa.mime_type AS file_preview_mime_type,
+                    fpa.width AS file_preview_width, fpa.height AS file_preview_height,
+                    fpa.size_bytes AS file_preview_size_bytes,
+                    fpa.file_path AS file_preview_file_path,
+                    fcard.preview_asset_id AS file_preview_asset_id
              FROM cards c
              LEFT JOIN note_cards n ON n.card_id = c.id
              LEFT JOIN image_cards i ON i.card_id = c.id
@@ -400,88 +449,99 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
              LEFT JOIN filesystem_aliases fsa ON fsa.card_id = c.id
              LEFT JOIN assets pa ON pa.id = e.asset_id
              LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
+             LEFT JOIN file_cards fcard ON fcard.card_id = c.id
+             LEFT JOIN assets filea ON filea.id = fcard.asset_id
+             LEFT JOIN assets fpa ON fpa.id = fcard.preview_asset_id
              WHERE c.deleted_at IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |row| {
-            let kind: String = row.get(2)?;
+            let kind: String = row.get("kind")?;
             let is_portal = kind == "board_portal";
             let title = if is_portal {
                 String::new()
             } else {
-                let note_plain: Option<String> = row.get(5)?;
-                let image_caption: Option<String> = row.get(6)?;
-                let embed_title: Option<String> = row.get(13)?;
-                let embed_source: Option<String> = row.get(14)?;
+                let note_plain: Option<String> = row.get("note_plain_text")?;
+                let image_caption: Option<String> = row.get("image_caption")?;
+                let embed_title: Option<String> = row.get("embed_title")?;
+                let embed_source: Option<String> = row.get("embed_source_url")?;
                 let raw = match kind.as_str() {
                     "note" => note_plain.unwrap_or_default(),
-                    "image" => {
-                        let image_file: Option<String> = row.get(9)?;
-                        image_caption
-                            .filter(|s| !s.trim().is_empty())
-                            .or(image_file)
-                            .unwrap_or_default()
-                    }
+                    "image" => image_caption
+                        .filter(|s| !s.trim().is_empty())
+                        .or(row.get("image_file_name")?)
+                        .unwrap_or_default(),
                     "embed" => embed_title
                         .filter(|s| !s.trim().is_empty())
                         .or(embed_source)
                         .unwrap_or_default(),
-                    "filesystem_alias" => row.get::<_, Option<String>>(30)?.unwrap_or_default(),
+                    "filesystem_alias" => row
+                        .get::<_, Option<String>>("alias_display_name")?
+                        .unwrap_or_default(),
+                    // A File Card has no text of its own: it is named by its file.
+                    "file" => row
+                        .get::<_, Option<String>>("file_asset_file_name")?
+                        .unwrap_or_default(),
                     _ => String::new(),
                 };
                 bound_excerpt(&raw)
             };
 
             let thumbnail_asset = match kind.as_str() {
-                "image" => {
-                    if row.get::<_, Option<String>>(7)?.is_some() {
-                        Some(AssetDto {
-                            id: row.get(7)?,
-                            file_name: row.get(8)?,
-                            mime_type: row.get(9)?,
-                            width: row.get(10)?,
-                            height: row.get(11)?,
-                            size_bytes: row.get(12)?,
-                            file_path: row.get(13)?,
-                        })
-                    } else {
-                        None
-                    }
-                }
+                "image" => asset_from_row(
+                    row,
+                    "image_asset_id",
+                    "image_file_name",
+                    "image_mime_type",
+                    "image_width",
+                    "image_height",
+                    "image_size_bytes",
+                    "image_file_path",
+                )?,
                 "embed" => {
                     // Prefer the preview image, then the favicon.
-                    if row.get::<_, Option<String>>(15)?.is_some() {
-                        Some(AssetDto {
-                            id: row.get(15)?,
-                            file_name: row.get(16)?,
-                            mime_type: row.get(17)?,
-                            width: row.get(18)?,
-                            height: row.get(19)?,
-                            size_bytes: row.get(20)?,
-                            file_path: row.get(21)?,
-                        })
-                    } else if row.get::<_, Option<String>>(22)?.is_some() {
-                        Some(AssetDto {
-                            id: row.get(22)?,
-                            file_name: row.get(23)?,
-                            mime_type: row.get(24)?,
-                            width: row.get(25)?,
-                            height: row.get(26)?,
-                            size_bytes: row.get(27)?,
-                            file_path: row.get(28)?,
-                        })
-                    } else {
-                        None
-                    }
+                    let preview = asset_from_row(
+                        row,
+                        "embed_asset_id",
+                        "preview_file_name",
+                        "preview_mime_type",
+                        "preview_width",
+                        "preview_height",
+                        "preview_size_bytes",
+                        "preview_file_path",
+                    )?;
+                    let favicon = asset_from_row(
+                        row,
+                        "embed_favicon_asset_id",
+                        "favicon_file_name",
+                        "favicon_mime_type",
+                        "favicon_width",
+                        "favicon_height",
+                        "favicon_size_bytes",
+                        "favicon_file_path",
+                    )?;
+                    preview.or(favicon)
                 }
+                // A File Card's own asset is the document, not an image: only the
+                // generated thumbnail may be shown as one.
+                "file" => asset_from_row(
+                    row,
+                    "file_preview_asset_id",
+                    "file_preview_file_name",
+                    "file_preview_mime_type",
+                    "file_preview_width",
+                    "file_preview_height",
+                    "file_preview_size_bytes",
+                    "file_preview_file_path",
+                )?,
                 _ => None,
             };
 
             Ok(TrashedCard {
-                id: row.get(0)?,
-                board_id: row.get(1)?,
+                id: row.get("card_id")?,
+                board_id: row.get("board_id")?,
                 kind,
-                batch_id: row.get(3)?,
-                deleted_at: row.get(4)?,
+                batch_id: row.get("batch_id")?,
+                deleted_at: row.get("deleted_at")?,
                 is_portal,
                 title,
                 thumbnail_asset,
