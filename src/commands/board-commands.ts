@@ -110,7 +110,9 @@ export class MoveBoardCommand implements WorkspaceCommand {
  * The receipt is the undo's input, so neither direction guesses revisions or
  * frames, and a partially applied selection cannot be produced.
  */
-export class MoveSelectionCommand implements WorkspaceCommand {
+export class MoveSelectionCommand
+  implements WorkspaceCommand<import("../services/workspace-gateway").MoveSelectionToBoardReceipt>
+{
   id: string;
   label = "Move selection";
   private receipt: import("../services/workspace-gateway").MoveSelectionToBoardReceipt | null = null;
@@ -122,8 +124,11 @@ export class MoveSelectionCommand implements WorkspaceCommand {
     this.id = id;
   }
 
-  async execute(gateway: WorkspaceGateway): Promise<void> {
+  async execute(
+    gateway: WorkspaceGateway,
+  ): Promise<import("../services/workspace-gateway").MoveSelectionToBoardReceipt> {
     this.receipt = await gateway.moveSelectionToBoard(this.input);
+    return this.receipt;
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {

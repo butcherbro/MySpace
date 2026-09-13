@@ -125,7 +125,7 @@ describe("MoveSelectionCommand", () => {
     } as unknown as Gateway;
 
     const command = new MoveSelectionCommand("cmd-1", input);
-    await command.execute(gateway);
+    await expect(command.execute(gateway)).resolves.toBe(receipt);
     expect(gateway.moveSelectionToBoard).toHaveBeenCalledWith(input);
 
     await command.undo(gateway);
