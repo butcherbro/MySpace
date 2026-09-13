@@ -984,6 +984,154 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     return Promise.resolve();
   }
+  // Atomic mixed-selection move (ADR-0007). The backend performs this in one
+  // transaction; the mock validates every member before mutating anything, so the
+  // browser mode and e2e observe the same all-or-nothing outcome.
+  moveSelectionToBoard(
+    input: import("./workspace-gateway").MoveSelectionToBoardInput,
+  ): Promise<import("./workspace-gateway").MoveSelectionToBoardReceipt> {
+    try {
+      if (input.cards.length === 0 && input.boards.length === 0) {
+        throw new Error("the selection is empty; nothing to move");
+      }
+      const ids = [...input.cards.map((c) => c.id), ...input.boards.map((b) => b.boardId)];
+      if (new Set(ids).size !== ids.length) {
+        throw new Error("duplicate selection id");
+      }
+      if (!this.boards.has(input.targetBoardId)) {
+        throw new Error(`board not found: ${input.targetBoardId}`);
+      }
+
+      const cards = input.cards.map((item) => {
+        const card = this.snapshot.cards.find((c) => c.id === item.id);
+        if (!card) throw new Error(`card not found: ${item.id}`);
+        if (card.kind === "board_portal") {
+          throw new Error(`board portal ${item.id} must be moved as a board`);
+        }
+        if (card.revision !== item.expectedRevision) {
+          throw new Error(`stale revision for ${item.id}`);
+        }
+        return card;
+      });
+
+      const boards = input.boards.map((item) => {
+        const board = this.boards.get(item.boardId);
+        if (!board) throw new Error(`board not found: ${item.boardId}`);
+        if (board.id === input.targetBoardId) {
+          throw new Error("the selection contains the destination board");
+        }
+        if (board.revision !== item.expectedBoardRevision) {
+          throw new Error(`stale revision for board ${item.boardId}`);
+        }
+        const portal = this.snapshot.cards.find(
+          (c) => c.kind === "board_portal" && c.target.id === item.boardId,
+        );
+        if (!portal || portal.kind !== "board_portal") {
+          throw new Error(`portal not found for board: ${item.boardId}`);
+        }
+        if (portal.revision !== item.expectedPortalRevision) {
+          throw new Error(`stale revision for portal ${portal.id}`);
+        }
+        return { board, portal };
+      });
+
+      const receiptCards = cards.map((card) => ({
+        id: card.id,
+        previousBoardId: card.boardId,
+        previousUnsorted: Boolean((card as { unsorted?: boolean }).unsorted),
+        previousFrame: { ...card.frame },
+        beforeRevision: card.revision,
+        afterRevision: card.revision + 1,
+      }));
+
+      const targetCards = this.snapshot.cards.filter((c) => c.boardId === input.targetBoardId);
+      const bottom = targetCards.reduce((max, c) => Math.max(max, c.frame.y + c.frame.height), 0);
+      let cursor = bottom <= 0 ? 40 : bottom + 24;
+      const receiptBoards = boards.map(({ board, portal }) => {
+        const frame = { x: 40, y: cursor, width: portal.frame.width, height: portal.frame.height };
+        cursor += portal.frame.height + 24;
+        return {
+          boardId: board.id,
+          portalCardId: portal.id,
+          previousParentBoardId: board.parentBoardId ?? "",
+          previousPortalFrame: { ...portal.frame },
+          destinationPortalFrame: frame,
+          beforeBoardRevision: board.revision,
+          afterBoardRevision: board.revision + 1,
+          beforePortalRevision: portal.revision,
+          afterPortalRevision: portal.revision + 1,
+        };
+      });
+
+      cards.forEach((card, index) => {
+        card.revision = receiptCards[index].afterRevision;
+        card.boardId = input.targetBoardId;
+        (card as { unsorted?: boolean }).unsorted = true;
+      });
+      boards.forEach(({ board, portal }, index) => {
+        const receipt = receiptBoards[index];
+        board.parentBoardId = input.targetBoardId;
+        board.revision = receipt.afterBoardRevision;
+        portal.boardId = input.targetBoardId;
+        portal.frame = { ...receipt.destinationPortalFrame };
+        portal.revision = receipt.afterPortalRevision;
+      });
+
+      return Promise.resolve({
+        operationId: `mock-move-${Date.now()}`,
+        targetBoardId: input.targetBoardId,
+        cards: receiptCards,
+        boards: receiptBoards,
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  undoMoveSelection(
+    receipt: import("./workspace-gateway").MoveSelectionToBoardReceipt,
+  ): Promise<void> {
+    try {
+      for (const entry of receipt.cards) {
+        const card = this.snapshot.cards.find((c) => c.id === entry.id);
+        if (!card) throw new Error(`card not found: ${entry.id}`);
+        if (card.revision !== entry.afterRevision) {
+          throw new Error(`stale revision for ${entry.id}`);
+        }
+      }
+      for (const entry of receipt.boards) {
+        const board = this.boards.get(entry.boardId);
+        const portal = this.snapshot.cards.find((c) => c.id === entry.portalCardId);
+        if (!board || !portal) throw new Error(`board not found: ${entry.boardId}`);
+        if (
+          board.revision !== entry.afterBoardRevision ||
+          portal.revision !== entry.afterPortalRevision
+        ) {
+          throw new Error(`stale revision for board ${entry.boardId}`);
+        }
+      }
+      for (const entry of receipt.cards) {
+        const card = this.snapshot.cards.find((c) => c.id === entry.id)!;
+        card.boardId = entry.previousBoardId;
+        (card as { unsorted?: boolean }).unsorted = entry.previousUnsorted;
+        card.frame = { ...entry.previousFrame };
+        card.revision = entry.afterRevision + 1;
+      }
+      for (const entry of receipt.boards) {
+        const board = this.boards.get(entry.boardId)!;
+        const portal = this.snapshot.cards.find((c) => c.id === entry.portalCardId)!;
+        board.parentBoardId = entry.previousParentBoardId;
+        board.revision = entry.afterBoardRevision + 1;
+        portal.boardId = entry.previousParentBoardId;
+        portal.frame = { ...entry.previousPortalFrame };
+        portal.revision = entry.afterPortalRevision + 1;
+      }
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
 
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
     const card = this.snapshot.cards.find((c) => c.id === input.id);
