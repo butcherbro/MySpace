@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
+import {
+  confirmAbandonWithDialog,
+  destroyWindow,
+  useCloseFlush,
+} from "./app/use-close-flush";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import {
   cancelCrossBoardDrag,
@@ -1242,6 +1247,16 @@ function App() {
       if (board?.id !== save.boardId) return;
       dispatch({ type: "failed", message: errorMessage(error) });
     },
+  });
+
+  // Closing the window must not lose the last edit: the note/caption queue and
+  // the viewport queue are flushed before the window is allowed to go. See
+  // src/app/use-close-flush.ts — the queues keep their own owners.
+  useCloseFlush({
+    flushes: [() => queueRef.current.flush(), () => viewportPersistence.flush()],
+    close: destroyWindow,
+    confirmAbandon: confirmAbandonWithDialog,
+    onError: (error) => dispatch({ type: "failed", message: errorMessage(error) }),
   });
 
   const handleViewportChanged = useCallback(
