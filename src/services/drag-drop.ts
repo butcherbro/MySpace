@@ -56,19 +56,43 @@ export function subscribeToNativeDrops(
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   if (!isTauri) return () => {};
 
+  // Registration is asynchronous: the dynamic import and `listen` both settle on
+  // later turns. Cleanup can therefore run first, and naively storing the unlisten
+  // function when it arrives would leak a live listener that still delivers drops.
+  let disposed = false;
   let unlisten: (() => void) | null = null;
-  void import("@tauri-apps/api/event").then(({ listen }) => {
-    void listen<DropPayload>("tauri://drag-drop", (event) => {
-      const paths = event.payload.paths ?? [];
-      const x = event.payload.position?.x;
-      const y = event.payload.position?.y;
-      if (paths.length > 0) onDrop(paths, x, y);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-  });
+
+  const register = async (): Promise<void> => {
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const stop = await listen<DropPayload>("tauri://drag-drop", (event) => {
+        // A listener that outlived its subscription must not deliver.
+        if (disposed) return;
+        const paths = event.payload.paths ?? [];
+        const x = event.payload.position?.x;
+        const y = event.payload.position?.y;
+        if (paths.length > 0) onDrop(paths, x, y);
+      });
+      if (disposed) {
+        // Cleanup already ran, so this late listener is torn down immediately.
+        stop();
+        return;
+      }
+      unlisten = stop;
+    } catch {
+      // A missing module or a denied listen leaves no listener; it must not
+      // surface as an unhandled rejection either.
+      unlisten = null;
+    }
+  };
+
+  void register();
 
   return () => {
-    unlisten?.();
+    if (disposed) return;
+    disposed = true;
+    const stop = unlisten;
+    unlisten = null;
+    stop?.();
   };
 }

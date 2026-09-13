@@ -72,4 +72,63 @@ describe("native drag-drop", () => {
       { x: 418, y: 318 },
     );
   });
+
+  it("tears down a listener that registers after cleanup and never delivers to it", async () => {
+    type Listener = (event: {
+      payload: { paths: string[]; position: { x: number; y: number } };
+    }) => void;
+    let captured: Listener | undefined;
+    let resolveListen: ((stop: () => void) => void) | undefined;
+    const unlisten = vi.fn();
+    listenMock.mockImplementation((_event: string, callback: Listener) => {
+      captured = callback;
+      return new Promise<() => void>((resolve) => {
+        resolveListen = resolve;
+      });
+    });
+    const onDrop = vi.fn();
+
+    const unsubscribe = subscribeToNativeDrops(onDrop);
+    // Cleanup runs while registration is still in flight.
+    unsubscribe();
+
+    await vi.waitFor(() => expect(captured).toBeDefined());
+    resolveListen?.(unlisten);
+    await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
+
+    // The late listener is unlistened exactly once, not left live.
+    expect(unlisten).toHaveBeenCalledTimes(1);
+    // A drop arriving through it must not reach the application either.
+    captured?.({ payload: { paths: ["/Users/me/late.png"], position: { x: 1, y: 2 } } });
+    expect(onDrop).not.toHaveBeenCalled();
+
+    // A second cleanup must not double-unlisten.
+    unsubscribe();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("unlistens on cleanup when registration already completed", async () => {
+    const unlisten = vi.fn();
+    listenMock.mockImplementation(async () => unlisten);
+    const onDrop = vi.fn();
+
+    const unsubscribe = subscribeToNativeDrops(onDrop);
+    await vi.waitFor(() => expect(listenMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(0));
+
+    unsubscribe();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("swallows a registration failure instead of leaking a rejection", async () => {
+    listenMock.mockRejectedValue(new Error("listen denied"));
+    const onDrop = vi.fn();
+
+    const unsubscribe = subscribeToNativeDrops(onDrop);
+    await vi.waitFor(() => expect(listenMock).toHaveBeenCalled());
+    await Promise.resolve();
+
+    expect(() => unsubscribe()).not.toThrow();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
 });
