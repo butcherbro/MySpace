@@ -9,7 +9,10 @@ source of truth for status.
 
 - Branch: `codex/v1-stabilization`, created from `main@d174e6b` (which contains the
   plan; `5101f18` is its ancestor).
-- Revision for the automated evidence: **`4292e3a`** (61 commits on the branch).
+- Revision for the automated evidence: **`4292e3a`**, the last product revision (61
+  commits on the branch). The gates were re-run unchanged after the documentation
+  commit that followed it; documentation changes no code, so the results below
+  stand for both.
 - Worktree: `/Users/bro/Projects/MySpace/.wt-v1-stabilization`, clean
   (`git status --short` empty).
 
