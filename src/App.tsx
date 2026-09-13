@@ -58,7 +58,7 @@ import { createGateway } from "./services/create-gateway";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickImageFile } from "./services/asset-picker";
-import { routeNativeDropItems, subscribeToNativeDrops } from "./services/drag-drop";
+import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { copyText } from "./services/clipboard";
 import type {
   BoardPortalDto,
@@ -742,47 +742,23 @@ function App() {
     [gateway],
   );
 
-  // Native drag-drop: Rust classifies Finder paths before the UI creates Cards.
-  useEffect(() => {
-    return subscribeToNativeDrops((paths, x, y) => {
-      const screenToFlow = screenToFlowRef.current;
-      let flowX = 80;
-      let flowY = 80 + cardsRef.current.length * 24;
-      if (screenToFlow && Number.isFinite(x) && Number.isFinite(y)) {
-        const flow = screenToFlow(x, y);
-        if (Number.isFinite(flow.x) && Number.isFinite(flow.y)) {
-          flowX = flow.x;
-          flowY = flow.y;
-        }
-      }
-      void routeNativeDropItems({
-        gateway,
-        paths,
-        origin: { x: flowX - 180, y: flowY - 150 },
-        onFolder: (item, point) => createFolderShortcut(item.path, point.x, point.y),
-        onImage: (item, point) =>
-          importImageCard(
-            item.path,
-            item.fileName,
-            item.mimeType ?? "application/octet-stream",
-            point.x + 20,
-            point.y + 30,
-          ),
-        onFile: (item, point) =>
-          createFileCard(
-            {
-              path: item.path,
-              fileName: item.fileName ?? "file",
-              mimeType: item.mimeType ?? "text/plain",
-            },
-            point.x,
-            point.y,
-          ),
-      }).catch((e) => {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      });
-    });
-  }, [createFolderShortcut, createFileCard, gateway, importImageCard]);
+  // One stable sink for controller failures, so their effects never re-subscribe.
+  const onCanvasError = useCallback(
+    (message: string) => dispatch({ type: "failed", message }),
+    [],
+  );
+
+  // Native drag-drop: Rust classifies Finder paths before the UI creates Cards;
+  // the controller only places them on the canvas.
+  useNativeFileDrop({
+    gateway,
+    screenToFlowRef,
+    cardsRef,
+    onCreateFolder: createFolderShortcut,
+    onCreateImage: importImageCard,
+    onCreateFile: createFileCard,
+    onError: onCanvasError,
+  });
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {
