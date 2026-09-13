@@ -269,14 +269,12 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
     Ok(())
 }
 
-/// Returns a free placement slot on a board: the left column x, cascaded below
-/// the lowest existing active card. Simple and deterministic so repeatedly
-/// dropping Boards never stacks them invisibly at the same origin.
-/// Kept for the atomic mixed-selection move (ADR-0007), which chooses distinct
-/// free slots for several portals and extends this to account for portals already
-/// planned inside the same transaction.
-#[allow(dead_code)]
-fn next_free_position(conn: &Connection, board_id: &str) -> (f64, f64) {
+/// Returns one distinct free placement slot per entry in `heights`: the left
+/// column x, cascaded below the lowest existing active card. The cursor advances
+/// past every slot this call already handed out, so several portals moved by one
+/// transaction can never share a position, and the result stays deterministic
+/// (ADR-0007 rule 4).
+pub fn free_position_slots(conn: &Connection, board_id: &str, heights: &[f64]) -> Vec<(f64, f64)> {
     const X: f64 = 40.0;
     const GAP: f64 = 24.0;
 
@@ -288,10 +286,18 @@ fn next_free_position(conn: &Connection, board_id: &str) -> (f64, f64) {
         )
         .unwrap_or(0.0);
 
-    if max_bottom <= 0.0 {
-        return (X, 40.0);
+    let mut cursor = if max_bottom <= 0.0 {
+        40.0
+    } else {
+        max_bottom + GAP
+    };
+
+    let mut slots = Vec::with_capacity(heights.len());
+    for height in heights {
+        slots.push((X, cursor));
+        cursor += height.max(1.0) + GAP;
     }
-    (X, max_bottom + GAP)
+    slots
 }
 
 /// Sets a Board's cover image (a managed asset id). The cover replaces the

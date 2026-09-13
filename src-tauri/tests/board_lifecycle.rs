@@ -393,3 +393,34 @@ fn set_board_cover_rejects_missing_asset() {
         Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
     ));
 }
+
+#[test]
+fn free_position_slots_cascade_below_existing_cards_without_collisions() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    // One active card occupying y = 0..100 on Home.
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES ('existing', ?1, 'note', 0, 0, 200, 100, 0, 1, 0, 0)",
+        [home.clone()],
+    )
+    .unwrap();
+
+    let slots = board_service::free_position_slots(&conn, &home, &[112.0, 112.0]);
+    assert_eq!(slots.len(), 2);
+    assert_eq!(slots[0], (40.0, 124.0), "cascades below the lowest card");
+    assert_eq!(
+        slots[1],
+        (40.0, 260.0),
+        "the cursor steps past the previous slot"
+    );
+    assert_ne!(slots[0], slots[1], "two portals never share a slot");
+
+    // An empty board starts at the origin.
+    board_service::create_child_board(&mut conn, &mk(&home, "child", "pchild", "Child")).unwrap();
+    assert_eq!(
+        board_service::free_position_slots(&conn, "child", &[112.0]),
+        vec![(40.0, 40.0)]
+    );
+}
