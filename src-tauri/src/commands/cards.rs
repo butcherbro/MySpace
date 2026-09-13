@@ -156,3 +156,28 @@ pub fn update_embed_description(
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::update_embed_description(&mut conn, &input)
 }
+
+/// Moves a whole selection — leaf cards and Board Portals together — onto one
+/// board in a single atomic backend operation (ADR-0007).
+#[tauri::command]
+pub fn move_selection_to_board(
+    db: DbState<'_>,
+    input: crate::domain::models::MoveSelectionToBoardInput,
+) -> Result<crate::domain::models::MoveSelectionToBoardReceipt, WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    crate::domain::move_selection::move_selection_to_board(&mut conn, &input)
+}
+
+/// Reverses a mixed-selection move from the receipt the move returned (ADR-0007).
+#[tauri::command]
+pub fn undo_move_selection(
+    db: DbState<'_>,
+    receipt: crate::domain::models::MoveSelectionToBoardReceipt,
+) -> Result<(), WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    crate::domain::move_selection::undo_move_selection(&mut conn, &receipt)
+}

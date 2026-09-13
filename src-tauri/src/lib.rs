@@ -134,6 +134,8 @@ pub fn run() {
             commands::cards::move_cards,
             commands::cards::move_card_to_board,
             commands::cards::move_cards_to_board_unsorted,
+            commands::cards::move_selection_to_board,
+            commands::cards::undo_move_selection,
             commands::cards::place_unsorted_card,
             commands::cards::convert_note_to_embed,
             commands::link_metadata::enrich_embed_metadata,
