@@ -60,6 +60,78 @@ fn request_fingerprint_covers_the_idempotency_key() {
     );
 }
 
+#[test]
+fn selection_shape_rejects_empty_duplicate_and_oversized_requests() {
+    use myspace_lib::domain::errors::WorkspaceError;
+    use myspace_lib::domain::move_selection::{validate_selection_shape, MAX_SELECTION_ITEMS};
+
+    // A well-formed mixed selection passes.
+    assert!(validate_selection_shape(&sample_input()).is_ok());
+
+    // Nothing selected at all.
+    let mut empty = sample_input();
+    empty.cards.clear();
+    empty.boards.clear();
+    assert!(matches!(
+        validate_selection_shape(&empty),
+        Err(WorkspaceError::ConstraintViolation(_))
+    ));
+
+    // A duplicated leaf id would move the same card twice.
+    let mut duplicate_card = sample_input();
+    duplicate_card.cards.push(MoveSelectionCard {
+        id: "n1".into(),
+        expected_revision: 4,
+    });
+    assert!(matches!(
+        validate_selection_shape(&duplicate_card),
+        Err(WorkspaceError::ConstraintViolation(_))
+    ));
+
+    // A duplicated board id would reparent the same board twice.
+    let mut duplicate_board = sample_input();
+    duplicate_board.boards.push(MoveSelectionBoard {
+        board_id: "board-a".into(),
+        expected_board_revision: 6,
+        expected_portal_revision: 8,
+    });
+    assert!(matches!(
+        validate_selection_shape(&duplicate_board),
+        Err(WorkspaceError::ConstraintViolation(_))
+    ));
+
+    // The same id offered as both a leaf and a board is nonsense.
+    let mut same_id_twice = sample_input();
+    same_id_twice.boards[0].board_id = "n1".into();
+    assert!(matches!(
+        validate_selection_shape(&same_id_twice),
+        Err(WorkspaceError::ConstraintViolation(_))
+    ));
+
+    // Beyond the bound.
+    let mut oversized = sample_input();
+    oversized.boards.clear();
+    oversized.cards = (0..=MAX_SELECTION_ITEMS)
+        .map(|index| MoveSelectionCard {
+            id: format!("c{index}"),
+            expected_revision: 1,
+        })
+        .collect();
+    assert!(matches!(
+        validate_selection_shape(&oversized),
+        Err(WorkspaceError::ConstraintViolation(_))
+    ));
+}
+
+#[test]
+fn selection_shape_accepts_a_boards_only_selection() {
+    use myspace_lib::domain::move_selection::validate_selection_shape;
+
+    let mut boards_only = sample_input();
+    boards_only.cards.clear();
+    assert!(validate_selection_shape(&boards_only).is_ok());
+}
+
 fn frame(x: f64, y: f64) -> Frame {
     Frame {
         x,

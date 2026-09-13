@@ -3,6 +3,7 @@
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::MoveSelectionToBoardInput;
+use std::collections::HashSet;
 
 /// Canonical fingerprint of a mixed-selection request.
 ///
@@ -15,4 +16,50 @@ pub fn request_fingerprint(input: &MoveSelectionToBoardInput) -> Result<String, 
     // A struct serialises in declaration order, so the string is canonical.
     serde_json::to_string(input)
         .map_err(|error| WorkspaceError::Database(format!("cannot fingerprint request: {error}")))
+}
+
+/// The largest selection one atomic move accepts. A bounded payload keeps the
+/// single write transaction predictable.
+pub const MAX_SELECTION_ITEMS: usize = 500;
+
+/// Rejects a request that must never open a write transaction: nothing selected,
+/// more items than the bound, or a duplicated id (including the same id offered
+/// as both a leaf and a board, which is nonsense input).
+///
+/// These checks need no database, so a malformed request is refused before the
+/// transaction is even started. Kind-based checks — such as a Board Portal card
+/// passed as a leaf — need the database and therefore belong to the transaction.
+pub fn validate_selection_shape(input: &MoveSelectionToBoardInput) -> Result<(), WorkspaceError> {
+    if input.cards.is_empty() && input.boards.is_empty() {
+        return Err(WorkspaceError::ConstraintViolation(
+            "the selection is empty; nothing to move".into(),
+        ));
+    }
+
+    let total = input.cards.len() + input.boards.len();
+    if total > MAX_SELECTION_ITEMS {
+        return Err(WorkspaceError::ConstraintViolation(format!(
+            "selection of {total} items exceeds the limit of {MAX_SELECTION_ITEMS}"
+        )));
+    }
+
+    let mut seen = HashSet::with_capacity(total);
+    for card in &input.cards {
+        if !seen.insert(card.id.as_str()) {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "duplicate selection id: {}",
+                card.id
+            )));
+        }
+    }
+    for board in &input.boards {
+        if !seen.insert(board.board_id.as_str()) {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "duplicate selection id: {}",
+                board.board_id
+            )));
+        }
+    }
+
+    Ok(())
 }
