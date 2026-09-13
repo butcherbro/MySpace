@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-09-11
 - **Source:** folder-shortcut regression reported by the user (2026-09-11)
+- **Supersedes:** for the currently unsandboxed build, the security-scoped
+  bookmark provisions of `docs/review-verdict-12-filesystem-shortcuts.md`
+  ("macOS capability boundary") and the "balanced security-scoped access via RAII
+  guard" note in `tasks/todo.md` (Active handoff — Folder Shortcut V1).
 
 ## Context
 
@@ -57,8 +61,13 @@ DIAG regular: OK 1104 bytes
 
 ## Consequences
 
-- Folder shortcuts work in the currently unsandboxed app, and the create → resolve
-  round trip is covered by `macos_locator_round_trips_regular_bookmark`.
+- Folder shortcuts work in the currently unsandboxed app. Two guards cover the
+  decision: `macos_locator_round_trips_regular_bookmark` exercises the real
+  Foundation create → resolve path (the functional guard, meaningful on an
+  unsandboxed macOS runner), while
+  `macos_locator_creation_options_are_plain` asserts the shared creation-options
+  constant stays scope-free (a narrower guard that a caller inlining its own
+  options would bypass).
 - Plain bookmarks grant no access under App Sandbox. **If the app is ever
   sandboxed, security-scoped bookmarks and the
   `com.apple.security.files.bookmarks.app-scope` entitlement must be re-introduced

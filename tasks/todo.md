@@ -13,6 +13,9 @@
   MIME/SVG drop classification preserved, ID replay implemented, refreshed
   identity on stale previews, and expanded service/migration coverage
   (`d73b53f`, `e74486e`, `200da0c`).
+  **Superseded (2026-09-11):** the security-scoped RAII guard was removed. The app
+  is not sandboxed, so security-scoped bookmark creation fails on current macOS;
+  locators are now plain bookmarks (ADR-0006).
 - [x] Task 8 E2E + manual docs committed (`test: verify folder shortcut lifecycle`).
 - [ ] Packaged macOS Finder-drop/restart/move/open acceptance and comparison to
   the approved PNG remain a manual step for a signed build; `tauri dev` is not

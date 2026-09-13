@@ -46,6 +46,12 @@ Directory children are an ephemeral projection, not persisted Cards.
 
 ## macOS capability boundary
 
+> **Superseded for the current build (2026-09-11, ADR-0006).** The shipped app is
+> not sandboxed (no entitlements), and security-scoped bookmark creation fails
+> outside App Sandbox on current macOS. Locators are therefore plain bookmarks.
+> The guidance below applies only once App Sandbox is actually enabled, and then
+> the bookmark code must move back to security scope in the same change.
+
 For a sandboxed packaged build, use read-only app-scoped bookmarks and configure
 an entitlements plist through `bundle.macOS.entitlements` with:
 

@@ -188,6 +188,20 @@ fn describe_ns_error(error: &objc2_foundation::NSError) -> String {
     )
 }
 
+/// True when a Foundation error means the bookmarked item no longer exists. Such
+/// a failure keeps the user-facing `Missing` status; anything else is surfaced as
+/// an IO error carrying the real reason instead of being swallowed.
+#[cfg(target_os = "macos")]
+fn is_missing_target_error(error: &objc2_foundation::NSError) -> bool {
+    /// `NSFileNoSuchFileError`.
+    const NO_SUCH_FILE: isize = 4;
+    /// `NSFileReadNoSuchFileError`.
+    const READ_NO_SUCH_FILE: isize = 260;
+    let code = error.code();
+    (code == NO_SUCH_FILE || code == READ_NO_SUCH_FILE)
+        && error.domain().to_string() == "NSCocoaErrorDomain"
+}
+
 #[cfg(target_os = "macos")]
 impl FolderLocator for MacosBookmarkLocator {
     fn create(&self, path: &Path) -> Result<Vec<u8>, LocatorError> {
@@ -217,7 +231,13 @@ impl FolderLocator for MacosBookmarkLocator {
                 &mut stale,
             )
         }
-        .map_err(|_| LocatorError::Missing)?;
+        .map_err(|error| {
+            if is_missing_target_error(&error) {
+                LocatorError::Missing
+            } else {
+                LocatorError::Io(describe_ns_error(&error))
+            }
+        })?;
         let path = url.path().ok_or(LocatorError::Missing)?.to_string();
         let refreshed_locator = if stale.as_bool() {
             Some(

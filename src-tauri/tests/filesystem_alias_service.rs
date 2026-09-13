@@ -63,6 +63,9 @@ fn macos_locator_persists_bookmark_data_not_source_path_bytes() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_locator_round_trips_regular_bookmark() {
+    // Primary functional guard for ADR-0006: the real Foundation create -> resolve
+    // path must work under the app's actual (unsandboxed) conditions. This is what
+    // catches a re-introduced security-scoped bookmark on an unsandboxed runner.
     use myspace_lib::domain::filesystem_alias_service::{FolderLocator, MacosBookmarkLocator};
     let root = std::env::temp_dir().join(format!("myspace-bookmark-rt-{}", uuid::Uuid::now_v7()));
     fs::create_dir_all(&root).unwrap();
@@ -77,9 +80,11 @@ fn macos_locator_round_trips_regular_bookmark() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_locator_creation_options_are_plain() {
-    // Regression guard for ADR-0006: a security-scoped bookmark cannot be created
-    // outside App Sandbox, and this app is not sandboxed. Re-adding the scope bit
-    // must fail here in every environment, not only in a sandboxed one.
+    // Secondary guard for ADR-0006: the shared creation-options constant must stay
+    // a plain bookmark, so the scope bit cannot return through the constant. It
+    // does NOT cover a caller that inlines its own options; the functional guard
+    // for that is the create -> resolve round trip above, which exercises the real
+    // Foundation path.
     use myspace_lib::domain::filesystem_alias_service::FOLDER_BOOKMARK_CREATION_OPTIONS;
     assert!(
         FOLDER_BOOKMARK_CREATION_OPTIONS.is_empty(),

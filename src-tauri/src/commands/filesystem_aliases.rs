@@ -3,7 +3,7 @@ use crate::{
     domain::{
         asset_service,
         errors::WorkspaceError,
-        filesystem_alias_service::{self, FolderLocator},
+        filesystem_alias_service::{self, FolderLocator, LocatorError},
         models::{
             CreateFileCardInput, CreateFilesystemAliasInput, FileCardDto, FilesystemAliasDto,
             FolderPreviewDto,
@@ -161,9 +161,15 @@ pub fn open_folder_in_finder(db: DbState<'_>, card_id: String) -> Result<(), Wor
         blob
     };
     let locator = PlatformLocator::default();
-    let resolved = locator
-        .resolve(&blob)
-        .map_err(|_| WorkspaceError::NotFound(card_id))?;
+    let resolved = locator.resolve(&blob).map_err(|error| match error {
+        LocatorError::Missing => WorkspaceError::NotFound(card_id),
+        LocatorError::PermissionLost => WorkspaceError::ConstraintViolation(
+            "folder shortcut permission was lost; drop the folder again".into(),
+        ),
+        LocatorError::Io(message) => {
+            WorkspaceError::Database(format!("could not open folder shortcut: {message}"))
+        }
+    })?;
     #[cfg(target_os = "macos")]
     std::process::Command::new("open")
         .arg(&resolved.path)
