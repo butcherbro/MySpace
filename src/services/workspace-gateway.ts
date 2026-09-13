@@ -473,6 +473,10 @@ export interface WorkspaceGateway {
   removeBoardCover(boardId: string): Promise<void>;
   setNoteColor(input: SetNoteColorInput): Promise<void>;
   moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void>;
+  /** One atomic call for a mixed selection of leaves and Board Portals (ADR-0007). */
+  moveSelectionToBoard(input: MoveSelectionToBoardInput): Promise<MoveSelectionToBoardReceipt>;
+  /** Reverses a mixed-selection move from the receipt that move returned. */
+  undoMoveSelection(receipt: MoveSelectionToBoardReceipt): Promise<void>;
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void>;
 }
 
