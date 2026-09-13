@@ -355,6 +355,85 @@ pub struct MoveBoardInput {
     pub frame: Frame,
 }
 
+/// One leaf card of a mixed-selection move, pinned to the revision it was read at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveSelectionCard {
+    pub id: String,
+    pub expected_revision: i64,
+}
+
+/// One Board Portal of a mixed-selection move. The backend resolves the portal
+/// card from `board_id` itself, exactly like `move_board`, and picks the
+/// destination slot — the frontend supplies neither a portal id nor a frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveSelectionBoard {
+    pub board_id: String,
+    pub expected_board_revision: i64,
+    pub expected_portal_revision: i64,
+}
+
+/// Where the leaf cards land in the destination board. Only `Unsorted` exists
+/// today: a single frame would be ambiguous for a group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionLeafPlacement {
+    Unsorted,
+}
+
+/// Input for the one atomic mixed-selection move (ADR-0007). Either every listed
+/// card and board moves, or nothing does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveSelectionToBoardInput {
+    /// Replay guard: the same key must return the original receipt, and the same
+    /// key with a different payload must be rejected.
+    pub idempotency_key: String,
+    pub target_board_id: String,
+    pub cards: Vec<MoveSelectionCard>,
+    pub boards: Vec<MoveSelectionBoard>,
+    pub leaf_placement: SelectionLeafPlacement,
+}
+
+/// One moved leaf, carrying everything the atomic undo needs to put it back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedCardReceipt {
+    pub id: String,
+    pub previous_board_id: String,
+    pub previous_unsorted: bool,
+    pub previous_frame: Frame,
+    pub before_revision: i64,
+    pub after_revision: i64,
+}
+
+/// One reparented board, carrying both portal positions and both revisions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedBoardReceipt {
+    pub board_id: String,
+    pub portal_card_id: String,
+    pub previous_parent_board_id: String,
+    pub previous_portal_frame: Frame,
+    pub destination_portal_frame: Frame,
+    pub before_board_revision: i64,
+    pub after_board_revision: i64,
+    pub before_portal_revision: i64,
+    pub after_portal_revision: i64,
+}
+
+/// The receipt of one mixed-selection move. It is also the undo's input, so the
+/// frontend mirrors the backend instead of assuming `revision + 1`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveSelectionToBoardReceipt {
+    pub operation_id: String,
+    pub target_board_id: String,
+    pub cards: Vec<MovedCardReceipt>,
+    pub boards: Vec<MovedBoardReceipt>,
+}
+
 /// Input for importing a file into the asset store. The file bytes are read
 /// from `source_path` (a Tauri-provided absolute path from a picker/drop) and
 /// copied into the app's asset dir; metadata is returned.
