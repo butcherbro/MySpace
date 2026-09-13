@@ -5,6 +5,7 @@ import {
   destroyWindow,
   useCloseFlush,
 } from "./app/use-close-flush";
+import { useTrashController } from "./app/use-trash-controller";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import type { CanvasCard } from "./canvas/canvas-types";
@@ -61,7 +62,6 @@ import type {
   ImageCardDto,
   NoteCardDto,
   QuickBoardDto,
-  TrashSummaryDto,
   WorkspaceGateway,
 } from "./services/workspace-gateway";
 import {
@@ -124,16 +124,6 @@ function App() {
     prevUnsortedCountRef.current = state.unsortedCards.length;
   }, [state.unsortedCards.length]);
 
-  // Recoverable Trash surface: the summary drives both the rail badge and the
-  // inspection/restore drawer.
-  const [trashSummary, setTrashSummary] = useState<TrashSummaryDto | null>(null);
-  const [trashLoading, setTrashLoading] = useState(false);
-  const [trashError, setTrashError] = useState<string | null>(null);
-  const [trashOpen, setTrashOpen] = useState(false);
-  const [restoringBatchId, setRestoringBatchId] = useState<string | null>(null);
-  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
-  const [emptyTrashBusy, setEmptyTrashBusy] = useState(false);
-  const [emptyTrashError, setEmptyTrashError] = useState<string | null>(null);
 
   // Search: query/debounce/results owned here; rendering/keyboard in
   // `SearchBar` (always-visible input in the top bar) and the search controller
@@ -276,41 +266,24 @@ function App() {
       });
   }, [gateway]);
 
+  // Recoverable Trash: the summary drives the rail badge and the drawer, and the
+  // restore/empty flows reconcile the board and the rail afterwards. The board
+  // reload is a ref because navigation is declared later in this component.
+  const reloadBoardRef = useRef<(() => Promise<void>) | null>(null);
+  const trash = useTrashController({
+    gateway,
+    reloadBoardRef,
+    reloadQuickBoards: loadQuickBoards,
+  });
+  // Stable members, pulled out so dependency arrays name a value the linter can
+  // follow instead of a property access.
+  const refreshTrash = trash.refresh;
+  const trashOpen = trash.open;
+  const closeTrashDrawer = trash.closeDrawer;
   useEffect(() => {
     loadQuickBoards();
   }, [loadQuickBoards]);
 
-  // Load the recoverable Trash summary. The badge and drawer both consume the
-  // full summary. Refreshed on startup, after delete/restore, and on
-  // cross-process refresh. Mirrors `loadQuickBoards` (then/catch chaining) so
-  // state updates stay inside asynchronous callbacks.
-  const loadTrash = useCallback(() => {
-    return gateway
-      .listTrash()
-      .then((summary) => {
-        setTrashSummary(summary);
-        setTrashError(null);
-      })
-      .catch((e) => {
-        setTrashError(errorMessage(e));
-      });
-  }, [gateway]);
-
-  useEffect(() => {
-    void loadTrash();
-  }, [loadTrash]);
-
-  const handleOpenTrash = useCallback(() => {
-    setTrashOpen(true);
-    setTrashLoading(true);
-    setTrashError(null);
-    void loadTrash().finally(() => setTrashLoading(false));
-  }, [loadTrash]);
-
-  const handleCloseTrash = useCallback(() => {
-    setTrashOpen(false);
-    setTrashError(null);
-  }, []);
 
   const handleCreateNote = useCallback(
     async (
@@ -1126,11 +1099,11 @@ function App() {
     try {
       await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
       dispatch({ type: "cardsRemoved", ids: state.selection });
-      void loadTrash();
+      void refreshTrash();
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
-  }, [state.selection, state.cards, dispatcher, idGenerator, loadTrash]);
+  }, [state.selection, state.cards, dispatcher, idGenerator, refreshTrash]);
 
   // Viewport saves are debounced, flushed on navigation, and pinned to the board
   // revision captured when the viewport settled. The board-scoped policy around
@@ -1233,12 +1206,12 @@ function App() {
       .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
       .then(() => {
         dispatch({ type: "cardsRemoved", ids });
-        void loadTrash();
+        void refreshTrash();
       })
       .catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
       });
-  }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator, loadTrash]);
+  }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator, refreshTrash]);
 
   // Copy the stable MySpace address for the right-clicked card (or the current
   // board when invoked from a portal/board context). "Copy MySpace Link" is the
@@ -1571,43 +1544,10 @@ function App() {
     if (board) await navigateTo(board.id);
   }, [board, navigateTo]);
 
-  const handleRestoreTrashBatch = useCallback(
-    async (batchId: string) => {
-      setRestoringBatchId(batchId);
-      try {
-        await gateway.restoreTrashBatch(batchId);
-        setRestoringBatchId(null);
-        await loadTrash();
-        // The restored Board subtree/portal may re-enter the open Board or the
-        // Quick Boards rail; reload both to reconcile.
-        await reloadCurrentBoard();
-        loadQuickBoards();
-      } catch (e) {
-        setRestoringBatchId(null);
-        setTrashError(errorMessage(e));
-      }
-    },
-    [gateway, loadTrash, reloadCurrentBoard, loadQuickBoards],
-  );
+  useEffect(() => {
+    reloadBoardRef.current = reloadCurrentBoard;
+  }, [reloadCurrentBoard]);
 
-  const handleEmptyTrash = useCallback(
-    async (confirmation: string) => {
-      setEmptyTrashBusy(true);
-      setEmptyTrashError(null);
-      try {
-        await gateway.emptyTrash(confirmation);
-        setEmptyTrashBusy(false);
-        setEmptyTrashOpen(false);
-        await loadTrash();
-        await reloadCurrentBoard();
-        loadQuickBoards();
-      } catch (e) {
-        setEmptyTrashBusy(false);
-        setEmptyTrashError(errorMessage(e));
-      }
-    },
-    [gateway, loadTrash, reloadCurrentBoard, loadQuickBoards],
-  );
 
   // The contextual note rail: command bridge + bold state come from the active
   // note's editor (Tiptap-free contract).
@@ -1780,7 +1720,7 @@ function App() {
         if (!cancelled && v !== dataVersionRef.current && board) {
           dataVersionRef.current = v;
           void navigateTo(board.id);
-          void loadTrash();
+          void refreshTrash();
         }
       });
     }, 3000);
@@ -1788,7 +1728,7 @@ function App() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [gateway, board, navigateTo, loadTrash]);
+  }, [gateway, board, navigateTo, refreshTrash]);
 
   const handleRenameBoard = useCallback(
     (boardId: string, title: string) => {
@@ -1887,7 +1827,7 @@ function App() {
       if (e.key === "Escape") {
         if (trashOpen) {
           e.preventDefault();
-          handleCloseTrash();
+          closeTrashDrawer();
         }
         return;
       }
@@ -1917,7 +1857,7 @@ function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages, trashOpen, handleCloseTrash]);
+  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages, trashOpen, closeTrashDrawer]);
 
   return (
     <AppShell
@@ -1950,8 +1890,8 @@ function App() {
           mode={noteToolMode ? "note" : "create"}
           onCreationDragStart={handleCreationDragStart}
           onAddImage={() => void handleCreateImage()}
-          trashBatchCount={trashSummary?.batchCount ?? 0}
-          onOpenTrash={handleOpenTrash}
+          trashBatchCount={trash.summary?.batchCount ?? 0}
+          onOpenTrash={trash.openDrawer}
           onBold={handleBold}
           boldActive={boldActive}
           onBackToCreate={handleBackToCreate}
@@ -2069,32 +2009,29 @@ function App() {
             onRetry={() => dispatch({ type: "clearError" })}
           />
         )}
-        {trashOpen && (
+        {trash.open && (
           <TrashDrawer
-            summary={trashSummary}
-            loading={trashLoading}
-            error={trashError}
-            restoringBatchId={restoringBatchId}
-            onClose={handleCloseTrash}
-            onRestore={(batchId) => void handleRestoreTrashBatch(batchId)}
-            onEmptyTrash={() => {
-              setEmptyTrashError(null);
-              setEmptyTrashOpen(true);
-            }}
+            summary={trash.summary}
+            loading={trash.loading}
+            error={trash.error}
+            restoringBatchId={trash.restoringBatchId}
+            onClose={trash.closeDrawer}
+            onRestore={(batchId) => void trash.restoreBatch(batchId)}
+            onEmptyTrash={trash.requestEmpty}
           />
         )}
-        {emptyTrashOpen && (
+        {trash.emptyDialogOpen && (
           <>
-            <div className="empty-trash-backdrop" onClick={() => setEmptyTrashOpen(false)} />
+            <div className="empty-trash-backdrop" onClick={trash.cancelEmpty} />
             <div className="empty-trash-overlay">
               <EmptyTrashDialog
-                batchCount={trashSummary?.batchCount ?? 0}
-                boardCount={trashSummary?.boardCount ?? 0}
-                cardCount={trashSummary?.cardCount ?? 0}
-                busy={emptyTrashBusy}
-                error={emptyTrashError}
-                onConfirm={(typed) => void handleEmptyTrash(typed)}
-                onCancel={() => setEmptyTrashOpen(false)}
+                batchCount={trash.summary?.batchCount ?? 0}
+                boardCount={trash.summary?.boardCount ?? 0}
+                cardCount={trash.summary?.cardCount ?? 0}
+                busy={trash.emptyBusy}
+                error={trash.emptyError}
+                onConfirm={(typed) => void trash.confirmEmpty(typed)}
+                onCancel={trash.cancelEmpty}
               />
             </div>
           </>
