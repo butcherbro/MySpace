@@ -25,6 +25,7 @@ import { TrashDrawer } from "./components/trash/TrashDrawer";
 import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
 import { SearchBar } from "./search/SearchBar";
+import { useWorkspaceSearch } from "./search/use-workspace-search";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -170,9 +171,14 @@ function App() {
   // Search: query/debounce/results owned here; rendering/keyboard in
   // `SearchBar` (always-visible input in the top bar). Global scope is the V1
   // default (see docs/specs/search.md).
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResultDto[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
+  const {
+    query: searchQuery,
+    results: searchResults,
+    loading: searchLoading,
+    error: searchError,
+    setQuery: setSearchQuery,
+    clear: clearSearch,
+  } = useWorkspaceSearch(gateway);
   const [cardFocus, setCardFocus] = useState<{ cardId: string; token: number } | null>(null);
   const cardFocusTokenRef = useRef(0);
   const [highlightQuery, setHighlightQuery] = useState("");
@@ -354,36 +360,24 @@ function App() {
     setTrashError(null);
   }, []);
 
-  const handleSearchQueryChange = useCallback((query: string) => {
-    setSearchQuery(query);
-    if (query.trim() === "") setSearchResults([]);
-    // Any edit to the search phrase invalidates a previous on-board highlight.
-    setHighlightQuery("");
-  }, []);
+  const handleSearchQueryChange = useCallback(
+    (query: string) => {
+      setSearchQuery(query);
+      // Any edit to the search phrase invalidates a previous on-board highlight.
+      setHighlightQuery("");
+    },
+    [setSearchQuery],
+  );
 
   const handleSearchClear = useCallback(() => {
-    setSearchQuery("");
-    setSearchResults([]);
-  }, []);
+    clearSearch();
+  }, [clearSearch]);
 
-  // Debounced search (150ms) over the whole workspace. No state is set
-  // synchronously inside the effect body (see the search spec for the default).
+  // The controller owns the debounce and latest-request-wins; a failed search is
+  // still surfaced on the canvas error banner, exactly as before.
   useEffect(() => {
-    if (searchQuery.trim() === "") return;
-    const query = searchQuery.trim();
-    const timer = setTimeout(() => {
-      setSearchLoading(true);
-      void gateway
-        .searchWorkspace(query)
-        .then((results) => setSearchResults(results))
-        .catch((e) => {
-          setSearchResults([]);
-          dispatch({ type: "failed", message: errorMessage(e) });
-        })
-        .finally(() => setSearchLoading(false));
-    }, 150);
-    return () => clearTimeout(timer);
-  }, [searchQuery, gateway]);
+    if (searchError !== null) dispatch({ type: "failed", message: searchError });
+  }, [searchError, dispatch]);
 
   const handleCreateNote = useCallback(
     async (
