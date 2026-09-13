@@ -103,3 +103,33 @@ export class MoveBoardCommand implements WorkspaceCommand {
     this.portalRevision += 1;
   }
 }
+
+/**
+ * Moves a whole selection — leaf cards and Board Portals together — in one atomic
+ * backend call, and reverses it from the receipt that call returned (ADR-0007).
+ * The receipt is the undo's input, so neither direction guesses revisions or
+ * frames, and a partially applied selection cannot be produced.
+ */
+export class MoveSelectionCommand implements WorkspaceCommand {
+  id: string;
+  label = "Move selection";
+  private receipt: import("../services/workspace-gateway").MoveSelectionToBoardReceipt | null = null;
+
+  constructor(
+    id: string,
+    private input: import("../services/workspace-gateway").MoveSelectionToBoardInput,
+  ) {
+    this.id = id;
+  }
+
+  async execute(gateway: WorkspaceGateway): Promise<void> {
+    this.receipt = await gateway.moveSelectionToBoard(this.input);
+  }
+
+  async undo(gateway: WorkspaceGateway): Promise<void> {
+    if (!this.receipt) {
+      throw new Error("move selection cannot be undone before it ran");
+    }
+    await gateway.undoMoveSelection(this.receipt);
+  }
+}

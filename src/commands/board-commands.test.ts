@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CreateChildBoardCommand, MoveBoardCommand } from "./board-commands";
+import { CreateChildBoardCommand, MoveBoardCommand, MoveSelectionCommand } from "./board-commands";
 import type { MoveBoardInput, WorkspaceGateway } from "../services/workspace-gateway";
 
 function gatewaySpy() {
@@ -99,5 +99,44 @@ describe("CreateChildBoardCommand", () => {
 
     expect(gateway.createChildBoard).toHaveBeenCalledTimes(1);
     expect(gateway.restoreTrashBatch).toHaveBeenCalledWith("batch-board");
+  });
+});
+
+describe("MoveSelectionCommand", () => {
+  const input = {
+    idempotencyKey: "op-1",
+    targetBoardId: "board-b",
+    cards: [{ id: "n1", expectedRevision: 1 }],
+    boards: [{ boardId: "board-a", expectedBoardRevision: 1, expectedPortalRevision: 1 }],
+    leafPlacement: "unsorted" as const,
+  };
+  const receipt = {
+    operationId: "operation-1",
+    targetBoardId: "board-b",
+    cards: [],
+    boards: [],
+  };
+  type Gateway = Parameters<MoveSelectionCommand["execute"]>[0];
+
+  it("moves once and undoes from the returned receipt", async () => {
+    const gateway = {
+      moveSelectionToBoard: vi.fn().mockResolvedValue(receipt),
+      undoMoveSelection: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Gateway;
+
+    const command = new MoveSelectionCommand("cmd-1", input);
+    await command.execute(gateway);
+    expect(gateway.moveSelectionToBoard).toHaveBeenCalledWith(input);
+
+    await command.undo(gateway);
+    expect(gateway.undoMoveSelection).toHaveBeenCalledWith(receipt);
+    expect(gateway.moveSelectionToBoard).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to undo a command that never ran", async () => {
+    const gateway = { undoMoveSelection: vi.fn() } as unknown as Gateway;
+    const command = new MoveSelectionCommand("cmd-2", input);
+    await expect(command.undo(gateway)).rejects.toThrow();
+    expect(gateway.undoMoveSelection).not.toHaveBeenCalled();
   });
 });
