@@ -216,3 +216,55 @@ fn receipt_round_trips_both_card_and_board_entries() {
     let back: MoveSelectionToBoardReceipt = serde_json::from_value(json).unwrap();
     assert_eq!(back, receipt);
 }
+
+const RECEIPT_KIND: &str = "move_selection_to_board";
+
+#[test]
+fn operation_receipts_store_find_and_roll_back_with_the_transaction() {
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::repositories::workspace_repository::{
+        find_operation_receipt, store_operation_receipt,
+    };
+
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+
+    assert!(find_operation_receipt(&conn, RECEIPT_KIND, "op-1")
+        .unwrap()
+        .is_none());
+
+    let tx = conn.transaction().unwrap();
+    store_operation_receipt(
+        &tx,
+        "operation-1",
+        RECEIPT_KIND,
+        "op-1",
+        "{\"fingerprint\":1}",
+        "{\"cards\":[]}",
+        42,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+
+    let found = find_operation_receipt(&conn, RECEIPT_KIND, "op-1")
+        .unwrap()
+        .expect("a committed receipt is found");
+    assert_eq!(found.operation_id, "operation-1");
+    assert_eq!(found.request_fingerprint, "{\"fingerprint\":1}");
+    assert_eq!(found.receipt_json, "{\"cards\":[]}");
+
+    // The unique (kind, key) index rejects a second store for the same key.
+    let tx = conn.transaction().unwrap();
+    assert!(
+        store_operation_receipt(&tx, "operation-2", RECEIPT_KIND, "op-1", "x", "{}", 43).is_err()
+    );
+    drop(tx);
+
+    // A rolled-back operation leaves no receipt, so a failed move stays retryable.
+    let tx = conn.transaction().unwrap();
+    store_operation_receipt(&tx, "operation-3", RECEIPT_KIND, "op-2", "y", "{}", 44).unwrap();
+    drop(tx);
+    assert!(find_operation_receipt(&conn, RECEIPT_KIND, "op-2")
+        .unwrap()
+        .is_none());
+}
