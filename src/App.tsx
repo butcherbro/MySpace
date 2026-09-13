@@ -13,7 +13,12 @@ import {
 import type { CanvasCard, CanvasViewport } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand, SetNoteColorCommand } from "./commands/card-commands";
-import { CreateChildBoardCommand, MoveBoardCommand, RenameBoardCommand } from "./commands/board-commands";
+import {
+  CreateChildBoardCommand,
+  MoveBoardCommand,
+  MoveSelectionCommand,
+  RenameBoardCommand,
+} from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
 import type { NoteEditorCommands } from "./editor/editor-commands";
 import type { TextColorId } from "./editor/text-color";
@@ -1084,59 +1089,47 @@ function App() {
         .filter((c): c is CardDto => Boolean(c));
 
       const leafCards = cards.filter((c) => c.kind !== "board_portal");
-      const portals = cards.filter(
-        (c): c is BoardPortalDto =>
-          c.kind === "board_portal" && c.target.id !== targetBoardId,
-      );
+      // The destination board is NOT filtered out here: ADR-0007 makes the
+      // backend refuse the whole operation when the selection contains it, so the
+      // user gets a reason instead of a silently shrunken selection.
+      const portals = cards.filter((c): c is BoardPortalDto => c.kind === "board_portal");
 
-      if (leafCards.length > 0) {
-        // The batch is all-or-nothing on revisions, so re-read every card first:
-        // one stale local revision would reject the whole batch and NOTHING in the
-        // selection would move. The tab path already does this; without it a group
-        // drop onto a portal or breadcrumb silently did nothing.
-        void Promise.all(
-          leafCards.map((c) =>
-            gateway
-              .readCard(c.id)
-              .then((fresh) => ({
-                id: c.id,
-                expectedRevision:
-                  fresh && "revision" in fresh
-                    ? (fresh as { revision: number }).revision
-                    : c.revision,
-              }))
-              .catch(() => ({ id: c.id, expectedRevision: c.revision })),
-          ),
-        )
-          .then((items) => gateway.moveCardsToBoardUnsorted({ targetBoardId, cards: items }))
-          .then(() => {
-            if (targetBoardId === boardRef.current?.id) {
-              for (const c of leafCards) dispatch({ type: "cardMovedToUnsorted", id: c.id });
-            } else {
-              dispatch({ type: "cardsRemoved", ids: leafCards.map((c) => c.id) });
-            }
-          })
-          .catch((err) => {
-            dispatch({ type: "failed", message: errorMessage(err) });
-          });
-      }
-
-      for (const portal of portals) {
+      if (leafCards.length > 0 || portals.length > 0) {
+        // One atomic call for the whole selection, and the state is mirrored from
+        // the receipt the backend returned rather than recomputed locally.
+        const currentBoardId = boardRef.current?.id;
         void dispatcher
           .execute(
-            new MoveBoardCommand(
-              idGenerator.nextId(),
-              portal.target.id,
-              portal.boardId,
-              portal.frame,
+            new MoveSelectionCommand(idGenerator.nextId(), {
+              idempotencyKey: idGenerator.nextId(),
               targetBoardId,
-              { x: 40, y: 40, width: portal.frame.width, height: portal.frame.height },
-              portal.target.boardRevision,
-              portal.revision,
-            ),
+              cards: leafCards.map((c) => ({ id: c.id, expectedRevision: c.revision })),
+              boards: portals.map((p) => ({
+                boardId: p.target.id,
+                expectedBoardRevision: p.target.boardRevision,
+                expectedPortalRevision: p.revision,
+              })),
+              leafPlacement: "unsorted",
+            }),
           )
-          .then(() => {
-            dispatch({ type: "cardsRemoved", ids: [portal.id] });
+          .then((receipt) => {
+            if (receipt.cards.length > 0) {
+              if (receipt.targetBoardId === currentBoardId) {
+                for (const card of receipt.cards) {
+                  dispatch({ type: "cardMovedToUnsorted", id: card.id });
+                }
+              } else {
+                dispatch({ type: "cardsRemoved", ids: receipt.cards.map((card) => card.id) });
+              }
+            }
+            const departed = receipt.boards
+              .filter(
+                (board) =>
+                  board.previousParentBoardId === currentBoardId &&
+                  receipt.targetBoardId !== currentBoardId,
+              )
+              .map((board) => board.portalCardId);
+            if (departed.length > 0) dispatch({ type: "cardsRemoved", ids: departed });
           })
           .catch((err) => {
             dispatch({ type: "failed", message: errorMessage(err) });
