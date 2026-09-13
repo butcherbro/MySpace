@@ -169,3 +169,163 @@ pub fn validate_expectations(
 
     Ok(())
 }
+
+/// Moves a whole selection onto one board in a single Immediate transaction, or
+/// changes nothing at all (ADR-0007).
+///
+/// The transaction is opened before anything is read, so no write can interleave
+/// between validation and update. Every expectation is checked inside it, the
+/// receipt is written with the same commit, and a replay of the same idempotency
+/// key returns the original receipt instead of re-running the move.
+pub fn move_selection_to_board(
+    conn: &mut rusqlite::Connection,
+    input: &MoveSelectionToBoardInput,
+) -> Result<MoveSelectionToBoardReceipt, WorkspaceError> {
+    use crate::domain::models::{
+        Frame, MoveSelectionToBoardReceipt, MovedBoardReceipt, MovedCardReceipt,
+    };
+    use crate::repositories::workspace_repository as repo;
+    use rusqlite::{params, TransactionBehavior};
+
+    validate_selection_shape(input)?;
+    let fingerprint = request_fingerprint(input)?;
+
+    // Replay guard: the same key returns the receipt the first call produced.
+    if let Some(stored) =
+        repo::find_operation_receipt(conn, MOVE_SELECTION_OPERATION_KIND, &input.idempotency_key)?
+    {
+        if stored.request_fingerprint != fingerprint {
+            return Err(WorkspaceError::ConstraintViolation(
+                "idempotency key reused with a different payload".into(),
+            ));
+        }
+        return decode_receipt(&stored.receipt_json);
+    }
+
+    let now = crate::db::migrations::now_millis();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+    // Read and validate everything before the first write.
+    let state = repo::read_selection_pre_state(&tx, input)?;
+    validate_expectations(input, &state)?;
+    validate_destination_not_selected(&input.target_board_id, &state)?;
+    repo::validate_selection_cycle(&tx, &input.target_board_id, &state)?;
+
+    let target_exists: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
+        [input.target_board_id.as_str()],
+        |row| row.get(0),
+    )?;
+    if target_exists == 0 {
+        return Err(WorkspaceError::NotFound(input.target_board_id.clone()));
+    }
+
+    // Distinct slots are chosen before the leaves arrive, so the cascade is
+    // computed against the destination as the user saw it.
+    let heights: Vec<f64> = state
+        .boards
+        .iter()
+        .map(|board| board.portal_frame.height)
+        .collect();
+    let slots =
+        crate::domain::board_service::free_position_slots(&tx, &input.target_board_id, &heights);
+
+    for card in &state.cards {
+        let changed = tx.execute(
+            "UPDATE cards SET board_id = ?1, unsorted = 1, revision = revision + 1, updated_at = ?2
+             WHERE id = ?3 AND revision = ?4",
+            params![input.target_board_id, now, card.id, card.revision],
+        )?;
+        if changed == 0 {
+            return Err(WorkspaceError::StaleRevision {
+                expected: card.revision,
+                actual: card.revision,
+            });
+        }
+    }
+
+    let mut receipt_boards = Vec::with_capacity(state.boards.len());
+    for (board, slot) in state.boards.iter().zip(slots.iter()) {
+        let moved = tx.execute(
+            "UPDATE boards SET parent_board_id = ?1, revision = revision + 1, updated_at = ?2
+             WHERE id = ?3 AND revision = ?4",
+            params![
+                input.target_board_id,
+                now,
+                board.board_id,
+                board.board_revision
+            ],
+        )?;
+        if moved == 0 {
+            return Err(WorkspaceError::StaleRevision {
+                expected: board.board_revision,
+                actual: board.board_revision,
+            });
+        }
+        let moved_portal = tx.execute(
+            "UPDATE cards SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4
+             WHERE id = ?5 AND revision = ?6",
+            params![
+                input.target_board_id,
+                slot.0,
+                slot.1,
+                now,
+                board.portal_card_id,
+                board.portal_revision
+            ],
+        )?;
+        if moved_portal == 0 {
+            return Err(WorkspaceError::StaleRevision {
+                expected: board.portal_revision,
+                actual: board.portal_revision,
+            });
+        }
+        receipt_boards.push(MovedBoardReceipt {
+            board_id: board.board_id.clone(),
+            portal_card_id: board.portal_card_id.clone(),
+            previous_parent_board_id: board.parent_board_id.clone().unwrap_or_default(),
+            previous_portal_frame: board.portal_frame.clone(),
+            destination_portal_frame: Frame {
+                x: slot.0,
+                y: slot.1,
+                width: board.portal_frame.width,
+                height: board.portal_frame.height,
+            },
+            before_board_revision: board.board_revision,
+            after_board_revision: board.board_revision + 1,
+            before_portal_revision: board.portal_revision,
+            after_portal_revision: board.portal_revision + 1,
+        });
+    }
+
+    let receipt = MoveSelectionToBoardReceipt {
+        operation_id: uuid::Uuid::now_v7().to_string(),
+        target_board_id: input.target_board_id.clone(),
+        cards: state
+            .cards
+            .iter()
+            .map(|card| MovedCardReceipt {
+                id: card.id.clone(),
+                previous_board_id: card.board_id.clone(),
+                previous_unsorted: card.unsorted,
+                previous_frame: card.frame.clone(),
+                before_revision: card.revision,
+                after_revision: card.revision + 1,
+            })
+            .collect(),
+        boards: receipt_boards,
+    };
+
+    repo::store_operation_receipt(
+        &tx,
+        &receipt.operation_id,
+        MOVE_SELECTION_OPERATION_KIND,
+        &input.idempotency_key,
+        &fingerprint,
+        &encode_receipt(&receipt)?,
+        now,
+    )?;
+    tx.commit()?;
+
+    Ok(receipt)
+}
