@@ -1,129 +1,72 @@
-# Current State — Visual Workspace V1
+# Current State — V1
 
-> Актуальное состояние, принятые решения и следующий шаг. Держать в актуальном виде.
+> **This file is the single source of truth for status.** Detailed evidence lives
+> in `docs/testing/v1-stabilization-report.md`; backlog lives in `tasks/todo.md`;
+> rules and history live in `tasks/lessons.md` and `docs/decisions/`.
+>
+> Nothing here is a claim without a run behind it. When status changes, the
+> evidence in the report is refreshed in the same commit.
 
-## Принятые решения (не менять без необходимости)
+## Where V1 stands
 
-- Стек: Tauri 2 + React 19 + TS + Vite 8, React Flow за `CanvasAdapter`, SQLite (`rusqlite`).
-- **ID генерирует фронт** через `UuidV7Generator` (UUIDv7), а НЕ backend; ID остаётся входным параметром `create_*`. Причины — в `tasks/lessons.md`.
-- **`document_json` авторитетен** для текста заметки; plain text кодируется через `src/editor/document-codec.ts` (ProseMirror-совместимо), чтобы быть готовым к Tiptap.
-- Store текущей доски — **`useReducer` + Context** (без новых зависимостей).
-- Optimistic `revision` + stale-write rejection — на всех мутациях.
+The stabilization plan `docs/plans/2026-09-11-v1-stabilization-and-debt-paydown.md`
+is complete through Task 18 plus the SECURITY-HARDENING checkpoint, on branch
+`codex/v1-stabilization` (61 commits, clean worktree). **Automated gates are
+green** at `4292e3a`:
 
-## Статус задач (по вердикту рецензента + слайсам)
+- `npm run check` — 330 tests, 54 files; lint and typecheck clean
+- `npm run test:e2e` — 39 passed, and a test now fails on any unexpected
+  browser runtime error
+- `npm run build` — ok; main chunk 893 kB (gzip 274 kB)
+- `npm audit` — 0 vulnerabilities
+- `cargo test` — 173 passed, 0 failed; `cargo clippy --all-targets -D warnings`
+  and `cargo fmt --check` clean
 
-- [x] №1 — documentJson + IdGenerator (UUIDv7)
-- [x] №3 — viewport durable (`board_view_states` + `save_viewport` + debounce 400мс)
-- [x] №2 — вынести store текущей доски из `App.tsx` (snapshot/selection/revisions/rollback)
-- [x] №2b — сделать `CanvasAdapter` controlled, убрать `dependencyKey`
-- [x] №5 — transactional `move_cards` (multi-card drag = одна транзакция) + selection-контракт
-- [x] write queue — сериализация мутаций (`MutationQueue`) против revision-гонок
-- [x] e2e — smoke-тест против MockWorkspaceGateway (click-versus-drag)
-- [x] Slice 4 — доски-в-досках: `create_child_board`/`rename_board` (Rust), `BoardPortalCard`,
-  `card-registry`, `BoardHistory`/`BoardBreadcrumbs` + Cmd+[/], порталы переживают рестарт.
+**Not yet done: packaged macOS acceptance.** Everything above runs headless
+against an in-memory mock or a temporary database. The application itself —
+bookmark durability, the CSP, the close-flush path, the visual shell — has not
+been verified in a packaged build, and no automated gate can stand in for that.
+That is Task 20, and it needs a person at the app.
 
-## Следующий шаг
+## Architecture decisions that are settled
 
-Инженерный долг, Slice 4 и Slice 5 закрыты. **Slice 3 (Tiptap) в работе** —
-редактор подключён (documentJson-authoritative + derived plainText), заметки
-уже редактируются через Tiptap; осталось добить rich-text toolbar/контракт и
-перепроверить поведение на живом приложении.
+- Tauri 2 + React 19 + TypeScript + Vite, React Flow behind `CanvasAdapter`,
+  SQLite via `rusqlite`. The frontend generates ids (UUIDv7); IDs stay an input
+  to every `create_*`.
+- `documentJson` is authoritative for note text; plain text is derived.
+- Every mutation carries an optimistic `revision` and is rejected when stale.
+- SQLite is the authority for durable ownership; `assets/` is a managed
+  projection. See `docs/decisions/0001-v1-scope.md` and `0002-dependency-audit.md`.
+- Folder shortcuts use plain macOS bookmarks (ADR-0006) — security-scoped
+  creation fails outside the App Sandbox, which this app does not use.
+- A mixed selection moves as one atomic backend command (ADR-0007).
+- Favicon identity is the stored bytes (ADR-0008).
+- Search excerpts are Unicode-safe: folded positions map back to original
+  characters, never byte offsets across strings.
+- Pending drafts are flushed before the window closes (timeout, then a dialog
+  offering to close without saving).
+- The production CSP is derived from what the app loads; `devCsp` is looser for
+  the Vite dev loop. Both live in `src-tauri/tauri.conf.json`.
+- `App.tsx` is composition and command orchestration; each controller owns one
+  state machine under `src/app/`, `src/canvas/`, `src/navigation/`,
+  `src/search/`, `src/state/`.
+- `workspace_repository` is a re-export facade over seven aggregate modules under
+  `src-tauri/src/repositories/`; 187 call sites are unchanged.
 
-### Сделано в рамках Slice 3 (на текущий момент)
+## What is open
 
-- `src/editor/NoteEditor.tsx` — изоляция Tiptap (StarterKit subset: heading 1-3,
-  bold/italic, lists, blockquote). `editable` синхронизируется через
-  `setEditable` + автофокус при входе в editing; классы `nodrag nopan nowheel`
-  на EditorContent; caret не принуждается к концу (`focus()` без позиции).
-- `src/editor/editor-extensions.ts` — всё вне V1 явно отключено (`codeBlock`,
-  `code`, `link`, `strike`, `underline`, `horizontalRule` = false), чтобы paste/
-  shortcuts не протащили чужие структуры в БД.
-- `src/editor/note-document.ts` — собственный `NoteDocument` + `isNoteDocument`
-  runtime validation (граница сохранения в `App.handleUpdateNote`).
-- `src/editor/document-codec.ts` — `documentToPlainText` читает полный ProseMirror.
-- `src/cards/note/NoteCard.tsx` — draft lifecycle: `dirtyRef` + `persistedDocumentRef`,
-  синхронизация входящего `note.documentJson` только при clean; ошибка сохранения
-  оставляет редактор открытым (не `onDeactivate`); flush при blur + при `editing`→false
-  (навигация/trash).
-- `src/App.tsx` — `handleUpdateNote` больше НЕ проглатывает ошибку (reject + banner);
-  валидация документа перед `gateway.updateNote`.
-- `src/test/prosemirror-mocks.ts` — jsdom-полифиллы ProseMirror/Tiptap.
-- Тесты: `NoteCard.test.tsx` (буфер/дебаунс/флаш/ошибка-сохранения/синхронизация),
-  `NoteEditor.test.tsx` (toggle editable), `note-document.test.ts` (схема), второй
-  e2e `typing persists and survives blur`.
+Correctness debt and wishlist are kept apart, with owners, in
+`docs/testing/v1-stabilization-report.md` → "Residual debt". In short: packaged
+acceptance and the architect's CSP confirmation are open and owned by the user;
+the favicon-source-URL question in ADR-0008 is deferred by the user's
+instruction; bundle splitting and board duplication are wishlist, not debt.
 
-### Открыто по вердикту ревью (rework-задачи, не блокеры данных)
+## Resuming work
 
-- **Bubble menu / toolbar** для rich-text (обязателен до объявления Slice 3
-  завершённым). Держать внутри `NoteEditor`.
-- **plainText-точность** (нумерация списков, codeBlock-переносы) — отложить до
-  поиска/export; documentJson авторитетен, данные не теряются.
-- **Закрытие окна + последний flush** — сейчас flush покрывает blur и навигацию,
-  но не `window/tauri close` с pending draft. Нужен отдельный close-flush хук.
-- **Bundle 783KB** — разбиение на чанки/ленивый mount редактора (Slice 6).
-
-## Порядок будущих работ (по приоритету)
-
-1. **Slice 3** — rich-text заметки (Tiptap: заголовки/bold/italic/списки/blockquote).
-   Фундамент готов (documentJson-authoritative + derived plainText), редактор
-   подключён. Осталось: rich-text toolbar/bubble-menu, полный Tiptap focus-handoff
-   (если нужно сверх автофокуса), перепроверка на живом `tauri dev`.
-2. **P2 долг** — selection refactor (убрать затычку-грухад, централизовать selection),
-   contextMenu → store (сейчас локальный useState).
-3. **Изображения и ссылки** — см. ниже (отдельный блок).
-4. **Slice 6** — бэкапы (SQLite online backup, retention 10) + производительность (fixtures
-   100/500/1000 карточек, бюджеты).
-
-## Изображения и ссылки (активная ветка работ)
-
-Принятая модель хранения — **«copy-in» (Notion/Milanote) поверх отдельной папки по id
-(Obsidian-стиль)**: файл копируется в `Application Support/com.bro.myspace/assets/<uuid-v7>.<ext>`,
-в SQLite — только метаданные (таблица `assets`), а не байты. Карточки ссылаются на стабильный
-`asset_id`, не на внешний путь (файл можно переместить/удалить вне приложения без поломки доски).
-
-Превью ссылок — через **oEmbed** (без API-ключей; YouTube отдаёт `title` + `thumbnail_url`),
-превью-картинка скачивается в тот же `assets/`. «Канал vs ролик» различается по форме URL.
-
-Порядок:
-1. ✅ Assets-фундамент (Rust): миграция `0002_assets` (`assets` + `image_cards` + `embed_cards` +
-   `kind` `image`/`embed`), `asset_service::import_asset` (copy-in + метаданные, идемпотентный),
-   команда `import_asset`, тесты.
-2. ✅ `create_image_card` (repo + команда) — карточка-изображение, объединённая с asset.
-3. ✅ Фронт: `ImageCardDto`/`AssetDto` в gateway + mock + `ImageCard` (картинка через
-   `myspace-asset://` протокол) + кнопка «Add image» (dialog-плагин) + drag-drop файла.
-   Подпись-заметка снизу (редактирование) — следующий шаг.
-4. ⏳ `EmbedCard` + oEmbed-команда для превью ссылок (YouTube сначала).
-
-### Закрыто в шаге 3 (фронт картинок)
-
-- Rust: custom URI protocol `myspace-asset://localhost/<file_path>` (отдаёт файл из
-  `assets/`, путь ограничен asset-дир); `AssetDto.file_path`; `trash_note` принимает
-  note/image/embed (leaf card).
-- Фронт: `ImageCard` + `card-registry` ветка `image`; `AssetPick` через
-  `tauri-plugin-dialog` (изолирован в `src/services/asset-picker.ts`); кнопка toolbar.
-- `handleDeleteSelection`/`handleContextDelete` различают note/image/board_portal.
-
-### Перетаскивание на портал (drop в папку)
-
-Реализовано: `move_card_to_board` (backend) + определение drop-на-портале в `CanvasAdapter`
-(bounding-box пересечение центра карточки) + `onCardDroppedOnPortal`. Карточка меняет `board_id`,
-позиция сбрасывается в начало целевой доски.
-
-Обсуждено, НЕ сделано (отложено в план):
-- **Подсветка портала** при наведении карточки во время drag (визуальный фидбек).
-- **Копировать доску** (квадратик) — правый клик → Duplicate → рядом создаётся копия доски
-  со всем содержимым внутри (шаблонные доски). Для заметок/картинок — аналогичная «копировать»
-  операция. Это «дублирование файлов/папок», как в Finder.
-
-### Редизайн UI (сайдбар)
-
-Кнопки («New note», «New board», «Add image», будущее «Add link») НЕ убирать — позже перенести
-в левый сайдбар по образцу референс-приложения (скриншоты предоставит пользователь). Ввод контента
-идёт через direct manipulation: drag-drop файлов, вставка (Cmd+V) ссылок.
-
-## Крупные открытые фичи
-
-- Slice 3: Tiptap rich-text.
-- Slice 6: бэкапы + производительность (V1.1).
-- Изображения (после Slice 3).
-- Вид: палитра порталов реализована в `BoardPortalCard`.
+- Worktree: `/Users/bro/Projects/MySpace/.wt-v1-stabilization` (nested inside the
+  workspace; run commands only from there).
+- Session handoff and environment notes: `.continue-here.md`.
+- Do not launch the application from the main checkout: it still contains the old
+  asset GC that deleted File Card assets.
+- Changes reach `main` as one package when the branch is merged — not by
+  cherry-picking, so the data-integrity fixes stay independently reviewable.
