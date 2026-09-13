@@ -4,4 +4,5 @@ pub mod assets;
 pub mod boards;
 pub mod cards;
 pub mod quick_boards;
+pub mod search;
 pub mod workspace_repository;
