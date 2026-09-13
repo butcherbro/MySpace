@@ -77,6 +77,48 @@ fn move_board_reparents_a_child_into_a_sibling() {
     assert_eq!(portal_board_id(&conn, "a"), "b");
 }
 
+fn portal_xy(conn: &rusqlite::Connection, board_id: &str) -> (f64, f64) {
+    conn.query_row(
+        "SELECT c.x, c.y FROM board_portal_cards p JOIN cards c ON c.id = p.card_id
+         WHERE p.target_board_id = ?1 AND c.deleted_at IS NULL",
+        [board_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .unwrap()
+}
+
+#[test]
+fn move_board_places_the_portal_at_the_requested_frame() {
+    // The caller - and the undo path in particular - supplies the destination
+    // frame. Honouring it is what lets undo put the portal back where it was;
+    // silently deriving a fresh free slot relocates it on every move.
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    board_service::create_child_board(&mut conn, &mk(&home, "a", "pa", "A")).unwrap();
+    board_service::create_child_board(&mut conn, &mk(&home, "b", "pb", "B")).unwrap();
+
+    board_service::move_board(
+        &mut conn,
+        &MoveBoardInput {
+            board_id: "a".to_string(),
+            expected_board_revision: 1,
+            expected_portal_revision: 1,
+            target_parent_board_id: "b".to_string(),
+            frame: Frame {
+                x: 333.0,
+                y: 222.0,
+                width: 120.0,
+                height: 112.0,
+            },
+        },
+    )
+    .unwrap();
+
+    assert_eq!(portal_xy(&conn, "a"), (333.0, 222.0));
+}
+
 #[test]
 fn move_board_lifts_a_deep_board_back_to_home() {
     let mut conn = open_in_memory().unwrap();

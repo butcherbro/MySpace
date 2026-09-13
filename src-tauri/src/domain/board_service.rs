@@ -222,10 +222,12 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
         });
     }
 
-    // Place the relocated portal at a free slot on the target board rather than
-    // a fixed origin, so a freshly dropped Board never stacks invisibly on top of
-    // an existing card. A simple downward cascade below the lowest card.
-    let (dest_x, dest_y) = next_free_position(conn, &input.target_parent_board_id);
+    // Honour the caller's frame. It is what makes the move reversible: the undo
+    // path replays move_board with the portal's original frame, so deriving a
+    // fresh free slot here would silently relocate the portal on every undo.
+    // (The upcoming atomic mixed-selection move, ADR-0007, chooses the free slot
+    // itself and records it in its receipt instead.)
+    let (dest_x, dest_y) = (input.frame.x, input.frame.y);
 
     let tx = conn.transaction()?;
 
@@ -270,6 +272,10 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
 /// Returns a free placement slot on a board: the left column x, cascaded below
 /// the lowest existing active card. Simple and deterministic so repeatedly
 /// dropping Boards never stacks them invisibly at the same origin.
+/// Kept for the atomic mixed-selection move (ADR-0007), which chooses distinct
+/// free slots for several portals and extends this to account for portals already
+/// planned inside the same transaction.
+#[allow(dead_code)]
 fn next_free_position(conn: &Connection, board_id: &str) -> (f64, f64) {
     const X: f64 = 40.0;
     const GAP: f64 = 24.0;
