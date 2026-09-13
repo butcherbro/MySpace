@@ -34,6 +34,25 @@ CSP in place**, so the policy string is accepted by Tauri's codegen. The `.dmg` 
 fails inside this sandbox (`hdiutil: create failed - Operation not permitted`) — an
 environment limit, not a project defect; acceptance uses the `.app`.
 
+### The same gates from a clean checkout
+
+The table above was produced in the working tree, where warm state can hide a
+problem: a file that was never committed, a lockfile that drifted, a build output
+that flatters the result. The plan asks for a fresh state, and since the repository
+has no remote, CI has never run — so it was done by hand:
+
+1. `git clone --local --branch codex/v1-stabilization` into an empty temp directory,
+   landing on exactly the revision above with a clean status;
+2. `npm ci` from the lockfile — installed clean, **0 vulnerabilities**;
+3. `npm run check` — **330 passed, 54 files**;
+4. `npm run build` — ok;
+5. `npm run test:e2e` — **39 passed**.
+
+The temp checkout was removed afterwards (the volume is at 99% capacity, and a
+second Rust target directory would have cost several GB). The Rust side is covered
+by the release build above: it had no cached artifacts, so every dependency was
+compiled from zero in that run.
+
 Not verified in this environment: **Rust dependency advisories**. `cargo-audit`
 is not installed and the sandbox has no cargo registry access, so nothing here
 claims the Rust dependency tree is free of known vulnerabilities. That check
