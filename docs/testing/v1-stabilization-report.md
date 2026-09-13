@@ -28,6 +28,20 @@ source of truth for status.
 | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | clean |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | **173 passed, 0 failed** across 17 integration test files |
 
+### A later product revision
+
+Packaged acceptance found a real defect, which the automated gates had missed:
+opening the Trash failed with
+`Invalid column type Null at index: 17, name: favicon_asset_id`, because the
+trash card projection read positional columns that had drifted out of step with
+its own query. Fixed in `6949489` — the projection now reads aliased columns by
+name, so it cannot drift again, and File Cards no longer render as blank rows in
+the drawer. After that commit: **cargo test 178 passed / 0 failed**, with 5 new
+trash tests; `npm run check` 330/330 and e2e 39/39 unchanged.
+
+The tables above still describe `4292e3a`; this is the only product change after
+it, and the acceptance run must be repeated on a rebuild that includes it.
+
 `npm run tauri build` was also run: the release application builds and the `.app`
 bundle is produced (26 MB, `com.bro.myspace` 0.1.0, frontend embedded) **with the new
 CSP in place**, so the policy string is accepted by Tauri's codegen. The `.dmg` step
