@@ -1090,11 +1090,25 @@ function App() {
       );
 
       if (leafCards.length > 0) {
-        void gateway
-          .moveCardsToBoardUnsorted({
-            targetBoardId,
-            cards: leafCards.map((c) => ({ id: c.id, expectedRevision: c.revision })),
-          })
+        // The batch is all-or-nothing on revisions, so re-read every card first:
+        // one stale local revision would reject the whole batch and NOTHING in the
+        // selection would move. The tab path already does this; without it a group
+        // drop onto a portal or breadcrumb silently did nothing.
+        void Promise.all(
+          leafCards.map((c) =>
+            gateway
+              .readCard(c.id)
+              .then((fresh) => ({
+                id: c.id,
+                expectedRevision:
+                  fresh && "revision" in fresh
+                    ? (fresh as { revision: number }).revision
+                    : c.revision,
+              }))
+              .catch(() => ({ id: c.id, expectedRevision: c.revision })),
+          ),
+        )
+          .then((items) => gateway.moveCardsToBoardUnsorted({ targetBoardId, cards: items }))
           .then(() => {
             if (targetBoardId === boardRef.current?.id) {
               for (const c of leafCards) dispatch({ type: "cardMovedToUnsorted", id: c.id });
