@@ -35,7 +35,7 @@ import { TrashDrawer } from "./components/trash/TrashDrawer";
 import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
 import { SearchBar } from "./search/SearchBar";
-import { useWorkspaceSearch } from "./search/use-workspace-search";
+import { useSearchController } from "./search/use-search-controller";
 import { useViewportPersistence } from "./state/use-viewport-persistence";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
@@ -69,7 +69,6 @@ import type {
   ImageCardDto,
   NoteCardDto,
   QuickBoardDto,
-  SearchResultDto,
   TrashSummaryDto,
   WorkspaceGateway,
 } from "./services/workspace-gateway";
@@ -180,19 +179,9 @@ function App() {
   const [emptyTrashError, setEmptyTrashError] = useState<string | null>(null);
 
   // Search: query/debounce/results owned here; rendering/keyboard in
-  // `SearchBar` (always-visible input in the top bar). Global scope is the V1
-  // default (see docs/specs/search.md).
-  const {
-    query: searchQuery,
-    results: searchResults,
-    loading: searchLoading,
-    error: searchError,
-    setQuery: setSearchQuery,
-    clear: clearSearch,
-  } = useWorkspaceSearch(gateway);
-  const [cardFocus, setCardFocus] = useState<{ cardId: string; token: number } | null>(null);
-  const cardFocusTokenRef = useRef(0);
-  const [highlightQuery, setHighlightQuery] = useState("");
+  // `SearchBar` (always-visible input in the top bar) and the search controller
+  // live further down: a result can only be opened once `navigateTo` exists.
+  // Global scope is the V1 default (see docs/specs/search.md).
 
   // Contextual note rail: the active note's editor command surface + bold state.
   const noteCommandsRef = useRef<NoteEditorCommands | null>(null);
@@ -370,25 +359,6 @@ function App() {
     setTrashOpen(false);
     setTrashError(null);
   }, []);
-
-  const handleSearchQueryChange = useCallback(
-    (query: string) => {
-      setSearchQuery(query);
-      // Any edit to the search phrase invalidates a previous on-board highlight.
-      setHighlightQuery("");
-    },
-    [setSearchQuery],
-  );
-
-  const handleSearchClear = useCallback(() => {
-    clearSearch();
-  }, [clearSearch]);
-
-  // The controller owns the debounce and latest-request-wins; a failed search is
-  // still surfaced on the canvas error banner, exactly as before.
-  useEffect(() => {
-    if (searchError !== null) dispatch({ type: "failed", message: searchError });
-  }, [searchError, dispatch]);
 
   const handleCreateNote = useCallback(
     async (
@@ -1501,6 +1471,17 @@ function App() {
     [gateway, viewportPersistence],
   );
 
+  // Search: query, results, and what selecting a result does to the board.
+  // The debounce and latest-request-wins live in the hook's own module.
+  const search = useSearchController({
+    gateway,
+    navigateTo,
+    onError: useCallback(
+      (message: string) => dispatch({ type: "failed", message }),
+      [dispatch],
+    ),
+  });
+
   // During a card drag, resolve the board the pointer is over by hit-testing the
   // breadcrumb ancestor trail. Only the hovered board id is kept in state; the
   // actual drop is routed through handleCardDroppedOnPortal.
@@ -1860,23 +1841,6 @@ function App() {
     [gateway, loadTrash, reloadCurrentBoard, loadQuickBoards],
   );
 
-  // Open the result's board. A Board result navigates to itself; a Note/Link
-  // result navigates to its containing board and focuses the card (center +
-  // select) once it is rendered.
-  const handleSearchSelect = useCallback(
-    async (result: SearchResultDto) => {
-      const query = searchQuery.trim();
-      handleSearchClear();
-      const targetBoardId = result.kind === "board" ? result.entityId : result.boardId;
-      await navigateTo(targetBoardId, { pushHistory: true, tabMode: "open" });
-      if (result.kind !== "board") {
-        setCardFocus({ cardId: result.entityId, token: ++cardFocusTokenRef.current });
-      }
-      setHighlightQuery(query);
-    },
-    [handleSearchClear, navigateTo, searchQuery],
-  );
-
   // The contextual note rail: command bridge + bold state come from the active
   // note's editor (Tiptap-free contract).
   const handleNoteCommands = useCallback((commands: NoteEditorCommands | null) => {
@@ -2199,11 +2163,11 @@ function App() {
           />
           <div className="topbar-actions" data-tauri-drag-region="false">
             <SearchBar
-              query={searchQuery}
-              onQueryChange={handleSearchQueryChange}
-              results={searchResults}
-              loading={searchLoading}
-              onSelect={(result) => void handleSearchSelect(result)}
+              query={search.query}
+              onQueryChange={search.onQueryChange}
+              results={search.results}
+              loading={search.loading}
+              onSelect={(result) => void search.onSelect(result)}
             />
             <UndoRedoControls
               dispatcher={dispatcher}
@@ -2420,8 +2384,8 @@ function App() {
             viewport={viewport}
             viewportResetToken={boardOpenRevision}
             editingCardId={state.editingCardId}
-            focusRequest={cardFocus}
-            highlightQuery={highlightQuery}
+            focusRequest={search.focusRequest}
+            highlightQuery={search.highlightQuery}
             onScreenToFlowReady={(fn) => {
               screenToFlowRef.current = fn;
             }}
@@ -2466,7 +2430,7 @@ function App() {
                 onRevealFileCard: revealFileCard,
                 onResizeFileCard: handleResizeNote,
                 highlightedPortalId,
-                highlightQuery,
+                highlightQuery: search.highlightQuery,
                 onNoteCommands: handleNoteCommands,
                 onNoteBoldStateChange: handleNoteBoldStateChange,
                 onNoteTextColorChange: handleNoteTextColorChange,
