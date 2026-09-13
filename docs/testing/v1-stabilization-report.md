@@ -28,6 +28,12 @@ source of truth for status.
 | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | clean |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | **173 passed, 0 failed** across 17 integration test files |
 
+`npm run tauri build` was also run: the release application builds and the `.app`
+bundle is produced (26 MB, `com.bro.myspace` 0.1.0, frontend embedded) **with the new
+CSP in place**, so the policy string is accepted by Tauri's codegen. The `.dmg` step
+fails inside this sandbox (`hdiutil: create failed - Operation not permitted`) — an
+environment limit, not a project defect; acceptance uses the `.app`.
+
 Not verified in this environment: **Rust dependency advisories**. `cargo-audit`
 is not installed and the sandbox has no cargo registry access, so nothing here
 claims the Rust dependency tree is free of known vulnerabilities. That check
@@ -76,6 +82,10 @@ squashed together with the refactors, so each stays reviewable and revertible.
 - **Deliberately not recorded here:** asset ids, filenames, and any note content.
   They are private data; the recovery detail lives in the session handoff, which
   is not published.
+- **Machine-checkable half, verified read-only on the live library afterwards:** all
+  91 durable asset references (image cards, link previews, link favicons, board
+  covers, file cards) resolve to files that exist; `integrity_check: ok`; schema 17.
+  Rendering itself still needs the packaged run.
 - **Approval reference.** The restore ran only after explicit user confirmation,
   with the application closed, and only against the live library; the plan's
   destructive-test rule (never test destructive behaviour against the live

@@ -8,10 +8,16 @@ verified in a real window. Budget about 25 minutes.
 ## 0. Which build
 
 `npm run tauri build` from the worktree produces
-`src-tauri/target/release/bundle/macos/myspace.app` (and a `.dmg` beside it).
+`src-tauri/target/release/bundle/macos/myspace.app` — verified here: 26 MB, release
+profile, `com.bro.myspace` 0.1.0, frontend embedded, built with the new CSP in place.
 Launch the `.app`, not `tauri dev`: the dev loop serves the frontend from Vite and
 substitutes neither bookmark durability nor the injected CSP. The build is
 unsigned, which is fine for acceptance — signing is a separate concern.
+
+The `.dmg` step (`bundle_dmg.sh`) fails with `hdiutil: create failed - Operation not
+permitted` when the build runs inside a sandboxed shell; that is an environment limit,
+not a project defect, and the `.app` beside it is complete. Nothing in acceptance needs
+a disk image — run the build from a normal terminal if you want one.
 
 Before starting, note where the live library is:
 `~/Library/Application Support/com.bro.myspace` (database `workspace.sqlite3`,
