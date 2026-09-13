@@ -227,6 +227,21 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
   moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void> {
     return invoke<void>("move_cards_to_board_unsorted", { input });
   }
+  moveSelectionToBoard(
+    input: import("./workspace-gateway").MoveSelectionToBoardInput,
+  ): Promise<import("./workspace-gateway").MoveSelectionToBoardReceipt> {
+    return invoke<import("./workspace-gateway").MoveSelectionToBoardReceipt>(
+      "move_selection_to_board",
+      { input },
+    );
+  }
+
+  undoMoveSelection(
+    receipt: import("./workspace-gateway").MoveSelectionToBoardReceipt,
+  ): Promise<void> {
+    return invoke<void>("undo_move_selection", { receipt });
+  }
+
 
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
     return invoke<void>("place_unsorted_card", { input });
