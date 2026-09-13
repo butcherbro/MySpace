@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { selectNotesOnly } from "./gestures";
 import { expect, test } from "./fixtures";
 
 // Mixed group moves onto a board tab. ADR-0007 makes the backend refuse a
@@ -18,25 +19,6 @@ async function addNotes(page: Page, count: number) {
     await page.getByRole("button", { name: "New note", exact: true }).click();
   }
   await expect(page.getByTestId("note-card")).toHaveCount(count);
-}
-
-/** Marquee-select exactly the note cards, leaving the board portal untouched. */
-async function selectNotesOnly(page: Page, count: number) {
-  const boxes = [];
-  for (let index = 0; index < count; index += 1) {
-    const box = await page.locator(".note-card").nth(index).boundingBox();
-    if (!box) throw new Error("note not visible");
-    boxes.push(box);
-  }
-  const left = Math.min(...boxes.map((b) => b.x)) - 12;
-  const top = Math.min(...boxes.map((b) => b.y)) - 12;
-  const right = Math.max(...boxes.map((b) => b.x + b.width)) + 12;
-  const bottom = Math.max(...boxes.map((b) => b.y + b.height)) + 12;
-  await page.mouse.move(left, top);
-  await page.mouse.down();
-  await page.mouse.move(right, bottom, { steps: 10 });
-  await page.mouse.up();
-  await expect(page.locator(".react-flow__node.selected")).toHaveCount(count);
 }
 
 /** Drag the first selected card onto the "New Board" tab and release on its canvas. */
