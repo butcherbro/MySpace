@@ -1538,3 +1538,68 @@ fn file_card_roundtrips_through_snapshot_and_read_card() {
         CardDto::File(FileCardDto { .. })
     ));
 }
+
+#[test]
+fn file_card_projection_carries_the_generated_thumbnail() {
+    // The create command returns the persisted projection, so a generated
+    // thumbnail must already be in it (and agree with the board snapshot) instead
+    // of the frontend having to reload the card.
+    use myspace_lib::domain::models::{CreateFileCardInput, FileCardDto};
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let board_id = root_board_id(&conn);
+
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at) VALUES ('fa', 'x.pdf', 'application/pdf', 'report.pdf', NULL, NULL, 10, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at) VALUES ('thumb', 'thumb.png', 'image/png', 'thumbnail.png', 256, 256, 4, 0)",
+        [],
+    )
+    .unwrap();
+
+    let tx = conn.transaction().unwrap();
+    workspace_repository::insert_file_card_rows(
+        &tx,
+        &CreateFileCardInput {
+            id: "fc".into(),
+            board_id: board_id.clone(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 280.0,
+                height: 180.0,
+            },
+            z_index: 0,
+            source_path: "/tmp/report.pdf".into(),
+            mime_type: "application/pdf".into(),
+            file_name: "report.pdf".into(),
+        },
+        "fa",
+        "(office document)",
+        Some("thumb"),
+    )
+    .unwrap();
+    tx.commit().unwrap();
+
+    let loaded = workspace_repository::load_card(&conn, "fc").unwrap();
+    let CardDto::File(FileCardDto { preview_asset, .. }) = loaded else {
+        panic!("expected a File Card projection");
+    };
+    let preview = preview_asset.expect("the generated thumbnail is projected");
+    assert_eq!(preview.id, "thumb");
+    assert_eq!(preview.mime_type, "image/png");
+
+    // The board snapshot projection must agree with the single-card projection.
+    let snapshot = workspace_repository::load_board_snapshot(&conn, &board_id).unwrap();
+    let from_snapshot = snapshot.cards.iter().find_map(|c| match c {
+        CardDto::File(f) if f.id == "fc" => Some(f.preview_asset.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        from_snapshot.flatten().map(|asset| asset.id),
+        Some("thumb".to_string())
+    );
+}

@@ -5,8 +5,8 @@ use crate::{
         errors::WorkspaceError,
         filesystem_alias_service::{self, FolderLocator, LocatorError},
         models::{
-            CreateFileCardInput, CreateFilesystemAliasInput, FileCardDto, FilesystemAliasDto,
-            FolderPreviewDto,
+            CardDto, CreateFileCardInput, CreateFilesystemAliasInput, FileCardDto,
+            FilesystemAliasDto, FolderPreviewDto,
         },
     },
     repositories::workspace_repository,
@@ -294,7 +294,7 @@ pub fn create_file_card(
         mime_type: mime_type.clone(),
         file_name: file_name.clone(),
     };
-    {
+    let file_card = {
         let mut conn = db
             .lock()
             .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
@@ -306,20 +306,20 @@ pub fn create_file_card(
             &preview,
             thumbnail.as_ref(),
         )?;
-    }
+        // Return the persisted projection, so the caller sees exactly what was
+        // stored — the generated thumbnail included — without a reload, and the
+        // response cannot drift from the database.
+        match workspace_repository::load_card(&conn, &id)? {
+            CardDto::File(file) => file,
+            _ => {
+                return Err(WorkspaceError::Database(
+                    "created card is not a File Card".into(),
+                ))
+            }
+        }
+    };
 
-    let preview_asset = thumbnail.as_ref().map(|staged| staged.asset.clone());
-
-    Ok(FileCardDto {
-        id: input.id,
-        board_id: input.board_id,
-        frame: input.frame,
-        z_index: input.z_index,
-        revision: 1,
-        asset,
-        preview_text: preview,
-        preview_asset,
-    })
+    Ok(file_card)
 }
 
 /// Opens a File Card's stored copy in the default external app.

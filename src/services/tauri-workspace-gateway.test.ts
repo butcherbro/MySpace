@@ -233,4 +233,53 @@ describe("TauriWorkspaceGateway", () => {
     await gw.openFolderInFinder("folder-1");
     expect(invokeMock).toHaveBeenLastCalledWith("open_folder_in_finder", { cardId: "folder-1" });
   });
+
+  it("returns a file card with its generated thumbnail already attached", async () => {
+    // The backend now answers create_file_card with the persisted projection, so a
+    // generated thumbnail must survive the gateway hop instead of being dropped in
+    // favour of a reload.
+    const gw = new TauriWorkspaceGateway();
+    invokeMock.mockResolvedValueOnce({
+      id: "fc",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 280, height: 180 },
+      zIndex: 0,
+      revision: 1,
+      asset: {
+        id: "fa",
+        fileName: "report.pdf",
+        mimeType: "application/pdf",
+        width: null,
+        height: null,
+        sizeBytes: 10,
+        filePath: "fa.pdf",
+      },
+      previewText: "(office document)",
+      previewAsset: {
+        id: "thumb",
+        fileName: "thumbnail.png",
+        mimeType: "image/png",
+        width: 256,
+        height: 256,
+        sizeBytes: 4,
+        filePath: "thumb.png",
+      },
+    });
+
+    const input = {
+      id: "fc",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 280, height: 180 },
+      zIndex: 0,
+      sourcePath: "/tmp/report.pdf",
+      mimeType: "application/pdf",
+      fileName: "report.pdf",
+    };
+    const card = await gw.createFileCard(input);
+
+    expect(invokeMock).toHaveBeenLastCalledWith("create_file_card", { input });
+    expect(card.kind).toBe("file");
+    expect(card.previewAsset?.id).toBe("thumb");
+    expect(card.previewAsset?.mimeType).toBe("image/png");
+  });
 });
