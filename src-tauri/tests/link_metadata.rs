@@ -340,69 +340,188 @@ fn downloaded_favicon_keeps_an_ico_extension() {
     fs::remove_dir_all(&tmp).ok();
 }
 
-#[test]
-fn collapse_favicon_duplicates_reuses_one_asset_per_source() {
-    let mut conn = open_in_memory().unwrap();
-    bootstrap::bootstrap(&mut conn).unwrap();
-    let home: String = conn
-        .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
-    let tmp = std::env::temp_dir().join(format!("myspace-dedup-{}", uuid::Uuid::now_v7()));
-    let asset_dir = tmp.join("assets");
-    std::fs::create_dir_all(&asset_dir).unwrap();
+/// Embed cards with their own favicon files on disk, for the collapse tests.
+struct FaviconFixture {
+    conn: rusqlite::Connection,
+    asset_dir: std::path::PathBuf,
+    tmp: std::path::PathBuf,
+}
 
-    // Two embed cards with the same source_url, each with its own favicon asset.
-    for (card, fav) in [("c1", "f1"), ("c2", "f2")] {
-        conn.execute(
-            "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'embed', 0, 0, 320, 240, 0, 1, 0, 0)",
-            rusqlite::params![card, home],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, metadata_status) VALUES (?1, 'https://youtube.com/watch?v=x', 'youtube.com', 'c', '{}', '', 'ready')",
-            [card],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at) VALUES (?1, ?2, 'image/x-icon', 'favicon.ico', NULL, NULL, 4, 0)",
-            rusqlite::params![fav, format!("{fav}.ico")],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE embed_cards SET favicon_asset_id = ?1 WHERE card_id = ?2",
-            rusqlite::params![fav, card],
-        )
-        .unwrap();
+impl FaviconFixture {
+    fn new() -> Self {
+        let mut conn = open_in_memory().unwrap();
+        bootstrap::bootstrap(&mut conn).unwrap();
+        let tmp = std::env::temp_dir().join(format!("myspace-favicon-{}", uuid::Uuid::now_v7()));
+        let asset_dir = tmp.join("assets");
+        std::fs::create_dir_all(&asset_dir).unwrap();
+        Self {
+            conn,
+            asset_dir,
+            tmp,
+        }
     }
 
-    let collapsed =
-        myspace_lib::domain::link_metadata::collapse_favicon_duplicates(&mut conn).unwrap();
-    assert_eq!(collapsed, 1, "one duplicate favicon is re-pointed");
-
-    let ids: Vec<String> = {
-        let mut stmt = conn
-            .prepare("SELECT favicon_asset_id FROM embed_cards ORDER BY card_id")
+    /// Registers an Embed card whose own favicon asset holds `bytes`.
+    fn add_card(&mut self, card: &str, favicon: &str, page_url: &str, bytes: &[u8]) {
+        let home: String = self
+            .conn
+            .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+                r.get(0)
+            })
             .unwrap();
-        stmt.query_map([], |r| r.get::<_, String>(0))
+        self.conn
+            .execute(
+                "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'embed', 0, 0, 320, 240, 0, 1, 0, 0)",
+                rusqlite::params![card, home],
+            )
+            .unwrap();
+        self.conn
+            .execute(
+                "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, metadata_status) VALUES (?1, ?2, ?2, 'c', '{}', '', 'ready')",
+                rusqlite::params![card, page_url],
+            )
+            .unwrap();
+        self.conn
+            .execute(
+                "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at) VALUES (?1, ?2, 'image/png', 'favicon_32x32.png', NULL, NULL, ?3, 0)",
+                rusqlite::params![favicon, format!("{favicon}.png"), bytes.len() as i64],
+            )
+            .unwrap();
+        self.conn
+            .execute(
+                "UPDATE embed_cards SET favicon_asset_id = ?1 WHERE card_id = ?2",
+                rusqlite::params![favicon, card],
+            )
+            .unwrap();
+        std::fs::write(self.asset_dir.join(format!("{favicon}.png")), bytes).unwrap();
+    }
+
+    fn collapse(&mut self) -> i64 {
+        myspace_lib::domain::link_metadata::collapse_favicon_duplicates(
+            &mut self.conn,
+            &self.asset_dir,
+        )
+        .unwrap()
+    }
+
+    fn favicon_of(&self, card: &str) -> String {
+        self.conn
+            .query_row(
+                "SELECT favicon_asset_id FROM embed_cards WHERE card_id = ?1",
+                [card],
+                |r| r.get(0),
+            )
             .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap()
-    };
+    }
+
+    fn cache_asset_for(&self, key: &str) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT asset_id FROM favicon_cache WHERE source_url = ?1",
+                [key],
+                |r| r.get(0),
+            )
+            .ok()
+    }
+}
+
+impl Drop for FaviconFixture {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.tmp).ok();
+    }
+}
+
+#[test]
+fn collapse_favicon_duplicates_matches_distinct_videos_sharing_a_favicon() {
+    // The real case the collapse exists for: distinct videos have distinct page
+    // URLs but one favicon, and each card stored its own byte-identical copy
+    // before the runtime cache existed. The card on another host keeps its own.
+    let mut fixture = FaviconFixture::new();
+    fixture.add_card("v1", "f1", "https://www.youtube.com/watch?v=aaa", b"ICON");
+    fixture.add_card("v2", "f2", "https://www.youtube.com/watch?v=bbb", b"ICON");
+    fixture.add_card("v3", "f3", "https://www.youtube.com/watch?v=ccc", b"ICON");
+    fixture.add_card("other", "f4", "https://example.com/article", b"OTHER");
+
+    assert_eq!(fixture.collapse(), 2, "three copies of one icon become one");
+
+    assert_eq!(fixture.favicon_of("v1"), "f1");
+    assert_eq!(fixture.favicon_of("v2"), "f1");
+    assert_eq!(fixture.favicon_of("v3"), "f1");
     assert_eq!(
-        ids,
-        vec!["f1".to_string(), "f1".to_string()],
-        "both cards share f1"
+        fixture.favicon_of("other"),
+        "f4",
+        "a different icon survives"
     );
 
-    let cached: Option<String> = conn
-        .query_row(
-            "SELECT asset_id FROM favicon_cache WHERE source_url = 'https://youtube.com/watch?v=x'",
-            [],
-            |r| r.get(0),
-        )
+    // The collapse only re-points; removing the orphaned rows and files is the
+    // asset GC's job, and it runs right after this at startup.
+    let assets: i64 = fixture
+        .conn
+        .query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(cached.as_deref(), Some("f1"));
-    fs::remove_dir_all(&tmp).ok();
+    assert_eq!(assets, 4, "no asset row is deleted by the collapse");
+}
+
+#[test]
+fn collapse_favicon_duplicates_keeps_same_host_icons_that_differ() {
+    // Identity is the stored bytes, never the page host: two icons served from
+    // one host can be different images, so they must not be merged.
+    let mut fixture = FaviconFixture::new();
+    fixture.add_card("a", "f1", "https://example.com/one", b"ICON-A");
+    fixture.add_card("b", "f2", "https://example.com/two", b"ICON-B");
+
+    assert_eq!(fixture.collapse(), 0, "different bytes stay separate");
+    assert_eq!(fixture.favicon_of("a"), "f1");
+    assert_eq!(fixture.favicon_of("b"), "f2");
+}
+
+#[test]
+fn collapse_favicon_duplicates_repoints_the_runtime_cache() {
+    // The runtime cache is keyed by favicon URL; the old collapse wrote page URLs
+    // into it, which made every lookup miss. Those rows are not identity, so they
+    // are dropped, and rows that point at a merged asset follow the merge.
+    let mut fixture = FaviconFixture::new();
+    fixture.add_card("a", "f1", "https://www.youtube.com/watch?v=aaa", b"ICON");
+    fixture.add_card("b", "f2", "https://www.youtube.com/watch?v=bbb", b"ICON");
+    for (key, asset) in [
+        ("https://www.youtube.com/watch?v=bbb", "f2"),
+        ("https://www.youtube.com/favicon.ico", "f2"),
+    ] {
+        fixture
+            .conn
+            .execute(
+                "INSERT INTO favicon_cache (source_url, asset_id) VALUES (?1, ?2)",
+                rusqlite::params![key, asset],
+            )
+            .unwrap();
+    }
+
+    assert_eq!(fixture.collapse(), 1);
+
+    assert_eq!(
+        fixture.cache_asset_for("https://www.youtube.com/watch?v=bbb"),
+        None,
+        "a page URL is not a favicon identity and must not stay in the cache"
+    );
+    assert_eq!(
+        fixture.cache_asset_for("https://www.youtube.com/favicon.ico"),
+        Some("f1".to_string()),
+        "a real favicon URL follows the merge"
+    );
+}
+
+#[test]
+fn collapse_favicon_duplicates_skips_assets_missing_from_disk() {
+    // A missing file is reported by the GC, not by the collapse: skipping it must
+    // never merge two assets on the strength of an unreadable file.
+    let mut fixture = FaviconFixture::new();
+    fixture.add_card("a", "f1", "https://www.youtube.com/watch?v=aaa", b"ICON");
+    fixture.add_card("b", "f2", "https://www.youtube.com/watch?v=bbb", b"ICON");
+    for missing in ["f1", "f2"] {
+        fs::remove_file(fixture.asset_dir.join(format!("{missing}.png"))).unwrap();
+    }
+
+    assert_eq!(fixture.collapse(), 0, "nothing is merged without bytes");
+    assert_eq!(fixture.favicon_of("a"), "f1");
+    assert_eq!(fixture.favicon_of("b"), "f2");
 }

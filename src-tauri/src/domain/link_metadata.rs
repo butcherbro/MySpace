@@ -24,6 +24,11 @@ use rusqlite::OptionalExtension;
 const MAX_REDIRECTS: usize = 5;
 const TEXT_LIMIT: usize = 2 * 1024 * 1024;
 const IMAGE_LIMIT: usize = 8 * 1024 * 1024;
+/// Largest favicon file the startup collapse is willing to read for comparison.
+const MAX_COMPARED_ASSET_BYTES: usize = 4 * 1024 * 1024;
+/// Total bytes the startup collapse reads in one pass, so a pathological
+/// workspace cannot turn startup into a full asset scan.
+const MAX_COLLAPSE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkMetadata {
@@ -276,57 +281,84 @@ pub fn extract_html_metadata(base_url: &str, html: &str) -> Result<LinkMetadata,
     })
 }
 
-/// Collapses existing duplicate favicons: for each distinct favicon `source_url`
-/// that multiple Link Cards referenced, re-point every card to the first stored
-/// asset and record it in the dedup cache. Runs once at startup; orphaned files
-/// are cleaned by the regular asset GC.
-pub fn collapse_favicon_duplicates(conn: &mut rusqlite::Connection) -> Result<i64, WorkspaceError> {
-    // Favicon URLs live only in embed_cards (enrichment refreshes them); the
-    // simplest deterministic dedup is: per source_url, keep the lowest asset id
-    // among current favicon_asset_id values, re-point the rest, and fill cache.
-    let groups: Vec<(String, Vec<String>)> = {
+/// Collapses existing duplicate favicons onto one stored asset each, so the
+/// regular asset GC can delete the redundant copies. Runs once at startup.
+///
+/// Identity is the stored bytes. The runtime cache keys favicons by their source
+/// URL, but a card's favicon URL was never recorded, so for an asset already on
+/// disk the bytes are the only identity that can be verified: two assets merge
+/// only when their files are byte-for-byte equal. The page host is deliberately
+/// not consulted — one host can serve different icons, and merging those would
+/// silently show a card the wrong image.
+pub fn collapse_favicon_duplicates(
+    conn: &mut rusqlite::Connection,
+    asset_dir: &Path,
+) -> Result<i64, WorkspaceError> {
+    let candidates: Vec<(String, String)> = {
         let mut stmt = conn
             .prepare(
-                "SELECT e.source_url, a.id FROM embed_cards e
-                 JOIN assets a ON a.id = e.favicon_asset_id
-                 WHERE e.favicon_asset_id IS NOT NULL AND e.source_url <> ''
-                 ORDER BY e.source_url, a.id",
+                "SELECT a.id, a.file_path FROM assets a
+                 WHERE a.id IN (
+                     SELECT favicon_asset_id FROM embed_cards WHERE favicon_asset_id IS NOT NULL
+                     UNION SELECT asset_id FROM favicon_cache
+                 )
+                 ORDER BY a.id",
             )
             .map_err(WorkspaceError::from)?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
             .map_err(WorkspaceError::from)?;
-        let mut map: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
-        for row in rows.flatten() {
-            map.entry(row.0).or_default().push(row.1);
-        }
-        map.into_iter().collect()
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(WorkspaceError::from)?
     };
+
+    let mut groups: std::collections::HashMap<Vec<u8>, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut budget = MAX_COLLAPSE_BYTES;
+    for (id, file_path) in candidates {
+        if !crate::is_safe_asset_name(&file_path) {
+            continue;
+        }
+        // A favicon is a few KB; anything larger is not worth reading at startup,
+        // and an unreadable file is skipped rather than treated as a match.
+        let Ok(bytes) = std::fs::read(asset_dir.join(&file_path)) else {
+            continue;
+        };
+        if bytes.len() > MAX_COMPARED_ASSET_BYTES || bytes.len() as u64 > budget {
+            continue;
+        }
+        budget -= bytes.len() as u64;
+        groups.entry(bytes).or_default().push(id);
+    }
 
     let mut collapsed = 0i64;
     let tx = conn.transaction().map_err(WorkspaceError::from)?;
-    for (source_url, asset_ids) in &groups {
-        let Some(first) = asset_ids.first() else {
+    for (_, asset_ids) in groups.iter().filter(|(_, ids)| ids.len() > 1) {
+        let Some(canonical) = asset_ids.first() else {
             continue;
         };
-        // Record the canonical mapping for future enrichment.
-        tx.execute(
-            "INSERT OR REPLACE INTO favicon_cache (source_url, asset_id) VALUES (?1, ?2)",
-            rusqlite::params![source_url, first],
-        )
-        .map_err(WorkspaceError::from)?;
-        // Re-point any embed that uses a later asset id.
-        for asset_id in asset_ids.iter().skip(1) {
-            let changed = tx
+        for duplicate in asset_ids.iter().skip(1) {
+            collapsed += tx
                 .execute(
                     "UPDATE embed_cards SET favicon_asset_id = ?1 WHERE favicon_asset_id = ?2",
-                    rusqlite::params![first, asset_id],
+                    rusqlite::params![canonical, duplicate],
                 )
-                .map_err(WorkspaceError::from)?;
-            collapsed += changed as i64;
+                .map_err(WorkspaceError::from)? as i64;
+            // Keep the URL-keyed cache pointing at an asset that still exists.
+            tx.execute(
+                "UPDATE favicon_cache SET asset_id = ?1 WHERE asset_id = ?2",
+                rusqlite::params![canonical, duplicate],
+            )
+            .map_err(WorkspaceError::from)?;
         }
     }
+    // Page URLs are not favicon identities. Earlier versions wrote them here, and
+    // every row like that makes the runtime lookup miss its own favicon.
+    tx.execute(
+        "DELETE FROM favicon_cache WHERE source_url IN (SELECT source_url FROM embed_cards)",
+        [],
+    )
+    .map_err(WorkspaceError::from)?;
     tx.commit().map_err(WorkspaceError::from)?;
     Ok(collapsed)
 }

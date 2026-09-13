@@ -90,8 +90,15 @@ pub fn run() {
                 .expect("failed to open and bootstrap workspace database");
 
             // Collapse duplicate favicons (10 YouTube links -> 1 asset), then
-            // GC can remove the orphaned copies. Best-effort; never blocks startup.
-            let _ = domain::link_metadata::collapse_favicon_duplicates(&mut conn);
+            // GC can remove the orphaned copies. Best-effort; never blocks startup,
+            // but a failure is reported instead of silently swallowing the sweep.
+            match domain::link_metadata::collapse_favicon_duplicates(&mut conn, &assets_dir) {
+                Ok(collapsed) if collapsed > 0 => {
+                    eprintln!("favicon-dedup: re-pointed {collapsed} card(s)");
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("favicon-dedup: failed: {err}"),
+            }
 
             // Converge any interrupted asset GC: delete orphaned files + rows.
             // Best-effort; a failure never blocks startup, but it is reported so
