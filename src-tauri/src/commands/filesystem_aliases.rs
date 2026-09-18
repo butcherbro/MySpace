@@ -135,6 +135,27 @@ pub fn list_folder_preview(
     }
     Ok(preview)
 }
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathClassification {
+    pub kind: String,
+    pub expanded_path: String,
+}
+
+/// Classifies one pasted clipboard path for the Cmd+V-on-empty-canvas flow
+/// (todo.md №23). `~` expansion happens here (HOME is a backend concern, not
+/// something the WebView should resolve), so the returned `expandedPath` is
+/// what the frontend must use for the follow-up create call.
+#[tauri::command]
+pub fn classify_path(path: String) -> PathClassification {
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let (kind, expanded) = filesystem_alias_service::classify_path(&path, home.as_deref());
+    PathClassification {
+        kind,
+        expanded_path: expanded.to_string_lossy().into_owned(),
+    }
+}
+
 #[tauri::command]
 pub fn classify_drop_paths(paths: Vec<String>) -> Vec<ClassifiedDrop> {
     paths

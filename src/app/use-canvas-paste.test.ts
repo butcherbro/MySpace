@@ -1,7 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { useCanvasPaste } from "./use-canvas-paste";
+import { extractPathCandidate, useCanvasPaste } from "./use-canvas-paste";
 
 function dispatchPaste(target: EventTarget, data: Partial<Record<"text/html" | "text/plain", string>>) {
   const clipboardData = {
@@ -138,5 +138,128 @@ describe("useCanvasPaste", () => {
     expect(onPasteCards).toHaveBeenCalledTimes(1);
     expect(onPaste).toHaveBeenCalledWith({ html: "", text: "just text" });
     canvasDiv.remove();
+  });
+
+  describe("path paste (todo.md №23)", () => {
+    it("hands an existing path to onPastePath and never falls back to onPaste", async () => {
+      const onPaste = vi.fn();
+      const onPastePath = vi.fn().mockResolvedValue(true);
+      renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPastePath }));
+
+      const canvasDiv = document.createElement("div");
+      document.body.appendChild(canvasDiv);
+
+      await act(async () => {
+        dispatchPaste(canvasDiv, { "text/plain": "/Users/bro/Projects/MySpace" });
+        await Promise.resolve();
+      });
+
+      expect(onPastePath).toHaveBeenCalledWith("/Users/bro/Projects/MySpace");
+      expect(onPaste).not.toHaveBeenCalled();
+      canvasDiv.remove();
+    });
+
+    it("falls back to a normal note paste when onPastePath reports a missing path", async () => {
+      const onPaste = vi.fn();
+      const onPastePath = vi.fn().mockResolvedValue(false);
+      renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPastePath }));
+
+      const canvasDiv = document.createElement("div");
+      document.body.appendChild(canvasDiv);
+
+      await act(async () => {
+        dispatchPaste(canvasDiv, { "text/plain": "/Users/bro/does-not-exist" });
+        await Promise.resolve();
+      });
+
+      expect(onPastePath).toHaveBeenCalledWith("/Users/bro/does-not-exist");
+      expect(onPaste).toHaveBeenCalledWith({ html: "", text: "/Users/bro/does-not-exist" });
+      canvasDiv.remove();
+    });
+
+    it("treats a home-relative ~/ path as a path candidate too", async () => {
+      const onPaste = vi.fn();
+      const onPastePath = vi.fn().mockResolvedValue(true);
+      renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPastePath }));
+
+      const canvasDiv = document.createElement("div");
+      document.body.appendChild(canvasDiv);
+
+      await act(async () => {
+        dispatchPaste(canvasDiv, { "text/plain": "~/Projects/MySpace" });
+        await Promise.resolve();
+      });
+
+      expect(onPastePath).toHaveBeenCalledWith("~/Projects/MySpace");
+      canvasDiv.remove();
+    });
+
+    it("never calls onPastePath for multi-line text, even if it starts with /", async () => {
+      const onPaste = vi.fn();
+      const onPastePath = vi.fn().mockResolvedValue(true);
+      renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPastePath }));
+
+      const canvasDiv = document.createElement("div");
+      document.body.appendChild(canvasDiv);
+
+      const multiline = "/not/a/path\nsecond line";
+      await act(async () => {
+        dispatchPaste(canvasDiv, { "text/plain": multiline });
+        await Promise.resolve();
+      });
+
+      expect(onPastePath).not.toHaveBeenCalled();
+      expect(onPaste).toHaveBeenCalledWith({ html: "", text: multiline });
+      canvasDiv.remove();
+    });
+
+    it("never calls onPastePath for plain text that isn't path-shaped", () => {
+      const onPaste = vi.fn();
+      const onPastePath = vi.fn().mockResolvedValue(true);
+      renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPastePath }));
+
+      const canvasDiv = document.createElement("div");
+      document.body.appendChild(canvasDiv);
+
+      act(() => {
+        dispatchPaste(canvasDiv, { "text/plain": "just some text" });
+      });
+
+      expect(onPastePath).not.toHaveBeenCalled();
+      expect(onPaste).toHaveBeenCalledWith({ html: "", text: "just some text" });
+      canvasDiv.remove();
+    });
+  });
+});
+
+describe("extractPathCandidate", () => {
+  it("accepts a single-line absolute path", () => {
+    expect(extractPathCandidate("/Users/bro/Projects/MySpace")).toBe("/Users/bro/Projects/MySpace");
+  });
+
+  it("accepts a single-line home-relative path", () => {
+    expect(extractPathCandidate("~/Projects/MySpace")).toBe("~/Projects/MySpace");
+  });
+
+  it("accepts a bare ~", () => {
+    expect(extractPathCandidate("~")).toBe("~");
+  });
+
+  it("trims a trailing newline the clipboard commonly adds", () => {
+    expect(extractPathCandidate("/Users/bro/Projects/MySpace\n")).toBe("/Users/bro/Projects/MySpace");
+  });
+
+  it("rejects genuinely multi-line text even when it starts with /", () => {
+    expect(extractPathCandidate("/not/a/path\nsecond line")).toBeNull();
+  });
+
+  it("rejects text that doesn't start with / or ~/", () => {
+    expect(extractPathCandidate("just some text")).toBeNull();
+    expect(extractPathCandidate("relative/path")).toBeNull();
+  });
+
+  it("rejects empty/whitespace-only text", () => {
+    expect(extractPathCandidate("")).toBeNull();
+    expect(extractPathCandidate("   ")).toBeNull();
   });
 });

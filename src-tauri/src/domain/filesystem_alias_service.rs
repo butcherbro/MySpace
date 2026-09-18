@@ -345,3 +345,35 @@ fn mime_for_ext(ext: Option<&str>) -> Option<String> {
         .map(str::to_owned)
     })
 }
+
+/// Classifies a single pasted path (todo.md №23, Cmd+V on the empty canvas):
+/// `~`/`~/...` is expanded against `home_dir` first (so it resolves the same
+/// way Finder/the shell would), then the expanded path is checked against the
+/// filesystem. Returns `("folder" | "file" | "missing", expanded_path)` — a
+/// missing path is the signal for the caller to fall back to a plain-text
+/// note paste instead of creating a shortcut/file card.
+pub fn classify_path(raw: &str, home_dir: Option<&Path>) -> (String, PathBuf) {
+    let expanded = expand_home(raw, home_dir);
+    let path = PathBuf::from(&expanded);
+    let kind = if path.is_dir() {
+        "folder"
+    } else if path.is_file() {
+        "file"
+    } else {
+        "missing"
+    };
+    (kind.to_string(), path)
+}
+
+fn expand_home(raw: &str, home_dir: Option<&Path>) -> String {
+    let Some(home) = home_dir else {
+        return raw.to_string();
+    };
+    if raw == "~" {
+        return home.to_string_lossy().into_owned();
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return home.join(rest).to_string_lossy().into_owned();
+    }
+    raw.to_string()
+}

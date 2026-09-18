@@ -246,3 +246,51 @@ fn classify_drop_marks_text_files() {
     assert_eq!(classify_drop(Path::new("/a/sheet.xlsx")).0, "office_file");
     assert_eq!(classify_drop(Path::new("/a/report.pdf")).0, "office_file");
 }
+
+#[test]
+fn classify_path_distinguishes_folder_file_and_missing() {
+    use myspace_lib::domain::filesystem_alias_service::classify_path;
+    let root = std::env::temp_dir().join(format!("myspace-classify-path-{}", uuid::Uuid::now_v7()));
+    fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    fs::write(&file, b"x").unwrap();
+
+    let (kind, expanded) = classify_path(root.to_str().unwrap(), None);
+    assert_eq!(kind, "folder");
+    assert_eq!(expanded, root);
+
+    let (kind, expanded) = classify_path(file.to_str().unwrap(), None);
+    assert_eq!(kind, "file");
+    assert_eq!(expanded, file);
+
+    let missing = root.join("does-not-exist.txt");
+    let (kind, expanded) = classify_path(missing.to_str().unwrap(), None);
+    assert_eq!(kind, "missing");
+    assert_eq!(expanded, missing);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn classify_path_expands_tilde_against_home_dir() {
+    use myspace_lib::domain::filesystem_alias_service::classify_path;
+    let home = std::env::temp_dir().join(format!("myspace-classify-home-{}", uuid::Uuid::now_v7()));
+    fs::create_dir_all(home.join("Projects")).unwrap();
+
+    // Bare `~` expands to home_dir itself.
+    let (kind, expanded) = classify_path("~", Some(&home));
+    assert_eq!(kind, "folder");
+    assert_eq!(expanded, home);
+
+    // `~/rest` expands relative to home_dir.
+    let (kind, expanded) = classify_path("~/Projects", Some(&home));
+    assert_eq!(kind, "folder");
+    assert_eq!(expanded, home.join("Projects"));
+
+    // Without a home_dir (unresolved HOME env var), the raw `~` path is used
+    // as-is and — since it is not a real path on disk — comes back missing.
+    let (kind, _expanded) = classify_path("~/Projects", None);
+    assert_eq!(kind, "missing");
+
+    fs::remove_dir_all(&home).unwrap();
+}

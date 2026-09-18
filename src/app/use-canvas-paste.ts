@@ -14,6 +14,28 @@ export interface CanvasPasteOptions {
    * (todo.md №15) if it holds anything. Returns whether it handled the paste.
    */
   onPasteCards?: () => boolean;
+  /**
+   * Checked second, before text/html: a single-line clipboard text that looks
+   * like a filesystem path (`/…` or `~/…`, todo.md №23). Resolves to whether
+   * it was handled (an existing folder/file became a shortcut/file card) — a
+   * missing path resolves `false`, and the paste falls through to the normal
+   * text/html note below.
+   */
+  onPastePath?: (path: string) => Promise<boolean>;
+}
+
+/**
+ * A single-line clipboard string shaped like an absolute or home-relative
+ * filesystem path. Multi-line text is never a path candidate — even one that
+ * starts with `/` — so a copied code snippet or log excerpt keeps going to
+ * the normal note paste instead of a (failed) existence check.
+ */
+export function extractPathCandidate(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes("\n") || trimmed.includes("\r")) return null;
+  if (trimmed.startsWith("/") || trimmed.startsWith("~/") || trimmed === "~") return trimmed;
+  return null;
 }
 
 /**
@@ -30,7 +52,7 @@ export interface CanvasPasteOptions {
  * canvas-paste path existed before this hook, and building it is out of scope
  * for formatted-text paste (todo.md №13).
  */
-export function useCanvasPaste({ enabled, onPaste, onPasteCards }: CanvasPasteOptions): void {
+export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath }: CanvasPasteOptions): void {
   useEffect(() => {
     if (!enabled) return;
 
@@ -59,11 +81,23 @@ export function useCanvasPaste({ enabled, onPaste, onPasteCards }: CanvasPasteOp
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!html.trim() && !text.trim()) return;
 
+      // A path candidate is checked before the plain text/html paste below,
+      // but only a *missing* path falls through to it — an existing
+      // folder/file is consumed here and must not also become a note.
+      const pathCandidate = onPastePath ? extractPathCandidate(text) : null;
+      if (pathCandidate) {
+        e.preventDefault();
+        void onPastePath!(pathCandidate).then((handled) => {
+          if (!handled) onPaste({ html, text });
+        });
+        return;
+      }
+
       e.preventDefault();
       onPaste({ html, text });
     }
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [enabled, onPaste, onPasteCards]);
+  }, [enabled, onPaste, onPasteCards, onPastePath]);
 }

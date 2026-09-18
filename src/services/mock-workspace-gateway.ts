@@ -20,6 +20,7 @@ import type {
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
   DropPathClassificationDto,
+  PathClassificationDto,
   FileCardDto,
   FilesystemAliasDto,
   FolderPreviewDto,
@@ -605,6 +606,23 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       }
       return { path, kind: "unsupported", fileName, mimeType: null };
     }));
+  }
+
+  classifyPath(path: string): Promise<PathClassificationDto> {
+    // No real filesystem in the browser/mock harness: `~` expands to a fake
+    // home, a "does-not-exist" segment simulates a missing path (used by e2e/
+    // manual paste testing), and otherwise the same extension heuristic as
+    // classifyDropPaths above decides folder vs file.
+    let expandedPath = path;
+    if (path === "~") expandedPath = "/mock/home";
+    else if (path.startsWith("~/")) expandedPath = `/mock/home/${path.slice(2)}`;
+
+    if (expandedPath.includes("does-not-exist")) {
+      return Promise.resolve({ kind: "missing", expandedPath });
+    }
+    const fileName = expandedPath.split("/").filter(Boolean).pop() ?? expandedPath;
+    const kind = fileName.includes(".") ? "file" : "folder";
+    return Promise.resolve({ kind, expandedPath });
   }
 
   openFolderInFinder(cardId: string): Promise<void> {

@@ -52,7 +52,7 @@ import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
-import { pickImageFile } from "./services/asset-picker";
+import { pickFolder, pickImageFile } from "./services/asset-picker";
 import { computeInitialImageFrameSize, loadNaturalImageSize } from "./cards/image/image-card-geometry";
 import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
@@ -67,6 +67,7 @@ import type {
   FilesystemAliasDto,
   ImageCardDto,
   NoteCardDto,
+  PathClassificationDto,
   QuickBoardDto,
   BoardSnapshot,
   WorkspaceGateway,
@@ -633,6 +634,17 @@ function App() {
     [gateway, idGenerator],
   );
 
+  // "Add Folder Shortcut…" on the pane context menu (todo.md №23): the native
+  // folder picker, then the same creation call as a Finder drop/pasted path.
+  const handleAddFolderShortcutViaDialog = useCallback(
+    async (boardX: number, boardY: number) => {
+      const picked = await pickFolder();
+      if (!picked) return;
+      await createFolderShortcut(picked, boardX, boardY);
+    },
+    [createFolderShortcut],
+  );
+
   const openFileCard = useCallback(
     (cardId: string) => {
       void gateway.openFileCard(cardId).catch((e) => dispatch({ type: "failed", message: errorMessage(e) }));
@@ -682,6 +694,43 @@ function App() {
   // (Telegram/browser copy) keeps its bold/italic/strike/paragraphs/lists —
   // pasting *into* an open note editor already gets this for free from
   // ProseMirror's own paste handling, so this only covers the canvas-level case.
+  // Cmd+V on the empty canvas with a filesystem path on the clipboard
+  // (todo.md №23): an existing folder becomes a folder shortcut, an existing
+  // file becomes a File Card (copy-in), both under the cursor — same backend
+  // calls as native Finder drag-drop. `false` (path missing on disk) tells
+  // `useCanvasPaste` to fall through to the normal text/html note paste.
+  const handlePastePath = useCallback(
+    async (path: string): Promise<boolean> => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard) return false;
+      let classification: PathClassificationDto;
+      try {
+        classification = await gateway.classifyPath(path);
+      } catch (e) {
+        dispatch({ type: "failed", message: errorMessage(e) });
+        // The lookup itself failed (not "missing") — do not also fall back to
+        // pasting the raw path text as a note; the error banner already
+        // surfaced the problem.
+        return true;
+      }
+      if (classification.kind === "missing") return false;
+
+      const cursor = lastCanvasPointRef.current ?? fallbackPastePosition();
+      if (classification.kind === "folder") {
+        await createFolderShortcut(classification.expandedPath, cursor.x - 180, cursor.y - 150);
+      } else {
+        const fileName = classification.expandedPath.split("/").pop() || classification.expandedPath;
+        await createFileCard(
+          { path: classification.expandedPath, fileName, mimeType: "application/octet-stream" },
+          cursor.x,
+          cursor.y,
+        );
+      }
+      return true;
+    },
+    [gateway, createFolderShortcut, createFileCard, fallbackPastePosition],
+  );
+
   const handleCanvasPaste = useCallback(
     ({ html, text }: { html: string; text: string }) => {
       const useHtml = html.trim().length > 0;
@@ -762,7 +811,12 @@ function App() {
     return true;
   }, [board, dispatcher, idGenerator, fallbackPastePosition]);
 
-  useCanvasPaste({ enabled: Boolean(board), onPaste: handleCanvasPaste, onPasteCards: handlePasteCards });
+  useCanvasPaste({
+    enabled: Boolean(board),
+    onPaste: handleCanvasPaste,
+    onPasteCards: handlePasteCards,
+    onPastePath: handlePastePath,
+  });
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {
@@ -2275,6 +2329,12 @@ function App() {
                 label: "Add Board",
                 onSelect: () =>
                   void handleCreateChildBoard({ x: paneContextMenu.flowX, y: paneContextMenu.flowY }),
+              },
+              {
+                id: "add-folder-shortcut",
+                label: "Add Folder Shortcut…",
+                onSelect: () =>
+                  void handleAddFolderShortcutViaDialog(paneContextMenu.flowX, paneContextMenu.flowY),
               },
               { id: "copy-board-link", label: "Copy MySpace Link", onSelect: () => void handleCopyBoardLink() },
             ]}

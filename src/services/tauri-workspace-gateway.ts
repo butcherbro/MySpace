@@ -22,6 +22,7 @@ import type {
   FileCardDto,
   ImportAssetInput,
   DropPathClassificationDto,
+  PathClassificationDto,
   FilesystemAliasDto,
   FolderPreviewDto,
   MoveBoardInput,
@@ -145,6 +146,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]> {
     return invoke<DropPathClassificationDto[]>("classify_drop_paths", { paths });
+  }
+
+  classifyPath(path: string): Promise<PathClassificationDto> {
+    return invoke<PathClassificationDto>("classify_path", { path });
   }
 
   openFolderInFinder(cardId: string): Promise<void> {

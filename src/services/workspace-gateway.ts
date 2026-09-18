@@ -369,6 +369,14 @@ export interface DropPathClassificationDto {
   mimeType: string | null;
 }
 
+/** Existence check for one pasted clipboard path (todo.md №23). `~`
+ *  expansion happens on the backend; `expandedPath` is the resolved path to
+ *  use for the follow-up create call. */
+export interface PathClassificationDto {
+  kind: "folder" | "file" | "missing";
+  expandedPath: string;
+}
+
 export interface UpdateImageCaptionInput {
   id: string;
   expectedRevision: number;
@@ -513,6 +521,7 @@ export interface WorkspaceGateway {
   createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto>;
   listFolderPreview(cardId: string, limit: number): Promise<FolderPreviewDto>;
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]>;
+  classifyPath(path: string): Promise<PathClassificationDto>;
   openFolderInFinder(cardId: string): Promise<void>;
   createFileCard(input: CreateFileCardInput): Promise<FileCardDto>;
   openFileCard(cardId: string): Promise<void>;

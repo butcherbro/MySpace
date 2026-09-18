@@ -38,6 +38,23 @@ export async function pickImageFile(): Promise<PickedImage | null> {
   };
 }
 
+/**
+ * Opens the native folder picker and returns the selected directory's path,
+ * or `null` when the user cancels (todo.md №23, "Add Folder Shortcut…" on the
+ * pane context menu). In a non-Tauri (browser) context this resolves to
+ * `null` — there is no native dialog there, mirroring `pickImageFile` above.
+ */
+export async function pickFolder(): Promise<string | null> {
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (!isTauri) return null;
+
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({ directory: true, multiple: false });
+
+  if (!selected || Array.isArray(selected)) return null;
+  return selected;
+}
+
 function fileNameFromPath(path: string): string {
   const parts = path.split("/");
   return parts[parts.length - 1] ?? path;
