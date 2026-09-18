@@ -21,7 +21,7 @@ pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, Worksp
     let batch_id = uuid::Uuid::now_v7().to_string();
     let changed = conn.execute(
         "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-         WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file') AND deleted_at IS NULL",
+         WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut') AND deleted_at IS NULL",
         params![now, batch_id, card_id],
     )?;
     if changed == 0 {
@@ -96,6 +96,25 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
         params![board_id, now, batch_id],
     )?;
 
+    // Cascade to every shortcut pointing anywhere in the trashed subtree
+    // (todo.md №17): the same batch, so restoring the batch brings them back too.
+    tx.execute(
+        "UPDATE cards
+         SET deleted_at = ?2, trash_batch_id = ?3
+         WHERE kind = 'board_shortcut' AND deleted_at IS NULL
+           AND id IN (
+              SELECT card_id FROM board_shortcut_cards WHERE target_board_id IN (
+                  WITH RECURSIVE subtree(id) AS (
+                      SELECT id FROM boards WHERE id = ?1
+                      UNION ALL
+                      SELECT b.id FROM boards b JOIN subtree s ON b.parent_board_id = s.id
+                  )
+                  SELECT id FROM subtree
+              )
+           )",
+        params![board_id, now, batch_id],
+    )?;
+
     tx.commit()?;
     Ok(batch_id)
 }
@@ -143,6 +162,25 @@ fn trash_board_in_tx(
         params![board_id, now, batch_id],
     )?;
 
+    // Cascade to every shortcut pointing anywhere in the trashed subtree
+    // (todo.md №17), same batch id as above.
+    tx.execute(
+        "UPDATE cards
+         SET deleted_at = ?2, trash_batch_id = ?3
+         WHERE kind = 'board_shortcut' AND deleted_at IS NULL
+           AND id IN (
+              SELECT card_id FROM board_shortcut_cards WHERE target_board_id IN (
+                  WITH RECURSIVE subtree(id) AS (
+                      SELECT id FROM boards WHERE id = ?1
+                      UNION ALL
+                      SELECT b.id FROM boards b JOIN subtree s ON b.parent_board_id = s.id
+                  )
+                  SELECT id FROM subtree
+              )
+           )",
+        params![board_id, now, batch_id],
+    )?;
+
     Ok(())
 }
 
@@ -183,7 +221,7 @@ pub fn trash_selection(
                 // leaf card: note / image / embed / filesystem alias
                 let changed = tx.execute(
                     "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-                     WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file') AND deleted_at IS NULL",
+                     WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut') AND deleted_at IS NULL",
                     params![now, batch_id, item.id],
                 )?;
                 if changed == 0 {
@@ -278,6 +316,10 @@ pub fn empty_trash(
     )?;
     tx.execute(
         "DELETE FROM filesystem_aliases WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM board_shortcut_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
         [],
     )?;
     tx.execute(
@@ -440,7 +482,8 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     fpa.width AS file_preview_width, fpa.height AS file_preview_height,
                     fpa.size_bytes AS file_preview_size_bytes,
                     fpa.file_path AS file_preview_file_path,
-                    fcard.preview_asset_id AS file_preview_asset_id
+                    fcard.preview_asset_id AS file_preview_asset_id,
+                    shortcut_board.title AS shortcut_target_title
              FROM cards c
              LEFT JOIN note_cards n ON n.card_id = c.id
              LEFT JOIN image_cards i ON i.card_id = c.id
@@ -452,6 +495,8 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
              LEFT JOIN file_cards fcard ON fcard.card_id = c.id
              LEFT JOIN assets filea ON filea.id = fcard.asset_id
              LEFT JOIN assets fpa ON fpa.id = fcard.preview_asset_id
+             LEFT JOIN board_shortcut_cards bsc ON bsc.card_id = c.id
+             LEFT JOIN boards shortcut_board ON shortcut_board.id = bsc.target_board_id
              WHERE c.deleted_at IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -480,6 +525,11 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     // A File Card has no text of its own: it is named by its file.
                     "file" => row
                         .get::<_, Option<String>>("file_asset_file_name")?
+                        .unwrap_or_default(),
+                    // A shortcut is named by the board it points at — falls back to
+                    // empty when the target row is itself gone (broken shortcut).
+                    "board_shortcut" => row
+                        .get::<_, Option<String>>("shortcut_target_title")?
                         .unwrap_or_default(),
                     _ => String::new(),
                 };

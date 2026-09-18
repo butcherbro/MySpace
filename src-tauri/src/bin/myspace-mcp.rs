@@ -402,6 +402,7 @@ fn handle_tool_call(
                         myspace_lib::domain::models::CardDto::Embed(e) => e.revision,
                         myspace_lib::domain::models::CardDto::FilesystemAlias(a) => a.revision,
                         myspace_lib::domain::models::CardDto::File(f) => f.revision,
+                        myspace_lib::domain::models::CardDto::BoardShortcut(s) => s.revision,
                     },
                     Err(e) => {
                         results.push(serde_json::json!({ "id": id, "status": "failed", "error": e.to_string() }));

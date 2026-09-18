@@ -6,6 +6,7 @@
 // Quick Boards live in their own aggregate module; re-exported so every existing
 // `workspace_repository::…` path keeps working.
 pub use super::assets::*;
+pub use super::board_shortcuts::*;
 pub use super::boards::*;
 pub use super::cards::*;
 pub use super::move_selection::*;

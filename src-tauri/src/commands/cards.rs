@@ -7,10 +7,10 @@ use tauri::State;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    CardDto, ConvertNoteToEmbedInput, CreateImageCardInput, CreateNoteInput, EmbedCardDto,
-    MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, PlaceUnsortedCardInput,
-    SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
-    UpdateNoteInput,
+    CardDto, ConvertNoteToEmbedInput, CreateBoardShortcutInput, CreateImageCardInput,
+    CreateNoteInput, EmbedCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
+    PlaceUnsortedCardInput, SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
+    UpdateImageCaptionInput, UpdateNoteInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -36,6 +36,19 @@ pub fn create_image_card(
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     workspace_repository::create_image_card(&mut conn, &input)
+}
+
+/// Creates a board shortcut card (todo.md №17): "Create shortcut" on a Board
+/// Portal or on another shortcut. Returns the created card's full projection.
+#[tauri::command]
+pub fn create_board_shortcut(
+    db: DbState<'_>,
+    input: CreateBoardShortcutInput,
+) -> Result<CardDto, WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    workspace_repository::create_board_shortcut(&mut conn, &input)
 }
 
 /// Updates a note's content with an optimistic revision guard.

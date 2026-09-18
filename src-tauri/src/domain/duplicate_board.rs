@@ -271,6 +271,21 @@ fn copy_board_subtree(
                     params![new_card_id, asset_id, mime_type, preview_text, source_path, preview_asset_id],
                 )?;
             }
+            "board_shortcut" => {
+                // A shortcut's copy points at the SAME target board as the
+                // original — it is never remapped to a duplicated descendant,
+                // even if the shortcut happens to point at a board inside this
+                // same subtree. See docs/decisions/0010-board-shortcuts.md.
+                let target_board_id: String = tx.query_row(
+                    "SELECT target_board_id FROM board_shortcut_cards WHERE card_id = ?1",
+                    [card.id.as_str()],
+                    |r| r.get(0),
+                )?;
+                tx.execute(
+                    "INSERT INTO board_shortcut_cards (card_id, target_board_id) VALUES (?1, ?2)",
+                    params![new_card_id, target_board_id],
+                )?;
+            }
             "board_portal" => {
                 // A nested Board Portal: recursively duplicate its own target
                 // board too, then point the copied portal card at the copy.

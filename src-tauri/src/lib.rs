@@ -158,6 +158,7 @@ pub fn run() {
             commands::cards::create_note,
             commands::cards::read_card,
             commands::cards::create_image_card,
+            commands::cards::create_board_shortcut,
             commands::cards::update_note,
             commands::cards::set_note_color,
             commands::cards::update_image_caption,

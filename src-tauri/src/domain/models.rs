@@ -147,6 +147,49 @@ pub struct FilesystemAliasDto {
     pub display_name: String,
 }
 
+/// The target board's identity, as seen through a shortcut. `None` when the
+/// target board no longer exists or is itself trashed (an old/broken shortcut,
+/// todo.md №17) — the frontend renders a broken tile instead of crashing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardShortcutTarget {
+    pub id: String,
+    pub board_revision: i64,
+    pub title: String,
+    pub color_token: String,
+    pub symbol: Option<String>,
+    pub cover_asset: Option<AssetDto>,
+}
+
+/// A board shortcut card: an alias that points at a board without owning it
+/// (ownership stays with `board_portal_cards`). Identity (cover/color/symbol/
+/// title) is read live through `target_board_id` — never copied — so a rename
+/// of the target board is visible immediately.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardShortcutDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    pub target_board_id: String,
+    pub target: Option<BoardShortcutTarget>,
+}
+
+/// Input for creating a board shortcut (todo.md №17): "Create shortcut" on a
+/// Board Portal or on another shortcut targeting the same board. A shortcut
+/// never targets another shortcut — only a real board id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBoardShortcutInput {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub target_board_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderEntryDto {
@@ -232,6 +275,8 @@ pub enum CardDto {
     FilesystemAlias(FilesystemAliasDto),
     #[serde(rename = "file")]
     File(FileCardDto),
+    #[serde(rename = "board_shortcut")]
+    BoardShortcut(BoardShortcutDto),
 }
 
 impl CardDto {
@@ -244,6 +289,7 @@ impl CardDto {
             CardDto::Embed(e) => &e.id,
             CardDto::FilesystemAlias(a) => &a.id,
             CardDto::File(f) => &f.id,
+            CardDto::BoardShortcut(s) => &s.id,
         }
     }
 }

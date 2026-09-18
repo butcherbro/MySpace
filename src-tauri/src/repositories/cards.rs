@@ -349,6 +349,14 @@ pub(super) fn load_cards(
         }
     }
 
+    // Board shortcuts (todo.md №17): identity is read live via the target
+    // board's own row, never copied.
+    {
+        let shortcuts =
+            super::board_shortcuts::load_board_shortcuts(conn, board_id, unsorted_flag)?;
+        out.extend(shortcuts);
+    }
+
     Ok(out)
 }
 
@@ -615,6 +623,7 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
                 }))
             }
         ).map_err(WorkspaceError::from),
+        "board_shortcut" => super::board_shortcuts::load_board_shortcut_card(conn, card_id),
         other => Err(WorkspaceError::ConstraintViolation(format!(
             "unknown card kind: {other}"
         ))),
@@ -1283,7 +1292,7 @@ pub fn move_card_to_board(
     let changed = tx.execute(
         "UPDATE cards
          SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4
-         WHERE id = ?5 AND revision = ?6 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file')",
+         WHERE id = ?5 AND revision = ?6 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut')",
         params![
             input.target_board_id,
             dest_x,
@@ -1344,7 +1353,7 @@ pub fn move_cards_to_board_unsorted(
     // Validate every card revision up front so a stale one rolls back the batch.
     for item in &input.cards {
         let actual: i64 = tx.query_row(
-            "SELECT revision FROM cards WHERE id = ?1 AND kind IN ('note','image','embed','filesystem_alias','file')",
+            "SELECT revision FROM cards WHERE id = ?1 AND kind IN ('note','image','embed','filesystem_alias','file','board_shortcut')",
             [item.id.as_str()],
             |r| r.get(0),
         )?;
@@ -1360,7 +1369,7 @@ pub fn move_cards_to_board_unsorted(
         tx.execute(
             "UPDATE cards
              SET board_id = ?1, unsorted = 1, revision = revision + 1, updated_at = ?2
-             WHERE id = ?3 AND revision = ?4 AND kind IN ('note','image','embed','filesystem_alias','file')",
+             WHERE id = ?3 AND revision = ?4 AND kind IN ('note','image','embed','filesystem_alias','file','board_shortcut')",
             params![input.target_board_id, now, item.id, item.expected_revision],
         )?;
     }
@@ -1379,7 +1388,7 @@ pub fn place_unsorted_card(
     let changed = conn.execute(
         "UPDATE cards
          SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
-         WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed','filesystem_alias','file')",
+         WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed','filesystem_alias','file','board_shortcut')",
         params![
             input.frame.x,
             input.frame.y,
