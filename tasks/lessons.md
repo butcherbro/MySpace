@@ -170,3 +170,35 @@
 - User-approved V1 scope: the folder shortcut is resizable from the bottom-right
   corner, but only the direct Finder link and shallow live preview ship first.
   In-card navigation/expansion and copied File Cards remain later slices.
+
+## 2026-09-18 — readCard-before-move narrows the draft-flush race, it does not close it
+
+- The 2026-09-08 fix (refresh each leaf's revision via `readCard` right before
+  `move_cards_to_board_unsorted` / `move_selection_to_board`) leaves a second,
+  smaller window open: the blur-triggered draft flush (`update_note`) can still
+  land *between* that `readCard` response and the move's own IPC round-trip.
+  The bigger the note, the slower the flush write, the wider that window — this
+  is why the drop-onto-a-board-portal bug was reported as "mostly with large
+  multiline notes". The backend correctly refuses the whole atomic move on the
+  stale expectation (ADR-0007); the frontend just had no retry, so a genuine
+  race looked to the user like the card had vanished (it stayed on the source
+  board with only an error banner, never reaching the target's Unsorted panel).
+- Fix: `src/canvas/move-selection-onto-board.ts` centralizes the
+  readCard-refresh + `MoveSelectionCommand` call for both cross-board drop
+  paths (on-canvas portal drop in `src/App.tsx`'s `handleCardsDroppedOnBoard`,
+  and the breadcrumb/tab cross-board drag in `handleCardDragEnd`) and retries
+  once, re-reading revisions again, on a `stale_revision` refusal. Two call
+  sites had copy-pasted the same vulnerable pattern; one shared helper closes
+  the race in both instead of just one.
+- Also fixed in `src/services/error-message.ts`: a serde tuple-content
+  `WorkspaceError` variant (e.g. `StaleRevision { expected, actual }`)
+  serializes as `{ code, message: {expected, actual} }` — `message` is an
+  OBJECT, not a string, so the old code fell through to the bare `code`
+  ("stale_revision" with no numbers). This made the one error a user might
+  have seen during the race completely uninformative.
+- Lesson: a documented single-attempt "refresh the revision right before
+  sending" is a mitigation, not a fix, for a race against an independent async
+  write triggered by the same gesture (blur flush on drag start). Any
+  read-then-write-elsewhere-then-write pattern like this needs either a retry
+  bounded by the specific error it's guarding against, or the write it's
+  racing against must itself be awaited before the read.

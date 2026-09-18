@@ -20,6 +20,17 @@ export function errorMessage(err: unknown): string {
       return obj.message;
     }
 
+    // A serde tuple-content variant (e.g. `StaleRevision { expected, actual }`)
+    // carries its fields as an OBJECT under `message`, not a string. Without
+    // this, it fell through to the bare `obj.code` below ("stale_revision"
+    // with no numbers), which reads as an opaque, unactionable banner.
+    if (typeof obj.code === "string" && obj.message && typeof obj.message === "object") {
+      const fields = Object.entries(obj.message as Record<string, unknown>)
+        .map(([key, value]) => `${key} ${value}`)
+        .join(", ");
+      return fields ? `${obj.code}: ${fields}` : obj.code;
+    }
+
     if (typeof obj.code === "string") return obj.code;
 
     // Last resort: a structured value without a message field.

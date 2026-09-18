@@ -8,13 +8,13 @@ import {
 import { useTrashController } from "./app/use-trash-controller";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
+import { moveSelectionOntoBoard } from "./canvas/move-selection-onto-board";
 import type { CanvasCard } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand, SetNoteColorCommand } from "./commands/card-commands";
 import {
   CreateChildBoardCommand,
   MoveBoardCommand,
-  MoveSelectionCommand,
   RenameBoardCommand,
 } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
@@ -911,38 +911,23 @@ function App() {
         // One atomic call for the whole selection, and the state is mirrored from
         // the receipt the backend returned rather than recomputed locally.
         const currentBoardId = boardRef.current?.id;
-        // Refresh each leaf's revision first: the backend rejects the WHOLE atomic
-        // move on one stale expectation, so a draft save that bumped a revision
-        // after the drag began must not abort the group.
-        void Promise.all(
-          leafCards.map((c) =>
-            gateway
-              .readCard(c.id)
-              .then((fresh) => ({
-                id: c.id,
-                expectedRevision:
-                  fresh && "revision" in fresh
-                    ? (fresh as { revision: number }).revision
-                    : c.revision,
-              }))
-              .catch(() => ({ id: c.id, expectedRevision: c.revision })),
-          ),
-        )
-          .then((cards) =>
-            dispatcher.execute(
-              new MoveSelectionCommand(idGenerator.nextId(), {
-                idempotencyKey: idGenerator.nextId(),
-                targetBoardId,
-                cards,
-                boards: portals.map((p) => ({
-                  boardId: p.target.id,
-                  expectedBoardRevision: p.target.boardRevision,
-                  expectedPortalRevision: p.revision,
-                })),
-                leafPlacement: "unsorted",
-              }),
-            ),
-          )
+        // moveSelectionOntoBoard refreshes each leaf's revision via readCard and
+        // retries once on a stale-revision refusal: a draft save (blur flush) can
+        // still land in the gap between that refresh and the move's own IPC call,
+        // especially for a large note whose write is slower than the drag gesture
+        // (tasks/lessons.md 2026-09-08; tasks/lessons.md 2026-09-18).
+        void moveSelectionOntoBoard({
+          gateway,
+          dispatcher,
+          idGenerator,
+          targetBoardId,
+          leafCards,
+          portals: portals.map((p) => ({
+            boardId: p.target.id,
+            boardRevision: p.target.boardRevision,
+            portalRevision: p.revision,
+          })),
+        })
           .then((receipt) => {
             if (receipt.cards.length > 0) {
               if (receipt.targetBoardId === currentBoardId) {
@@ -1344,35 +1329,21 @@ function App() {
             };
 
             if (leafSanps.length > 0 || portals.length > 0) {
-              void Promise.all(
-                leafSanps.map((c) =>
-                  gateway
-                    .readCard(c.cardId)
-                    .then((fresh) => ({
-                      id: c.cardId,
-                      expectedRevision:
-                        fresh && "revision" in fresh
-                          ? (fresh as { revision: number }).revision
-                          : c.revision,
-                    }))
-                    .catch(() => ({ id: c.cardId, expectedRevision: c.revision })),
-                ),
-              )
-                .then((cards) =>
-                  dispatcher.execute(
-                    new MoveSelectionCommand(idGenerator.nextId(), {
-                      idempotencyKey: idGenerator.nextId(),
-                      targetBoardId: target,
-                      cards,
-                      boards: portals.map((p) => ({
-                        boardId: p.targetBoardId,
-                        expectedBoardRevision: p.boardRevision,
-                        expectedPortalRevision: p.revision,
-                      })),
-                      leafPlacement: "unsorted",
-                    }),
-                  ),
-                )
+              // Same retry-on-stale-revision helper as the on-canvas portal drop:
+              // a draft flush (blur) can still bump a leaf's revision in the gap
+              // between the readCard refresh and this call's own IPC round-trip.
+              void moveSelectionOntoBoard({
+                gateway,
+                dispatcher,
+                idGenerator,
+                targetBoardId: target,
+                leafCards: leafSanps.map((c) => ({ id: c.cardId, revision: c.revision })),
+                portals: portals.map((p) => ({
+                  boardId: p.targetBoardId,
+                  boardRevision: p.boardRevision,
+                  portalRevision: p.revision,
+                })),
+              })
                 .then(finish)
                 .catch((err) => {
                   dispatch({ type: "failed", message: errorMessage(err) });

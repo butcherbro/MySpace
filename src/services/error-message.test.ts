@@ -23,6 +23,16 @@ describe("errorMessage", () => {
     expect(errorMessage({ code: "root_board_protected" })).toBe("root_board_protected");
   });
 
+  it("renders a tuple-content WorkspaceError (StaleRevision) instead of the bare code", () => {
+    // Rust's `#[serde(tag = "code", content = "message")]` serialises
+    // `StaleRevision { expected, actual }` as `{ code: "stale_revision",
+    // message: { expected, actual } }` — `message` is an object, not a
+    // string, so the old code fell through to the uninformative bare code.
+    expect(errorMessage({ code: "stale_revision", message: { expected: 3, actual: 4 } })).toBe(
+      "stale_revision: expected 3, actual 4",
+    );
+  });
+
   it("handles null/undefined/number", () => {
     expect(errorMessage(null)).toBe("null");
     expect(errorMessage(undefined)).toBe("undefined");
