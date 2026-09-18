@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
+import { EmptyBoardHint } from "./app/EmptyBoardHint";
 import {
   confirmAbandonWithDialog,
   destroyWindow,
@@ -2056,11 +2057,7 @@ function App() {
               });
             }}
           />
-          {notes.length === 0 && !error && (
-            <div className="workspace__empty">
-              Click “New note” to create your first note.
-            </div>
-          )}
+          <EmptyBoardHint cards={state.cards} error={error} />
         </div>
       </div>
     </AppShell>
