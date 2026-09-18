@@ -9,6 +9,8 @@ interface ToolButtonProps {
   active?: boolean;
   /** Optional mousedown handler (e.g. keep editor focus for formatting tools). */
   onMouseDown?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  /** Distinct accent tone (e.g. "board" — reads as a board even amid other tools). */
+  tone?: "board";
 }
 
 export function ToolButton({
@@ -18,11 +20,14 @@ export function ToolButton({
   onClick,
   active = false,
   onMouseDown,
+  tone,
 }: ToolButtonProps) {
   return (
     <button
       type="button"
-      className={`tool-button${active ? " tool-button--active" : ""}`}
+      className={`tool-button${active ? " tool-button--active" : ""}${
+        tone ? ` tool-button--${tone}` : ""
+      }`}
       onClick={onClick}
       onMouseDown={onMouseDown}
       title={label}

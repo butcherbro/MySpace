@@ -39,6 +39,15 @@ describe("ToolRail", () => {
     expect(screen.getByRole("button", { name: "Open Trash" })).toBeInTheDocument();
   });
 
+  it("marks the Board tool with a distinct board-accent tone", () => {
+    renderRail();
+
+    const boardButton = screen.getByRole("button", { name: "New board" });
+    expect(boardButton).toHaveClass("tool-button--board");
+    // Другие creation-инструменты не должны получать этот акцент.
+    expect(screen.getByRole("button", { name: "New note" })).not.toHaveClass("tool-button--board");
+  });
+
   it("renders note tools (back + bold + color swatches) plus trash in note mode", () => {
     renderRail({ mode: "note" });
 

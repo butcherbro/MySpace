@@ -132,6 +132,7 @@ export function ToolRail({
             icon="board"
             label="New board"
             visibleLabel="Board"
+            tone="board"
             onMouseDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();

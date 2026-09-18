@@ -161,6 +161,25 @@
   color: var(--ink);
 }
 
+/* Board-инструмент в рейле раньше сливался с остальными (одинаковый серый
+   значок); красим его тем же семейным цветом, что и портал доски по
+   умолчанию (--portal-ink), и держим этот акцент во всех состояниях —
+   hover/active красят фон, не перекрашивают иконку обратно в серый. */
+.tool-button--board {
+  color: var(--portal-ink);
+}
+
+.tool-button--board:hover {
+  background: color-mix(in srgb, var(--portal-ink) 10%, transparent);
+  color: var(--portal-ink);
+}
+
+.tool-button--board:active,
+.tool-button--board.tool-button--active {
+  background: color-mix(in srgb, var(--portal-ink) 18%, transparent);
+  color: var(--portal-ink);
+}
+
 .tool-button__icon {
   width: 20px;
   height: 20px;
