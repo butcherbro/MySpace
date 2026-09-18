@@ -856,3 +856,76 @@ fn undo_stale_revision_reports_the_true_current_revision_not_a_duplicate_of_expe
         other => panic!("expected StaleRevision, got {other:?}"),
     }
 }
+
+/// todo.md №20: a folder-alias card (filesystem_alias) dragged onto another
+/// board's portal reportedly vanished — gone from the source board, absent
+/// from the target's Unsorted panel. `read_selection_pre_state` and the move's
+/// own UPDATE statement both touch only the shared `cards` table columns
+/// (kind, board_id, x/y/w/h, unsorted, revision) and never join a kind-specific
+/// satellite table, so nothing in this path should discriminate by kind. This
+/// matrix proves that directly: every leaf kind the canvas can hold — note,
+/// image, embed, file, filesystem_alias — moves into the destination's
+/// Unsorted panel exactly like `note` already does above.
+#[test]
+fn every_leaf_kind_moves_into_the_destination_unsorted_panel() {
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::domain::move_selection::move_selection_to_board;
+
+    for kind in ["note", "image", "embed", "file", "filesystem_alias"] {
+        let mut conn = open_in_memory().unwrap();
+        bootstrap::bootstrap(&mut conn).unwrap();
+        let home: String = conn
+            .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) SELECT 'target', w.id, w.root_board_id, 'Target', 'default', NULL, 1, 0, 0 FROM workspaces w",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            &format!(
+                "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, unsorted, created_at, updated_at) VALUES ('leaf', ?1, '{kind}', 10, 20, 200, 80, 0, 1, 0, 0, 0)"
+            ),
+            [home.clone()],
+        )
+        .unwrap();
+
+        let input = MoveSelectionToBoardInput {
+            idempotency_key: format!("op-{kind}"),
+            target_board_id: "target".into(),
+            cards: vec![MoveSelectionCard {
+                id: "leaf".into(),
+                expected_revision: 1,
+            }],
+            boards: vec![],
+            leaf_placement: SelectionLeafPlacement::Unsorted,
+        };
+
+        let receipt = move_selection_to_board(&mut conn, &input)
+            .unwrap_or_else(|err| panic!("kind {kind} failed to move: {err:?}"));
+        assert_eq!(
+            receipt.cards.len(),
+            1,
+            "kind {kind}: receipt must list the leaf"
+        );
+
+        let (board_id, unsorted, revision): (String, i64, i64) = conn
+            .query_row(
+                "SELECT board_id, unsorted, revision FROM cards WHERE id = 'leaf'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            board_id, "target",
+            "kind {kind}: must land on the target board"
+        );
+        assert_eq!(
+            unsorted, 1,
+            "kind {kind}: must land in the target's Unsorted panel"
+        );
+        assert_eq!(revision, 2, "kind {kind}: revision must bump exactly once");
+    }
+}

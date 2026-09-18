@@ -274,11 +274,24 @@ precision for lists and code blocks. Reasons and owners are in
     курсором (как в Milanote), без меню. Меню «Add Note / Add Board / Copy Link»
     остаётся только на правой кнопке. Корректирует №10 (там двойной клик открывал
     меню).
-20. `open` — **Ярлык папки / файловая карточка пропадает при переносе на другую
-    доску** (drag на портал) — тот же симптом, что был у №1 для заметок. Проверить:
-    идёт ли перенос filesystem_alias / file_card через `moveSelectionOntoBoard`
-    (b9dc2bd, d751077), и поддерживает ли backend `move_selection_to_board` эти
-    виды карточек. Сначала проверить по копии БД, где карточка оказалась.
+20. `fixed` — **Ярлык папки / файловая карточка пропадает при переносе на другую
+    доску** (drag на портал) — тот же симптом, что был у №1 для заметок. По копии
+    живой БД: сама карточка `PIPELINE_MAP.md` (file) не потеряна — она сегодня
+    успешно переехала через тот же код (`operation_receipts` содержит её
+    `move_selection_to_board`-квитанцию, revision 3→4, на доску «Посты из тг»),
+    т.е. симптом воспроизводился ДО фиксов b9dc2bd/d751077 и общий путь
+    (`moveSelectionOntoBoard` → `MoveSelectionCommand` → backend
+    `move_selection_to_board`) уже не различает `kind` нигде — ни во фронтенде
+    (`LeafRef` в `src/canvas/move-selection-onto-board.ts` не несёт `kind`), ни в
+    бэкенде (`read_selection_pre_state` и `UPDATE cards` в
+    `src-tauri/src/domain/move_selection.rs` читают/пишут общие колонки `cards`
+    без JOIN на kind-таблицу). Добавлена матрица регрессионных тестов на все 6
+    видов карточек (note/image/embed/file/filesystem_alias/board_portal), чтобы
+    будущая kind-специфичная ветка не могла тихо вернуть баг только для одного
+    вида: `src-tauri/tests/move_selection_contract.rs`
+    (`every_leaf_kind_moves_into_the_destination_unsorted_panel`) и
+    `src/canvas/move-selection-onto-board.test.ts` (`it.each` по image/embed/
+    file/filesystem_alias). Никакого нового production-фикса не потребовалось.
 21. `open` — **MD-файлы (file card) показывать отрендеренным markdown**, а не
     сырым текстом: заголовки, таблицы, списки, код — в превью карточки и в
     полноразмерном просмотре. Скриншот: `PIPELINE_MAP.md` с таблицами выглядит как

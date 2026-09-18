@@ -204,4 +204,50 @@ describe("moveSelectionOntoBoard", () => {
     await expect(dispatcher.undo()).resolves.toBe(true);
     expect(undoMoveSelection).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * todo.md №20: a filesystem_alias (folder shortcut) card dropped onto a
+   * board portal reportedly vanished — gone from the source board, missing
+   * from the target's Unsorted panel. `moveSelectionOntoBoard` only ever
+   * touches `{ id, revision }` (see the `LeafRef` type at the top of
+   * move-selection-onto-board.ts) — it has no `kind` field to branch on, so a
+   * `filesystem_alias` (or `file`, `image`, `embed`) leaf takes the exact same
+   * path as a `note` leaf above. This pins that down for every non-note kind
+   * the canvas can drag onto a portal, so a future kind-specific branch cannot
+   * silently reintroduce the bug for one kind while the note tests stay green.
+   */
+  it.each(["image", "embed", "file", "filesystem_alias"] as const)(
+    "moves a %s leaf the same way it moves a note leaf",
+    async (kind) => {
+      const readCard = vi.fn(async () => ({ kind, id: "leaf-1", revision: 3 }));
+      const moveSelectionToBoard = vi.fn(async (input: MoveSelectionToBoardInput) => ({
+        operationId: "op-kind",
+        targetBoardId: input.targetBoardId,
+        cards: input.cards.map((c) => ({
+          id: c.id,
+          previousBoardId: "home",
+          previousUnsorted: false,
+          previousFrame: { x: 0, y: 0, width: 320, height: 240 },
+          beforeRevision: c.expectedRevision,
+          afterRevision: c.expectedRevision + 1,
+        })),
+        boards: [],
+      }));
+      const gateway = { readCard, moveSelectionToBoard } as unknown as WorkspaceGateway;
+      const dispatcher = new CommandDispatcher(gateway);
+
+      const receipt = await moveSelectionOntoBoard({
+        gateway,
+        dispatcher,
+        idGenerator: new UuidV7Generator(),
+        targetBoardId: "board-b",
+        leafCards: [{ id: "leaf-1", revision: 3 }],
+        portals: [],
+      });
+
+      expect(receipt.cards.map((c) => c.id)).toEqual(["leaf-1"]);
+      expect(receipt.targetBoardId).toBe("board-b");
+      expect(moveSelectionToBoard).toHaveBeenCalledTimes(1);
+    },
+  );
 });
