@@ -1,0 +1,46 @@
+/* Board shortcut card (todo.md №17): reuses .board-portal-card's box, adds
+   the corner alias badge and a broken-target state. */
+
+.board-shortcut-card__badge {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  color: var(--ink-tertiary, rgba(101, 116, 130, 0.84));
+  filter: drop-shadow(0 1px 1px rgba(31, 37, 33, 0.25));
+  pointer-events: none;
+}
+
+.board-shortcut-card__badge .icon {
+  width: 100%;
+  height: 100%;
+}
+
+.board-portal-card__tile:has(.board-shortcut-card__badge) {
+  position: relative;
+}
+
+.board-shortcut-card--broken {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.board-shortcut-card--broken .board-portal-card__title {
+  color: var(--ink-tertiary, rgba(101, 116, 130, 0.84));
+  font-style: italic;
+}
+
+.board-shortcut-card__broken-tile {
+  width: 60px;
+  height: 60px;
+  border-radius: 12px;
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(101, 116, 130, 0.14),
+    rgba(101, 116, 130, 0.14) 6px,
+    rgba(101, 116, 130, 0.06) 6px,
+    rgba(101, 116, 130, 0.06) 12px
+  );
+  border: 1px dashed var(--edge-subtle, rgba(101, 116, 130, 0.28));
+}

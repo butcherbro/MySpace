@@ -2,11 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AddQuickBoardInput,
   AssetDto,
+  BoardShortcutDto,
   BoardSnapshot,
   BoardSummary,
   CardDto,
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
+  CreateBoardShortcutInput,
   CreateChildBoardInput,
   DuplicateBoardInput,
   DuplicateBoardReceipt,
@@ -126,6 +128,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   createImageCard(input: CreateImageCardInput): Promise<void> {
     return invoke<void>("create_image_card", { input });
+  }
+
+  createBoardShortcut(input: CreateBoardShortcutInput): Promise<BoardShortcutDto> {
+    return invoke<BoardShortcutDto>("create_board_shortcut", { input });
   }
 
   async createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {

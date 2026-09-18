@@ -14,6 +14,7 @@ import { ImageCard } from "./image/ImageCard";
 import { EmbedCard } from "./link/EmbedCard";
 import { FolderShortcutCard } from "./folder/FolderShortcutCard";
 import { FileCard } from "./file/FileCard";
+import { BoardShortcutCard } from "./board/BoardShortcutCard";
 
 export interface CardRenderContext {
   /** Whether the card (if a note) is currently being edited. */
@@ -119,6 +120,10 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
 
   if (card.kind === "filesystem_alias") {
     return <FolderShortcutCard alias={card} loadPreview={ctx.onLoadFolderPreview} onOpenFinder={ctx.onOpenFolderInFinder} onResize={ctx.onResizeFilesystemAlias} onContextMenu={ctx.onContextMenu} />;
+  }
+
+  if (card.kind === "board_shortcut") {
+    return <BoardShortcutCard shortcut={card} onOpen={ctx.onOpenBoard} onContextMenu={ctx.onContextMenu} />;
   }
 
   if (card.kind === "file") {

@@ -60,6 +60,30 @@ export function UnsortedPanel({ cards, onPlace, onDragStartCard, onClose }: Unso
                 </div>
               </div>
             )}
+            {card.kind === "board_shortcut" && (
+              <div className="unsorted-panel__board">
+                {card.target ? (
+                  <>
+                    <BoardIdentityThumbnail
+                      title={card.target.title}
+                      colorToken={card.target.colorToken}
+                      symbol={card.target.symbol}
+                      coverAsset={card.target.coverAsset}
+                      size="search"
+                      decorative
+                    />
+                    <div className="unsorted-panel__board-meta">
+                      <span className="unsorted-panel__board-title">{card.target.title}</span>
+                      <span className="unsorted-panel__board-count">Shortcut</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="unsorted-panel__board-meta">
+                    <span className="unsorted-panel__board-title">Board is in Trash</span>
+                  </div>
+                )}
+              </div>
+            )}
             {card.kind === "image" && (
               <div className="unsorted-panel__image">
                 <img

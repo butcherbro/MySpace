@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  CreateBoardShortcutCommand,
   CreateChildBoardCommand,
   DuplicateBoardCommand,
   MoveBoardCommand,
@@ -170,6 +171,68 @@ describe("DuplicateBoardCommand", () => {
     const command = new DuplicateBoardCommand("cmd-2", input);
     await expect(command.undo(gateway)).rejects.toThrow();
     expect(gateway.trashBoard).not.toHaveBeenCalled();
+  });
+});
+
+describe("CreateBoardShortcutCommand", () => {
+  const input = {
+    id: "shortcut-1",
+    boardId: "home",
+    frame: nextFrame,
+    zIndex: 0,
+    targetBoardId: "board-a",
+  };
+  const created = {
+    kind: "board_shortcut" as const,
+    id: "shortcut-1",
+    boardId: "home",
+    frame: nextFrame,
+    zIndex: 0,
+    revision: 1,
+    targetBoardId: "board-a",
+    target: {
+      id: "board-a",
+      boardRevision: 1,
+      title: "Board A",
+      colorToken: "terracotta",
+      symbol: null,
+      coverAsset: null,
+    },
+  };
+  type Gateway = Parameters<CreateBoardShortcutCommand["execute"]>[0];
+
+  it("creates the shortcut and returns its DTO", async () => {
+    const gateway = {
+      createBoardShortcut: vi.fn().mockResolvedValue(created),
+    } as unknown as Gateway;
+
+    const command = new CreateBoardShortcutCommand("cmd-1", input);
+    await expect(command.execute(gateway)).resolves.toBe(created);
+    expect(gateway.createBoardShortcut).toHaveBeenCalledWith(input);
+  });
+
+  it("undo trashes only the shortcut card (the target board is never a trash argument); redo restores the same batch", async () => {
+    const gateway = {
+      createBoardShortcut: vi.fn().mockResolvedValue(created),
+      trashNote: vi.fn().mockResolvedValue("batch-shortcut"),
+      restoreTrashBatch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Gateway;
+
+    const command = new CreateBoardShortcutCommand("cmd-1", input);
+    await command.execute(gateway);
+    await command.undo(gateway);
+    expect(gateway.trashNote).toHaveBeenCalledWith("shortcut-1");
+
+    await command.execute(gateway);
+    expect(gateway.restoreTrashBatch).toHaveBeenCalledWith("batch-shortcut");
+    expect(gateway.createBoardShortcut).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to undo a command that never ran", async () => {
+    const gateway = { trashNote: vi.fn() } as unknown as Gateway;
+    const command = new CreateBoardShortcutCommand("cmd-2", input);
+    await expect(command.undo(gateway)).rejects.toThrow();
+    expect(gateway.trashNote).not.toHaveBeenCalled();
   });
 });
 

@@ -53,6 +53,13 @@ That is Task 20, and it needs a person at the app.
   `src/search/`, `src/state/`.
 - `workspace_repository` is a re-export facade over seven aggregate modules under
   `src-tauri/src/repositories/`; 187 call sites are unchanged.
+- Board shortcuts (`board_shortcut` card kind, todo.md №17, ADR-0010): an alias
+  that points at a board without owning it — identity (title/color/symbol/cover)
+  is read live via a LEFT JOIN on the target board, never copied, and a
+  gone/trashed target projects as a broken shortcut (`target: null`) instead of
+  failing the read. Trashing a board cascades to every shortcut into its subtree
+  under the same batch id; not indexed by search (a board's own title is already
+  the canonical hit).
 
 ## What is open
 

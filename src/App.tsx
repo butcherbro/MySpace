@@ -21,6 +21,7 @@ import {
 import { PasteCardsCommand, type PasteCardSpec } from "./commands/paste-commands";
 import { buildPasteSpecs, readCardClipboard, setCardClipboard, type CopiedCard } from "./app/card-clipboard";
 import {
+  CreateBoardShortcutCommand,
   CreateChildBoardCommand,
   DuplicateBoardCommand,
   MoveBoardCommand,
@@ -59,6 +60,7 @@ import { htmlToDocument } from "./editor/html-to-document";
 import { copyText } from "./services/clipboard";
 import type {
   BoardPortalDto,
+  BoardShortcutDto,
   CardDto,
   EmbedCardDto,
   FileCardDto,
@@ -707,8 +709,11 @@ function App() {
     );
     void (async () => {
       try {
-        const portals = await dispatcher.execute(new PasteCardsCommand(idGenerator.nextId(), specs));
+        const { portals, shortcuts } = await dispatcher.execute(
+          new PasteCardsCommand(idGenerator.nextId(), specs),
+        );
         const portalById = new Map(portals.map((p) => [p.id, p]));
+        const shortcutById = new Map(shortcuts.map((s) => [s.id, s]));
         for (const spec of specs) {
           if (spec.kind === "note") {
             const card: NoteCardDto = {
@@ -737,6 +742,10 @@ function App() {
               captionJson: spec.captionJson,
               captionPlainText: spec.captionPlainText,
             };
+            dispatch({ type: "cardAdded", card });
+          } else if (spec.kind === "shortcut") {
+            const card = shortcutById.get(spec.id);
+            if (!card) continue; // unreachable: one receipt per shortcut spec
             dispatch({ type: "cardAdded", card });
           } else {
             // Duplicate-board's title/counts are backend-assigned (ADR-0009):
@@ -1158,6 +1167,21 @@ function App() {
     [gateway, loadQuickBoards],
   );
 
+  // Trashing a board_portal cascades server-side to every shortcut pointing at
+  // it (todo.md №17, ADR-0010). A shortcut on the SAME board being viewed is
+  // visible right now and must disappear immediately too — the backend already
+  // trashed it, so re-sending it as a leaf trash item would 404 against an
+  // already-trashed row. This only patches the currently-rendered board; a
+  // shortcut elsewhere pointing deeper into the trashed subtree self-heals on
+  // its own board's next snapshot load, which already reflects the cascade.
+  const cascadedShortcutIds = useCallback(
+    (trashedBoardIds: Set<string>): string[] =>
+      state.cards
+        .filter((c) => c.kind === "board_shortcut" && c.target && trashedBoardIds.has(c.target.id))
+        .map((c) => c.id),
+    [state.cards],
+  );
+
   const handleDeleteSelection = useCallback(async () => {
     if (state.selection.length === 0) return;
     const items: TrashItem[] = state.selection
@@ -1173,14 +1197,19 @@ function App() {
 
     if (items.length === 0) return;
 
+    const trashedBoardIds = new Set(
+      items.filter((i) => i.kind === "board_portal").map((i) => i.id),
+    );
+    const extraIds = cascadedShortcutIds(trashedBoardIds);
+
     try {
       await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
-      dispatch({ type: "cardsRemoved", ids: state.selection });
+      dispatch({ type: "cardsRemoved", ids: [...state.selection, ...extraIds] });
       void refreshTrash();
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
-  }, [state.selection, state.cards, dispatcher, idGenerator, refreshTrash]);
+  }, [state.selection, state.cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds]);
 
   // Viewport saves are debounced, flushed on navigation, and pinned to the board
   // revision captured when the viewport settled. The board-scoped policy around
@@ -1287,16 +1316,20 @@ function App() {
       .filter((x): x is TrashItem => x !== null);
 
     if (items.length === 0) return;
+    const trashedBoardIds = new Set(
+      items.filter((i) => i.kind === "board_portal").map((i) => i.id),
+    );
+    const extraIds = cascadedShortcutIds(trashedBoardIds);
     void dispatcher
       .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
       .then(() => {
-        dispatch({ type: "cardsRemoved", ids });
+        dispatch({ type: "cardsRemoved", ids: [...ids, ...extraIds] });
         void refreshTrash();
       })
       .catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
       });
-  }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator, refreshTrash]);
+  }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds]);
 
   // Copy the stable MySpace address for the right-clicked card (or the current
   // board when invoked from a portal/board context). "Copy MySpace Link" is the
@@ -1307,6 +1340,10 @@ function App() {
     let address: string;
     if (card?.kind === "board_portal") {
       // A portal is a folder: copy the address of the board it leads to.
+      address = `myspace://board/${card.target.id}`;
+    } else if (card?.kind === "board_shortcut" && card.target) {
+      // A shortcut copies the address of the board it points to, same as a
+      // portal — the shortcut card itself has no separate identity to share.
       address = `myspace://board/${card.target.id}`;
     } else if (card) {
       address = `myspace://card/${card.id}`;
@@ -1395,6 +1432,40 @@ function App() {
     [dispatcher, idGenerator],
   );
 
+  // "Create shortcut" on a portal or on another shortcut (todo.md №17): a new
+  // shortcut card appears +24/+24 from the source, same size, pointing at the
+  // same target board. A shortcut on a shortcut never chains — it points at
+  // the SAME target the source shortcut points at, not at the source card.
+  const handleCreateShortcut = useCallback(
+    (source: BoardPortalDto | BoardShortcutDto) => {
+      const targetBoardId = source.kind === "board_portal" ? source.target.id : source.target?.id;
+      if (!targetBoardId) return; // a broken shortcut has nothing to point a new shortcut at
+      const id = idGenerator.nextId();
+      void dispatcher
+        .execute(
+          new CreateBoardShortcutCommand(idGenerator.nextId(), {
+            id,
+            boardId: source.boardId,
+            frame: {
+              x: source.frame.x + 24,
+              y: source.frame.y + 24,
+              width: source.frame.width,
+              height: source.frame.height,
+            },
+            zIndex: 0,
+            targetBoardId,
+          }),
+        )
+        .then((created) => {
+          dispatch({ type: "cardAdded", card: created });
+        })
+        .catch((e) => {
+          dispatch({ type: "failed", message: errorMessage(e) });
+        });
+    },
+    [dispatcher, idGenerator],
+  );
+
   const handleCopySelectionImages = useCallback(() => {
     const imageIds = state.selection.filter((id) => {
       const card = state.cards.find((c) => c.id === id);
@@ -1415,8 +1486,13 @@ function App() {
     const selected = state.selection
       .map((id) => state.cards.find((c) => c.id === id))
       .filter(
-        (c): c is NoteCardDto | ImageCardDto | BoardPortalDto =>
-          c != null && (c.kind === "note" || c.kind === "image" || c.kind === "board_portal"),
+        (c): c is NoteCardDto | ImageCardDto | BoardPortalDto | BoardShortcutDto =>
+          c != null &&
+          (c.kind === "note" ||
+            c.kind === "image" ||
+            c.kind === "board_portal" ||
+            // A broken shortcut has no target to copy.
+            (c.kind === "board_shortcut" && c.target !== null)),
       );
     if (selected.length > 0) {
       const minX = Math.min(...selected.map((c) => c.frame.x));
@@ -1444,6 +1520,16 @@ function App() {
             asset: c.asset,
             captionJson: c.captionJson,
             captionPlainText: c.captionPlainText,
+          };
+        }
+        if (c.kind === "board_shortcut") {
+          return {
+            kind: "shortcut",
+            dx: c.frame.x - minX,
+            dy: c.frame.y - minY,
+            width: c.frame.width,
+            height: c.frame.height,
+            targetBoardId: c.target!.id,
           };
         }
         return {
@@ -2109,6 +2195,7 @@ function App() {
             const card = state.cards.find((c) => c.id === contextMenu.cardId);
             const isImage = card?.kind === "image";
             const isPortal = card?.kind === "board_portal";
+            const isShortcut = card?.kind === "board_shortcut";
             const isFolderAlias = card?.kind === "filesystem_alias";
             const isFileCard = card?.kind === "file";
             const isLinkCard = card?.kind === "embed";
@@ -2148,12 +2235,20 @@ function App() {
             if (isPortal) {
               actions.push(
                 { id: "duplicate", label: "Duplicate", onSelect: () => handleDuplicatePortal(card as BoardPortalDto) },
+                { id: "create-shortcut", label: "Create Shortcut", onSelect: () => handleCreateShortcut(card as BoardPortalDto) },
                 { id: "set-cover-clipboard", label: "Set Cover from Clipboard", onSelect: () => void handleSetCoverFromClipboard() },
                 { id: "choose-cover", label: "Choose Cover…", onSelect: () => void handleChooseCover() },
               );
               if ((card as BoardPortalDto).target.coverAsset !== null) {
                 actions.push({ id: "remove-cover", label: "Remove Cover", onSelect: () => void handleRemoveCover() });
               }
+            }
+            if (isShortcut && (card as BoardShortcutDto).target !== null) {
+              actions.push({
+                id: "create-shortcut",
+                label: "Create Shortcut",
+                onSelect: () => handleCreateShortcut(card as BoardShortcutDto),
+              });
             }
             actions.push({ id: "delete", label: "Delete", onSelect: handleContextDelete });
             return (

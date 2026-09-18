@@ -1,7 +1,7 @@
 // Paste-cards workspace command (todo.md №15): one dispatcher entry for a
 // whole pasted group, so Cmd+Z undoes every duplicate at once.
 
-import type { BoardPortalDto, Frame, WorkspaceGateway } from "../services/workspace-gateway";
+import type { BoardPortalDto, BoardShortcutDto, Frame, WorkspaceGateway } from "../services/workspace-gateway";
 import type { WorkspaceCommand } from "./workspace-command";
 
 export interface PasteNoteSpec {
@@ -44,7 +44,21 @@ export interface PasteBoardSpec {
   newBoardId: string;
 }
 
-export type PasteCardSpec = PasteNoteSpec | PasteImageSpec | PasteBoardSpec;
+/**
+ * A copied board shortcut (todo.md №17): pasting it is a plain
+ * `createBoardShortcut` call pointing at the same target — no recursion, no
+ * new board id, unlike `PasteBoardSpec`.
+ */
+export interface PasteShortcutSpec {
+  kind: "shortcut";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  targetBoardId: string;
+}
+
+export type PasteCardSpec = PasteNoteSpec | PasteImageSpec | PasteBoardSpec | PasteShortcutSpec;
 
 /**
  * Creates a group of pasted cards (notes/images/board duplicates) as one
@@ -63,7 +77,14 @@ export type PasteCardSpec = PasteNoteSpec | PasteImageSpec | PasteBoardSpec;
  * `handleDeleteSelection` already sends for a live portal — `trashSelection`
  * resolves a `"board_portal"` item by board id, not portal card id.
  */
-export class PasteCardsCommand implements WorkspaceCommand<BoardPortalDto[]> {
+export interface PasteCardsResult {
+  portals: BoardPortalDto[];
+  /** Pasted shortcuts (todo.md №17), same reasoning as `portals`: the
+   * target board's live identity is backend-assigned, not client-predicted. */
+  shortcuts: BoardShortcutDto[];
+}
+
+export class PasteCardsCommand implements WorkspaceCommand<PasteCardsResult> {
   id: string;
   label = "Paste";
   private trashBatchId: string | null = null;
@@ -75,13 +96,14 @@ export class PasteCardsCommand implements WorkspaceCommand<BoardPortalDto[]> {
     this.id = id;
   }
 
-  async execute(gateway: WorkspaceGateway): Promise<BoardPortalDto[]> {
+  async execute(gateway: WorkspaceGateway): Promise<PasteCardsResult> {
     if (this.trashBatchId) {
       await gateway.restoreTrashBatch(this.trashBatchId);
       this.trashBatchId = null;
-      return [];
+      return { portals: [], shortcuts: [] };
     }
     const portals: BoardPortalDto[] = [];
+    const shortcuts: BoardShortcutDto[] = [];
     for (const spec of this.specs) {
       if (spec.kind === "note") {
         await gateway.createNote({
@@ -105,6 +127,15 @@ export class PasteCardsCommand implements WorkspaceCommand<BoardPortalDto[]> {
           captionJson: spec.captionJson,
           captionPlainText: spec.captionPlainText,
         });
+      } else if (spec.kind === "shortcut") {
+        const created = await gateway.createBoardShortcut({
+          id: spec.id,
+          boardId: spec.boardId,
+          frame: spec.frame,
+          zIndex: spec.zIndex,
+          targetBoardId: spec.targetBoardId,
+        });
+        shortcuts.push(created);
       } else {
         const receipt = await gateway.duplicateBoard({
           sourceBoardId: spec.sourceBoardId,
@@ -116,14 +147,16 @@ export class PasteCardsCommand implements WorkspaceCommand<BoardPortalDto[]> {
         portals.push(receipt.portal);
       }
     }
-    return portals;
+    return { portals, shortcuts };
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
     this.trashBatchId = await gateway.trashSelection({
-      items: this.specs.map((s) =>
-        s.kind === "board" ? { id: s.newBoardId, kind: "board_portal" as const } : { id: s.id, kind: s.kind },
-      ),
+      items: this.specs.map((s) => {
+        if (s.kind === "board") return { id: s.newBoardId, kind: "board_portal" as const };
+        if (s.kind === "shortcut") return { id: s.id, kind: "board_shortcut" as const };
+        return { id: s.id, kind: s.kind };
+      }),
     });
   }
 }

@@ -79,6 +79,39 @@ export interface BoardPortalDto {
   };
 }
 
+/**
+ * A board shortcut card (todo.md №17): an alias that points at a board
+ * without owning it — deleting the shortcut never touches the target board,
+ * and deleting the target board cascades to every shortcut pointing at it.
+ * Identity is read live from the target board; `target` is `null` when the
+ * target no longer exists or is itself trashed (a "broken" shortcut).
+ */
+export interface BoardShortcutDto {
+  kind: "board_shortcut";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  revision: number;
+  targetBoardId: string;
+  target: {
+    id: string;
+    boardRevision: number;
+    title: string;
+    colorToken: string;
+    symbol: string | null;
+    coverAsset: AssetDto | null;
+  } | null;
+}
+
+export interface CreateBoardShortcutInput {
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  targetBoardId: string;
+}
+
 /** Metadata for a stored file asset (image / preview thumbnail). */
 export interface AssetDto {
   id: string;
@@ -186,7 +219,14 @@ export interface FolderPreviewDto {
   pathHint: string;
 }
 
-export type CardDto = NoteCardDto | BoardPortalDto | ImageCardDto | EmbedCardDto | FilesystemAliasDto | FileCardDto;
+export type CardDto =
+  | NoteCardDto
+  | BoardPortalDto
+  | ImageCardDto
+  | EmbedCardDto
+  | FilesystemAliasDto
+  | FileCardDto
+  | BoardShortcutDto;
 
 export interface BoardSnapshot {
   board: BoardSummary;
@@ -338,7 +378,7 @@ export interface UpdateImageCaptionInput {
 
 export interface TrashItemInput {
   id: string;
-  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal";
+  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal" | "file" | "board_shortcut";
 }
 
 export interface ConvertNoteToEmbedInput {
@@ -469,6 +509,7 @@ export interface WorkspaceGateway {
   importAsset(input: ImportAssetInput): Promise<AssetDto>;
   resolveAssetPath(assetId: string): Promise<string>;
   createImageCard(input: CreateImageCardInput): Promise<void>;
+  createBoardShortcut(input: CreateBoardShortcutInput): Promise<BoardShortcutDto>;
   createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto>;
   listFolderPreview(cardId: string, limit: number): Promise<FolderPreviewDto>;
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]>;

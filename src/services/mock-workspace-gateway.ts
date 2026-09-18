@@ -2,11 +2,13 @@ import type {
   AddQuickBoardInput,
   AssetDto,
   BoardPortalDto,
+  BoardShortcutDto,
   BoardSnapshot,
   BoardSummary,
   CardDto,
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
+  CreateBoardShortcutInput,
   CreateChildBoardInput,
   CreateFileCardInput,
   CreateFolderAliasInput,
@@ -436,6 +438,13 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (portal && portal.kind === "board_portal") {
       portal.target.title = title;
     }
+    // Every shortcut pointing at this board reads its identity live too
+    // (todo.md №17): a rename must be visible on all of them immediately.
+    for (const c of this.snapshot.cards) {
+      if (c.kind === "board_shortcut" && c.target && c.targetBoardId === boardId) {
+        c.target.title = title;
+      }
+    }
     return Promise.resolve();
   }
 
@@ -498,6 +507,30 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     };
     this.snapshot.cards.push(card);
     return Promise.resolve();
+  }
+
+  createBoardShortcut(input: CreateBoardShortcutInput): Promise<BoardShortcutDto> {
+    const target = this.boards.get(input.targetBoardId);
+    if (!target) return Promise.reject(new Error(`board not found: ${input.targetBoardId}`));
+    const card: BoardShortcutDto = {
+      kind: "board_shortcut",
+      id: input.id,
+      boardId: input.boardId,
+      frame: { ...input.frame },
+      zIndex: input.zIndex,
+      revision: 1,
+      targetBoardId: input.targetBoardId,
+      target: {
+        id: target.id,
+        boardRevision: target.revision,
+        title: target.title,
+        colorToken: target.colorToken,
+        symbol: target.symbol,
+        coverAsset: target.coverAsset,
+      },
+    };
+    this.snapshot.cards.push(card);
+    return Promise.resolve(structuredClone(card));
   }
 
   createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {
@@ -952,7 +985,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       (card) =>
         cardIds.has(card.id) ||
         boardIds.has(card.boardId) ||
-        (card.kind === "board_portal" && boardIds.has(card.target.id)),
+        (card.kind === "board_portal" && boardIds.has(card.target.id)) ||
+        // Cascade to every shortcut pointing anywhere in the trashed subtree
+        // (todo.md №17), same as the backend's trash_board_in_tx.
+        (card.kind === "board_shortcut" && boardIds.has(card.targetBoardId)),
     );
     for (const board of removedBoards) this.boards.delete(board.id);
     const removedCardIds = new Set(removedCards.map((card) => card.id));

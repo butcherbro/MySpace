@@ -38,6 +38,26 @@ function gatewaySpy() {
         },
       };
     }),
+    createBoardShortcut: vi.fn(async (input) => {
+      calls.push({ fn: "createBoardShortcut", args: input });
+      return {
+        kind: "board_shortcut",
+        id: input.id,
+        boardId: input.boardId,
+        frame: input.frame,
+        zIndex: input.zIndex,
+        revision: 1,
+        targetBoardId: input.targetBoardId,
+        target: {
+          id: input.targetBoardId,
+          boardRevision: 1,
+          title: "Books",
+          colorToken: "terracotta",
+          symbol: null,
+          coverAsset: null,
+        },
+      };
+    }),
     trashSelection: vi.fn(async (input) => {
       calls.push({ fn: "trashSelection", args: input });
       return "batch-1";
@@ -87,12 +107,56 @@ const boardSpec: PasteCardSpec = {
   newBoardId: "board-copy-1",
 };
 
+const shortcutSpec: PasteCardSpec = {
+  kind: "shortcut",
+  id: "shortcut-copy-1",
+  boardId: "board-a",
+  frame: { x: 40, y: 40, width: 120, height: 112 },
+  zIndex: 2,
+  targetBoardId: "board-x",
+};
+
 describe("PasteCardsCommand", () => {
+  it("pastes a copied shortcut via createBoardShortcut, pointing at the SAME target, and returns its DTO", async () => {
+    const { gateway, calls } = gatewaySpy();
+    const cmd = new PasteCardsCommand("paste-1", [shortcutSpec]);
+
+    const { shortcuts } = await cmd.execute(gateway);
+
+    expect(calls).toEqual([
+      {
+        fn: "createBoardShortcut",
+        args: {
+          id: "shortcut-copy-1",
+          boardId: "board-a",
+          frame: shortcutSpec.frame,
+          zIndex: 2,
+          targetBoardId: "board-x",
+        },
+      },
+    ]);
+    expect(shortcuts).toHaveLength(1);
+    expect(shortcuts[0]).toMatchObject({ id: "shortcut-copy-1", targetBoardId: "board-x" });
+  });
+
+  it("undo of a pasted shortcut sends its own card id as a board_shortcut trash item (the target board is untouched)", async () => {
+    const { gateway, calls } = gatewaySpy();
+    const cmd = new PasteCardsCommand("paste-1", [shortcutSpec]);
+    await cmd.execute(gateway);
+
+    await cmd.undo(gateway);
+
+    const trash = calls.find((c) => c.fn === "trashSelection");
+    expect(trash?.args).toEqual({
+      items: [{ id: "shortcut-copy-1", kind: "board_shortcut" }],
+    });
+  });
+
   it("duplicates a copied board via the atomic backend call and returns its portal DTO", async () => {
     const { gateway, calls } = gatewaySpy();
     const cmd = new PasteCardsCommand("paste-1", [boardSpec]);
 
-    const portals = await cmd.execute(gateway);
+    const { portals } = await cmd.execute(gateway);
 
     expect(calls).toEqual([
       {

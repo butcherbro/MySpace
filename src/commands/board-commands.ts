@@ -1,6 +1,8 @@
 // Board-specific workspace commands.
 
 import type {
+  BoardShortcutDto,
+  CreateBoardShortcutInput,
   CreateChildBoardInput,
   DuplicateBoardInput,
   DuplicateBoardReceipt,
@@ -73,6 +75,45 @@ export class DuplicateBoardCommand implements WorkspaceCommand<DuplicateBoardRec
       throw new Error("duplicate board cannot be undone before it ran");
     }
     this.trashBatchId = await gateway.trashBoard(this.receipt.newBoardId);
+  }
+}
+
+/**
+ * Creates a board shortcut (todo.md №17): "Create shortcut" on a Board Portal
+ * or on another shortcut. `undo` trashes just the new shortcut card — the
+ * target board is never touched, matching `trash_note`'s leaf-only cascade.
+ */
+export class CreateBoardShortcutCommand implements WorkspaceCommand<BoardShortcutDto> {
+  id: string;
+  label = "Create shortcut";
+  private trashBatchId: string | null = null;
+  private created: BoardShortcutDto | null = null;
+
+  constructor(
+    id: string,
+    private input: CreateBoardShortcutInput,
+  ) {
+    this.id = id;
+  }
+
+  async execute(gateway: WorkspaceGateway): Promise<BoardShortcutDto> {
+    if (this.trashBatchId) {
+      await gateway.restoreTrashBatch(this.trashBatchId);
+      this.trashBatchId = null;
+      if (!this.created) {
+        throw new Error("create shortcut redo ran before its first execute");
+      }
+      return this.created;
+    }
+    this.created = await gateway.createBoardShortcut(this.input);
+    return this.created;
+  }
+
+  async undo(gateway: WorkspaceGateway): Promise<void> {
+    if (!this.created) {
+      throw new Error("create shortcut cannot be undone before it ran");
+    }
+    this.trashBatchId = await gateway.trashNote(this.input.id);
   }
 }
 

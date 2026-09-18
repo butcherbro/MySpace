@@ -503,3 +503,40 @@ backend, and undo needed no new receipt at all
   never a per-card cap, so a duplicate sharing an original's `asset_id` is
   automatically safe. Always check whether a "copy-in" concern like this is
   already handled generically before writing a special case for it.
+
+## 2026-09-18 — Server-side cascades need a client-side patch for what's on screen right now
+
+- Task: `tasks/todo.md` №17 — board shortcuts. Trashing a Board Portal now
+  cascades server-side to every shortcut pointing at it or a descendant board
+  (same trash batch, so restore brings both back for free — see
+  `docs/decisions/0010-board-shortcuts.md`).
+- Non-obvious gap this created: `handleContextDelete`/`handleDeleteSelection`
+  in `App.tsx` update local state optimistically with `dispatch({ type:
+  "cardsRemoved", ids })`, where `ids` is only the card(s) the user actually
+  selected/right-clicked. The backend's cascade silently removed additional
+  rows (a shortcut sitting on the SAME currently-open board) that the
+  frontend's optimistic patch never knew to remove — it stayed rendered as a
+  ghost until the next full snapshot reload. An e2e test caught this
+  immediately (`tests/e2e/board-shortcuts.spec.ts`): portal count went to 0,
+  shortcut count stayed at 1.
+- Fix: compute the extra locally-visible cascade victims (shortcuts in
+  `state.cards` whose `target.id` is one of the boards being trashed) and fold
+  their ids into the same `cardsRemoved` dispatch — but do **not** add them to
+  the `TrashSelectionCommand`'s own `items` list sent to the backend, since
+  the backend already trashed them in the same transaction; re-sending an
+  already-trashed leaf as its own trash item hits `NotFound` and fails the
+  whole atomic call.
+- Scope of the fix is deliberately partial: it only patches cards visible on
+  the currently-open board. A shortcut on a *different* board pointing deeper
+  into the trashed subtree is not locally patched — it self-heals the moment
+  that other board is opened, because `loadBoardSnapshot` always reflects the
+  backend's authoritative cascade. Restore already reloads the whole board via
+  `useTrashController.restoreBatch`'s `reloadBoardRef.current?.()`, so nothing
+  extra was needed on that side.
+- Lesson: any time a backend command's effect radius is wider than the ids the
+  frontend explicitly sent it (a cascade, a batch trash, a recursive delete),
+  audit every place that does an optimistic *local* patch keyed on "the ids I
+  sent" — a cascade is definitionally "ids I didn't send." Write the e2e test
+  for the cascade case (not just the direct case) before declaring the slice
+  done; a unit test of the backend cascade alone would have missed this
+  entirely, since the bug was purely in the frontend's optimistic patch.

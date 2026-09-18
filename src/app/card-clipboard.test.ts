@@ -101,6 +101,21 @@ describe("buildPasteSpecs", () => {
     });
   });
 
+  it("a shortcut spec reuses one fresh id and points at the SAME target board (todo.md №17)", () => {
+    const copied: CopiedCard[] = [
+      { kind: "shortcut", dx: 0, dy: 0, width: 120, height: 112, targetBoardId: "board-x" },
+    ];
+    const [spec] = buildPasteSpecs(copied, { x: 500, y: 300 }, "board-b", 0, makeIdGen());
+    expect(spec).toEqual({
+      kind: "shortcut",
+      id: "new-1",
+      boardId: "board-b",
+      frame: { x: 500, y: 300, width: 120, height: 112 },
+      zIndex: 0,
+      targetBoardId: "board-x",
+    });
+  });
+
   it("assigns increasing zIndex from the given base, and pastes onto whatever boardId is passed (a different board than the source)", () => {
     const copied: CopiedCard[] = [
       { kind: "note", dx: 0, dy: 0, width: 240, height: 120, documentJson: {}, plainText: "", colorToken: "default" },

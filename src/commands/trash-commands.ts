@@ -6,7 +6,7 @@ import type { WorkspaceCommand } from "./workspace-command";
 export interface TrashItem {
   /** The card id for leaf cards, or the target board id for portals. */
   id: string;
-  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal";
+  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal" | "file" | "board_shortcut";
 }
 
 /**

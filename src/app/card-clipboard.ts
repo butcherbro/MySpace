@@ -58,7 +58,22 @@ export interface CopiedImageCard {
   captionPlainText: string;
 }
 
-export type CopiedCard = CopiedNoteCard | CopiedImageCard | CopiedBoardCard;
+/**
+ * A copied board shortcut (todo.md №17): pasting it creates a new shortcut
+ * pointing at the SAME target board — never the source shortcut's own id, and
+ * never remapped even if the source's target happens to be part of the
+ * current selection (see docs/decisions/0010-board-shortcuts.md).
+ */
+export interface CopiedShortcutCard {
+  kind: "shortcut";
+  dx: number;
+  dy: number;
+  width: number;
+  height: number;
+  targetBoardId: string;
+}
+
+export type CopiedCard = CopiedNoteCard | CopiedImageCard | CopiedBoardCard | CopiedShortcutCard;
 
 let buffer: CopiedCard[] | null = null;
 
@@ -120,6 +135,16 @@ export function buildPasteSpecs(
         assetId: c.asset.id,
         captionJson: c.captionJson,
         captionPlainText: c.captionPlainText,
+      };
+    }
+    if (c.kind === "shortcut") {
+      return {
+        kind: "shortcut" as const,
+        id,
+        boardId,
+        frame,
+        zIndex,
+        targetBoardId: c.targetBoardId,
       };
     }
     return {
