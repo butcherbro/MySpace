@@ -157,3 +157,7 @@ precision for lists and code blocks. Reasons and owners are in
    область. Нужно: увеличенный просмотр всегда целиком в видимой части экрана
    (центрирован по viewport, вписан по размеру), независимо от того, где стоит
    миниатюра на доске.
+6. `open` — **Rust-тест виснет**: `src-tauri/tests/asset_service.rs::
+   a_failed_thumbnail_leaves_no_orphan_and_still_creates_the_card` не завершается
+   (0% CPU, даже при `--test-threads=1`). Блокирует `cargo test` целиком — каждая
+   проверка ждёт вечно. Найдено 2026-09-18 при прогоне после фикса №1.
