@@ -339,3 +339,15 @@ precision for lists and code blocks. Reasons and owners are in
     JSON с форматированием (bold/italic/strike, абзацы, списки), и вставка
     форматированного текста (№13) в подпись сохраняет форматирование. Касается
     image_cards.caption_json и embed (link) card caption.
+
+## Осталось после сессии 2026-09-18
+
+- [ ] Ручная проверка на живом приложении: paste пути папки, диалог «Add Folder
+      Shortcut…», `.md` под CSP, вставка из Telegram, ярлыки досок (каскад/restore),
+      дубликат доски.
+- [ ] Переписать `tasks/current-state.md` под `main`/`acf2b57` (сейчас описывает
+      ветку `codex/v1-stabilization` от 13.09).
+- [ ] Пройти `docs/testing/v1-acceptance-runbook.md` целиком.
+- [ ] Резервная копия: приватный git remote — по решению пользователя.
+- [ ] Опционально: подогнать frame старых image cards под пропорции; полноэкранный
+      просмотр `.md`.
