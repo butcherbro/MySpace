@@ -201,8 +201,12 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
   }
 
   const isHtml = ext === "html" || ext === "htm";
+  const isMarkdown = ext === "md" || ext === "markdown";
+  // .md рендерится в HTML на лету тем же протокол-хендлером (myspace-asset://),
+  // что и .html — переиспользуем тот же sandboxed iframe, см. src-tauri/src/lib.rs.
+  const useIframePreview = isHtml || isMarkdown;
 
-  // Text card with readable preview + per-format tint. HTML is rendered as a
+  // Text card with readable preview + per-format tint. HTML/Markdown render as a
   // live (but inert) page inside the card, like a Finder thumbnail.
   return (
     <article
@@ -232,7 +236,7 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
         </div>
         {actions}
       </header>
-      {isHtml ? (
+      {useIframePreview ? (
         <iframe
           className="file-card__html"
           data-testid="file-preview"

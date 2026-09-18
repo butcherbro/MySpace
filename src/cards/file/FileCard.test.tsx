@@ -54,15 +54,15 @@ describe("FileCard", () => {
     expect(src.startsWith("myspace-asset://")).toBe(true);
   });
 
-  it("shows a text preview instead of a frame for non-HTML files", () => {
+  it("shows a text preview instead of a frame for plain-text files", () => {
     render(
       <FileCard
         file={fileCard({
           asset: {
             id: "asset-2",
-            filePath: "asset-2.md",
-            fileName: "notes.md",
-            mimeType: "text/markdown",
+            filePath: "asset-2.txt",
+            fileName: "notes.txt",
+            mimeType: "text/plain",
             width: null,
             height: null,
             sizeBytes: 10,
@@ -77,6 +77,35 @@ describe("FileCard", () => {
     expect(preview.tagName).toBe("PRE");
     expect(preview).toHaveTextContent("hello from the file");
     expect(screen.queryByTestId("file-preview")).not.toHaveAttribute("sandbox");
+  });
+
+  it("renders .md files as markdown through the same sandboxed iframe as HTML, not raw text", () => {
+    // The backend renders markdown -> HTML on the fly behind myspace-asset://
+    // (see src-tauri/src/lib.rs), so a table shows as a <table>, never as the
+    // raw "| a | b |" source. This is what todo.md #21 asks for.
+    render(
+      <FileCard
+        file={fileCard({
+          asset: {
+            id: "asset-4",
+            filePath: "asset-4.md",
+            fileName: "PIPELINE_MAP.md",
+            mimeType: "text/markdown",
+            width: null,
+            height: null,
+            sizeBytes: 10,
+          },
+          previewText: "| a | b |\n| --- | --- |\n| 1 | 2 |",
+        } as unknown as Partial<FileCardDto>)}
+        {...props}
+      />,
+    );
+
+    const frame = screen.getByTestId("file-preview");
+    expect(frame.tagName).toBe("IFRAME");
+    expect(frame).toHaveAttribute("sandbox", "");
+    expect(frame).toHaveAttribute("src", "myspace-asset://localhost/asset-4.md");
+    expect(screen.queryByText("| a | b |", { exact: false })).not.toBeInTheDocument();
   });
 
   it("uses the stored thumbnail asset when there is one", () => {

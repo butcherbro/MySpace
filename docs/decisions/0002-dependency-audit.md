@@ -31,3 +31,24 @@ bundling, or suspicious network activity was identified at the metadata level.
 Tiptap released 3.31.0 after the plan's snapshot (3.30.5). The lockfile created
 during scaffolding is the source of truth. Tiptap Pro/Cloud/Comments/AI packages
 are explicitly excluded.
+
+## Addendum (2026-09-18): `pulldown-cmark`
+
+Added to render `.md` file cards as HTML (todo.md #21) instead of raw text.
+
+| Package | Version | License | Maintainer / org | Threat |
+|---|---|---|---|---|
+| `pulldown-cmark` | 0.13.4 | MIT | pulldown-cmark-org (raphlinus et al.), also vendored by `rustdoc`/`rustc` itself | LOW |
+
+CommonMark/GFM parser only, no network access, no macros/build scripts beyond
+standard cargo. Pulled in one transitive dependency, `pulldown-cmark-escape`
+(same org, MIT) and `unicase` (MIT, used for case-insensitive footnote-label
+matching) — both LOW threat by the same criteria. Rendered HTML is served only
+inside the existing `sandbox=""` iframe used for `.html` file cards
+(`src-tauri/src/lib.rs`), so raw HTML pass-through from markdown source carries
+the same (already-accepted) risk profile as arbitrary `.html` files, not a new
+one — scripts never execute regardless of markdown content.
+
+- **Уровень угрозы: НИЗКИЙ**
+- **Найдено: 0 подозрительных элементов**
+- **Вывод: безопасно.**

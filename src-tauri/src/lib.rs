@@ -59,6 +59,29 @@ pub fn run() {
                     .body(Vec::new())
                     .unwrap();
             }
+            // .md/.markdown — рендерим в HTML на лету (как уже отдаём .html
+            // файлы "как есть"), карточка показывает тот же sandboxed iframe.
+            let ext = relative
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext == "md" || ext == "markdown" {
+                return match domain::markdown_preview::render_markdown_file(
+                    &path,
+                    domain::markdown_preview::MARKDOWN_RENDER_LIMIT,
+                ) {
+                    Some(html) => tauri::http::Response::builder()
+                        .header("Content-Type", "text/html")
+                        .body(html.into_bytes())
+                        .unwrap(),
+                    None => tauri::http::Response::builder()
+                        .status(404)
+                        .body(Vec::new())
+                        .unwrap(),
+                };
+            }
+
             let mime = mime_for_asset_name(&relative);
             match std::fs::read(&path) {
                 Ok(bytes) => tauri::http::Response::builder()
