@@ -195,6 +195,7 @@ export function EmbedCard({
               ? " link-card__description--user-comment"
               : "")
           }
+          data-testid="link-description"
           onDoubleClick={(e) => {
             e.stopPropagation();
             setEditing(true);
@@ -208,14 +209,18 @@ export function EmbedCard({
               onBlur={handleBlur}
               highlightQuery={highlightQuery}
             />
+          ) : embed.descriptionPlainText ? (
+            // Read-only ветка раньше показывала descriptionPlainText (без marks) —
+            // тот же Tiptap-рендерер, что в режиме редактирования, только
+            // editable=false, чтобы bold/italic/strike/списки не терялись после blur.
+            <NoteEditor
+              document={embed.descriptionJson}
+              editable={false}
+              onChange={() => {}}
+              highlightQuery={highlightQuery}
+            />
           ) : (
-            <div className="link-card__description-display">
-              {embed.descriptionPlainText ? (
-                <HighlightedText text={embed.descriptionPlainText} query={highlightQuery} />
-              ) : (
-                "Add notes…"
-              )}
-            </div>
+            <div className="link-card__description-display">Add notes…</div>
           )}
         </div>
       </div>

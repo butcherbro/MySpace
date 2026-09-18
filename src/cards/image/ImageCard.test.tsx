@@ -73,9 +73,13 @@ describe("ImageCard", () => {
   });
 
   it("exposes the image semantic kind and caption state", () => {
+    const captionJson = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "Caption" }] }],
+    };
     render(
       <ImageCard
-        image={makeImage({ captionPlainText: "Caption" })}
+        image={makeImage({ captionPlainText: "Caption", captionJson })}
         onUpdate={vi.fn().mockResolvedValue(undefined)}
         onResize={vi.fn()}
         onContextMenu={vi.fn()}
@@ -85,7 +89,10 @@ describe("ImageCard", () => {
     expect(screen.getByTestId("image-card")).toHaveAttribute("data-kind", "image");
     expect(screen.getByTestId("image-card")).toHaveAttribute("data-has-caption", "true");
     expect(screen.getByTestId("image-card")).toHaveClass("image-card--has-caption");
-    expect(screen.getByText("Caption")).toBeInTheDocument();
+    // Read-only ветка теперь рендерит через (мок) NoteEditor из captionJson,
+    // а не captionPlainText напрямую — так и должно сохраняться форматирование.
+    expect(lastEditorProps()?.editable).toBe(false);
+    expect(lastEditorProps()?.document).toEqual(captionJson);
   });
 
   it("marks editing and passes editable=true to the caption editor", () => {
@@ -98,7 +105,7 @@ describe("ImageCard", () => {
       />,
     );
 
-    fireEvent.doubleClick(screen.getByText("Caption"));
+    fireEvent.doubleClick(screen.getByTestId("image-caption"));
 
     expect(screen.getByTestId("image-card")).toHaveAttribute("data-editing", "true");
     expect(screen.getByTestId("image-card")).toHaveClass("image-card--editing");
@@ -178,7 +185,7 @@ describe("ImageCard", () => {
       />,
     );
 
-    fireEvent.doubleClick(screen.getByText("Caption"));
+    fireEvent.doubleClick(screen.getByTestId("image-caption"));
     act(() => lastEditorProps()?.onChange({ type: "doc", content: [{ type: "paragraph" }] }));
     await act(async () => {
       await lastEditorProps()?.onBlur?.();
@@ -205,7 +212,7 @@ describe("ImageCard", () => {
       />,
     );
 
-    fireEvent.doubleClick(screen.getByText("Caption"));
+    fireEvent.doubleClick(screen.getByTestId("image-caption"));
     act(() => lastEditorProps()?.onChange({ type: "doc", content: [{ type: "paragraph" }] }));
     await act(async () => {
       await lastEditorProps()?.onBlur?.();

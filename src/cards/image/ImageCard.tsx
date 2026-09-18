@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ImageCardDto } from "../../services/workspace-gateway";
-import { HighlightedText } from "../../components/HighlightedText";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { computeResizedImageFrameSize } from "./image-card-geometry";
@@ -169,6 +168,7 @@ export function ImageCard({
       <div
         ref={captionRef}
         className="image-card__caption"
+        data-testid="image-caption"
         onDoubleClick={(e) => {
           e.stopPropagation();
           setEditing(true);
@@ -182,14 +182,18 @@ export function ImageCard({
             onBlur={handleBlur}
             highlightQuery={highlightQuery}
           />
+        ) : hasCaption ? (
+          // Read-only ветка раньше показывала captionPlainText (без marks) —
+          // тот же Tiptap-рендерер, что в режиме редактирования, только
+          // editable=false, чтобы bold/italic/strike/списки не терялись после blur.
+          <NoteEditor
+            document={image.captionJson}
+            editable={false}
+            onChange={() => {}}
+            highlightQuery={highlightQuery}
+          />
         ) : (
-          <div className="image-card__caption-display">
-            {hasCaption ? (
-              <HighlightedText text={image.captionPlainText} query={highlightQuery} />
-            ) : (
-              "Add caption…"
-            )}
-          </div>
+          <div className="image-card__caption-display">Add caption…</div>
         )}
       </div>
       {saving && <div className="image-card__status">Saving…</div>}
