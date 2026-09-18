@@ -2238,8 +2238,12 @@ function App() {
               onPortalHighlight: setHighlightedPortalId,
               onCardDragMove: crossBoardDragSession.onDragMove,
               onCardDragEnd: handleCardDragEnd,
-              onPaneDoubleClick: (point, screen) => {
-                setPaneContextMenu({ x: screen.x, y: screen.y, flowX: point.x, flowY: point.y });
+              // Double-click on the empty canvas creates a note directly, top-left
+              // corner at the click point, and opens it for editing (todo.md №19,
+              // Milanote-style — corrects №10, which routed this through a menu).
+              // The create menu stays right-click-only (`onPaneContextMenu` above).
+              onPaneDoubleClick: (point) => {
+                void handleCreateNote(point, { startEditing: true });
               },
             }}
             renderCard={(card) => {
