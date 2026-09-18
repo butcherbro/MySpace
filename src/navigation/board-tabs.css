@@ -86,3 +86,16 @@
   color: var(--ink);
   background: color-mix(in srgb, var(--desk) 55%, transparent);
 }
+
+.board-tabs__tab--dragging {
+  opacity: 0.5;
+}
+
+/* Drag-to-reorder position indicator: a thin accent bar on the landing edge. */
+.board-tabs__tab--drop-before {
+  box-shadow: inset 2px 0 0 var(--board-accent, var(--ink));
+}
+
+.board-tabs__tab--drop-after {
+  box-shadow: inset -2px 0 0 var(--board-accent, var(--ink));
+}

@@ -115,3 +115,30 @@ export function activateBoardTab(
   }
   return { ...state, activeBoardId: boardId };
 }
+
+/**
+ * Moves a tab to `toIndex` (browser-tab drag reorder). Home stays pinned at
+ * index 0 and can neither move nor be displaced — `toIndex` is clamped to
+ * at least 1, and moving Home itself is a no-op.
+ */
+export function reorderBoardTabs(
+  state: BoardTabsState,
+  boardId: string,
+  toIndex: number,
+): BoardTabsState {
+  if (boardId === state.homeBoardId) {
+    return state;
+  }
+  const fromIndex = state.tabs.findIndex((t) => t.boardId === boardId);
+  if (fromIndex < 0) {
+    return state;
+  }
+  const clamped = Math.max(1, Math.min(toIndex, state.tabs.length - 1));
+  if (clamped === fromIndex) {
+    return state;
+  }
+  const tabs = [...state.tabs];
+  const [moved] = tabs.splice(fromIndex, 1);
+  tabs.splice(clamped, 0, moved);
+  return { ...state, tabs };
+}

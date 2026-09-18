@@ -6,6 +6,7 @@ import {
   closeBoardTab,
   createBoardTabs,
   navigateBoardTab,
+  reorderBoardTabs,
   type BoardTab,
   type BoardTabsState,
 } from "./board-tabs";
@@ -47,6 +48,7 @@ export interface BoardNavigation {
   goForward: () => void;
   activateTab: (boardId: string) => void;
   closeTab: (boardId: string) => void;
+  reorderTabs: (boardId: string, toIndex: number) => void;
 }
 
 function tabFrom(snapshot: BoardSnapshot): BoardTab {
@@ -143,5 +145,10 @@ export function useBoardNavigation(options: BoardNavigationOptions): BoardNaviga
     [navigateTo],
   );
 
-  return { tabs, initialize, navigateTo, goBack, goForward, activateTab, closeTab };
+  // Tab drag reorder: purely local session state, no snapshot reload.
+  const reorderTabs = useCallback((boardId: string, toIndex: number) => {
+    setTabs((prev) => (prev ? reorderBoardTabs(prev, boardId, toIndex) : prev));
+  }, []);
+
+  return { tabs, initialize, navigateTo, goBack, goForward, activateTab, closeTab, reorderTabs };
 }

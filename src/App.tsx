@@ -1899,6 +1899,7 @@ function App() {
             activeBoardId={navigation.tabs.activeBoardId}
             onActivate={handleTabActivate}
             onClose={handleTabClose}
+            onReorder={navigation.reorderTabs}
           />
         )}
         {unsortedOpen && state.unsortedCards.length > 0 && (

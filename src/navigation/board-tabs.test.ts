@@ -5,6 +5,7 @@ import {
   createBoardTabs,
   navigateBoardTab,
   openBoardTab,
+  reorderBoardTabs,
   syncBoardTab,
   type BoardTab,
 } from "./board-tabs";
@@ -161,5 +162,59 @@ describe("BoardTabs", () => {
     const next = navigateBoardTab(s, tab("a", "A v2"), "sync");
 
     expect(next).toEqual(s);
+  });
+
+  describe("reorderBoardTabs", () => {
+    it("moves a tab from i to j, keeping Home first", () => {
+      let s = createBoardTabs(tab("home", "Home"));
+      s = openBoardTab(s, tab("a", "A"));
+      s = openBoardTab(s, tab("b", "B"));
+      s = openBoardTab(s, tab("c", "C")); // home, a, b, c
+
+      const next = reorderBoardTabs(s, "a", 3);
+      expect(next.tabs.map((t) => t.boardId)).toEqual(["home", "b", "c", "a"]);
+      // Active tab and tab identity/order elsewhere are untouched.
+      expect(next.activeBoardId).toBe(s.activeBoardId);
+    });
+
+    it("moving a tab earlier shifts the tabs in between right", () => {
+      let s = createBoardTabs(tab("home", "Home"));
+      s = openBoardTab(s, tab("a", "A"));
+      s = openBoardTab(s, tab("b", "B"));
+      s = openBoardTab(s, tab("c", "C")); // home, a, b, c
+
+      const next = reorderBoardTabs(s, "c", 1);
+      expect(next.tabs.map((t) => t.boardId)).toEqual(["home", "c", "a", "b"]);
+    });
+
+    it("Home can never be moved", () => {
+      let s = createBoardTabs(tab("home", "Home"));
+      s = openBoardTab(s, tab("a", "A"));
+      const before = s;
+      expect(reorderBoardTabs(s, "home", 1)).toEqual(before);
+    });
+
+    it("clamps a target index that would displace Home", () => {
+      let s = createBoardTabs(tab("home", "Home"));
+      s = openBoardTab(s, tab("a", "A"));
+      s = openBoardTab(s, tab("b", "B")); // home, a, b
+
+      const next = reorderBoardTabs(s, "b", 0);
+      // Clamped to index 1 (right after Home), not index 0.
+      expect(next.tabs.map((t) => t.boardId)).toEqual(["home", "b", "a"]);
+    });
+
+    it("reordering an unknown tab is a no-op", () => {
+      const s = createBoardTabs(tab("home", "Home"));
+      expect(reorderBoardTabs(s, "missing", 0)).toEqual(s);
+    });
+
+    it("a no-op move (same index) returns tabs unchanged", () => {
+      let s = createBoardTabs(tab("home", "Home"));
+      s = openBoardTab(s, tab("a", "A"));
+      s = openBoardTab(s, tab("b", "B")); // home, a, b
+      const before = s;
+      expect(reorderBoardTabs(s, "a", 1)).toEqual(before);
+    });
   });
 });
