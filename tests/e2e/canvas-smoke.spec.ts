@@ -690,3 +690,36 @@ test("double-click on an existing card does not open the pane create menu", asyn
 
   await expect(page.getByTestId("pane-context-menu")).toHaveCount(0);
 });
+
+test("pasting formatted HTML onto the empty canvas creates a note with bold/italic preserved", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/html", "<p>plain <b>bold</b> and <i>italic</i></p>");
+    dt.setData("text/plain", "plain bold and italic");
+    const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
+    window.dispatchEvent(event);
+  });
+
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+  const note = page.locator(".note-card");
+  await expect(note.locator("strong")).toHaveText("bold");
+  await expect(note.locator("em")).toHaveText("italic");
+});
+
+test("pasting plain text (no text/html) onto the empty canvas still creates a note", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
+
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "just plain text");
+    const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
+    window.dispatchEvent(event);
+  });
+
+  await expect(page.getByTestId("note-card")).toHaveCount(1);
+  await expect(page.locator(".note-card")).toContainText("just plain text");
+});

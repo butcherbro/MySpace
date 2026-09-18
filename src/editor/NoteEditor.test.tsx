@@ -189,4 +189,61 @@ describe("NoteEditor", () => {
 
     expect(box.commands?.isStrikeActive()).toBe(true);
   });
+
+  // todo.md №13: pasting formatted text (Telegram/browser) into an OPEN note
+  // editor must keep bold/italic/paragraphs — ProseMirror's own paste handler
+  // runs on the contenteditable natively; nothing in NoteEditor intercepts or
+  // downgrades the clipboard to text/plain, so this exercises the real default.
+  it("keeps bold/italic marks and paragraph structure when pasting text/html", () => {
+    const onChange = vi.fn();
+    render(
+      <NoteEditor
+        document={{ type: "doc", content: [{ type: "paragraph", content: [] }] }}
+        editable={true}
+        onChange={onChange}
+      />,
+    );
+
+    const editor = screen.getByRole("textbox");
+    const html = "<p>plain <b>bold</b> and <i>italic</i></p><p>second paragraph</p>";
+    const clipboardData = {
+      getData: (type: string) => (type === "text/html" ? html : "plain bold and italic\nsecond paragraph"),
+      types: ["text/html", "text/plain"],
+    };
+    fireEvent.paste(editor, { clipboardData });
+
+    expect(onChange).toHaveBeenCalled();
+    const calls = onChange.mock.calls;
+    const doc = calls[calls.length - 1]?.[0] as {
+      content: { type: string; content?: { marks?: { type: string }[] }[] }[];
+    };
+    expect(doc.content.map((n) => n.type)).toEqual(["paragraph", "paragraph"]);
+    const marks = doc.content[0].content?.flatMap((n) => n.marks?.map((m) => m.type) ?? []) ?? [];
+    expect(marks).toContain("bold");
+    expect(marks).toContain("italic");
+  });
+
+  it("pastes plain text as-is when the clipboard has no text/html", () => {
+    const onChange = vi.fn();
+    render(
+      <NoteEditor
+        document={{ type: "doc", content: [{ type: "paragraph", content: [] }] }}
+        editable={true}
+        onChange={onChange}
+      />,
+    );
+
+    const editor = screen.getByRole("textbox");
+    const clipboardData = {
+      getData: (type: string) => (type === "text/plain" ? "just plain text" : ""),
+      types: ["text/plain"],
+    };
+    fireEvent.paste(editor, { clipboardData });
+
+    expect(onChange).toHaveBeenCalled();
+    const calls = onChange.mock.calls;
+    const doc = calls[calls.length - 1]?.[0] as { content: { content?: { text?: string; marks?: unknown[] }[] }[] };
+    expect(doc.content[0].content?.[0]?.text).toBe("just plain text");
+    expect(doc.content[0].content?.[0]?.marks ?? []).toEqual([]);
+  });
 });

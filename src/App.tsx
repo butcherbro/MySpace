@@ -46,6 +46,8 @@ import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickImageFile } from "./services/asset-picker";
 import { computeInitialImageFrameSize, loadNaturalImageSize } from "./cards/image/image-card-geometry";
 import { useNativeFileDrop } from "./app/use-native-file-drop";
+import { useCanvasPaste } from "./app/use-canvas-paste";
+import { htmlToDocument } from "./editor/html-to-document";
 import { copyText } from "./services/clipboard";
 import type {
   BoardPortalDto,
@@ -233,14 +235,16 @@ function App() {
   const handleCreateNote = useCallback(
     async (
       position?: { x: number; y: number },
-      options?: { startEditing?: boolean },
+      options?: { startEditing?: boolean; content?: { documentJson: unknown; plainText: string } },
     ) => {
       if (!board) return;
       const id = idGenerator.nextId();
-      // An explicit position (double-click on the empty pane) places the note
-      // exactly there; the rail/button path falls back to a cascading default.
+      // An explicit position (double-click on the empty pane, paste) places the
+      // note exactly there; the rail/button path falls back to a cascading default.
       const x = position ? position.x : 40;
       const y = position ? position.y : 40 + notes.length * 24;
+      const documentJson = options?.content?.documentJson ?? plainTextToDocument("");
+      const plainText = options?.content?.plainText ?? "";
       const card: NoteCardDto = {
         kind: "note",
         id,
@@ -248,8 +252,8 @@ function App() {
         frame: { x, y, width: 240, height: 120 },
         zIndex: notes.length,
         revision: 1,
-        documentJson: plainTextToDocument(""),
-        plainText: "",
+        documentJson,
+        plainText,
         colorToken: "default",
       };
       try {
@@ -260,7 +264,7 @@ function App() {
             frame: card.frame,
             zIndex: card.zIndex,
             documentJson: card.documentJson,
-            plainText: "",
+            plainText,
           }),
         );
         dispatch({ type: "cardAdded", card });
@@ -640,6 +644,21 @@ function App() {
     onCreateFile: createFileCard,
     onError: onCanvasError,
   });
+
+  // Paste onto the empty canvas (no editor open) creates a note. `text/html`
+  // (Telegram/browser copy) keeps its bold/italic/strike/paragraphs/lists —
+  // pasting *into* an open note editor already gets this for free from
+  // ProseMirror's own paste handling, so this only covers the canvas-level case.
+  const handleCanvasPaste = useCallback(
+    ({ html, text }: { html: string; text: string }) => {
+      const useHtml = html.trim().length > 0;
+      const documentJson = useHtml ? htmlToDocument(html, text) : plainTextToDocument(text);
+      const plainText = useHtml ? documentToPlainText(documentJson) : text;
+      void handleCreateNote(undefined, { content: { documentJson, plainText } });
+    },
+    [handleCreateNote],
+  );
+  useCanvasPaste({ enabled: Boolean(board), onPaste: handleCanvasPaste });
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {

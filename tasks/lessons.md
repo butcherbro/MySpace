@@ -378,3 +378,45 @@
   Esc-to-close to `ContextMenu` itself (it only closed on backdrop click
   before) — a generic fix that now benefits every context menu in the app,
   not a special case for this one.
+
+## 2026-09-18 — Neither hypothesis in №13's brief matched the code
+
+- Task: `tasks/todo.md` №13 — paste formatted text (Telegram/browser) with
+  formatting preserved, both into an open note editor and onto the empty
+  canvas (creating a new note).
+- The brief's premises did not hold, checked by `grep -rn "paste\|clipboardData"
+  src/` before writing anything:
+  - Path (a), paste into an open editor: the brief worried about "a custom
+    paste handler intercepting clipboard as text/plain" or "a global canvas
+    paste handler running first". Neither exists — `src/editor/NoteEditor.tsx`
+    is a bare Tiptap `useEditor()` with no `editorProps.handlePaste` and no
+    `onPaste` prop; nothing in the app attaches a `paste` listener above it.
+    ProseMirror's own default paste handling already runs, and it already
+    parses `text/html` against the editor's schema. `src/editor/NoteEditor.test.tsx`
+    now has two tests proving this with a real `fireEvent.paste` + synthetic
+    `clipboardData` — no production code changed for this path.
+  - Path (b), paste onto the empty canvas: the brief assumed a create-note-
+    from-`text/plain` path "as is" existed and just needed a `text/html`
+    branch added. There was no canvas-paste-to-create-card feature at all —
+    `grep -rn "ClipboardEvent\|clipboardData"` across all of `src/` returned
+    zero matches outside `services/clipboard.ts` (write-only) and the two
+    editor files above. Built it from scratch: `src/app/use-canvas-paste.ts`
+    (a global `paste` listener that backs off when the target is inside any
+    text-entry control, so it never competes with (a)) plus
+    `src/editor/html-to-document.ts` (`generateJSON` through the editor's own
+    `createEditorExtensions()`, so the same schema filters both paths
+    identically) wired into `App.tsx`'s existing `handleCreateNote`.
+- Why inline color/font never leaks in either path: the editor's marks
+  (Bold/Italic/Strike) declare no `attrs` at all, and the one mark that does
+  (`TextColor`, `src/editor/text-color.ts`) only matches `span[data-color]` —
+  never a bare `style="color:…"`. Tiptap's *default* Bold/Italic *do* read
+  `font-weight`/`font-style` inline styles to decide whether to apply the
+  mark (useful — it's how Telegram's `<span style="font-weight:600">` copy
+  becomes real bold), but that only ever produces the mark itself, never
+  stores the style value anywhere in the document. No sanitizer needed
+  beyond "use the same restricted schema everywhere paste can reach it."
+- Lesson: a task brief's root-cause guess is a hypothesis, not a fact, even
+  when it's phrased as "выясни, почему" — the grep it invites you to run can
+  (and here did, twice) come back empty. Do that grep before opening any file
+  to fix, and say plainly in the report that both guesses were wrong instead
+  of quietly building around them.
