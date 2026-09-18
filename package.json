@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:ui": "vitest",
     "test:e2e": "playwright test",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

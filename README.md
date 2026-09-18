@@ -35,6 +35,9 @@ npm install
 npm run tauri dev
 ```
 
+`npm run tauri dev` — dev loop with hot reload.
+`npm run release` — builds the .app and installs it to /Applications/MySpace.app.
+
 ## Quality gates
 
 ```bash
