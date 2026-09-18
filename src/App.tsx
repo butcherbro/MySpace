@@ -895,16 +895,27 @@ function App() {
 
       // Blind drop of a leaf card into a board: it lands in that board's
       // Unsorted panel (Milanote-style) instead of stacking at the origin.
-      void gateway
-        .moveCardsToBoardUnsorted({
-          targetBoardId,
-          cards: [{ id: cardId, expectedRevision: card.revision }],
-        })
-        .then(() => {
+      //
+      // Routed through moveSelectionOntoBoard/MoveSelectionCommand (the same
+      // path the group drop below uses) instead of calling the gateway
+      // directly: a raw gateway call never entered the dispatcher's undo
+      // stack, so Cmd+Z after this specific drop undid whatever OLDER command
+      // happened to be on top instead — which had usually gone stale by then,
+      // surfacing as an unrelated "stale_revision" toast and no visible
+      // change (tasks/lessons.md 2026-09-18).
+      void moveSelectionOntoBoard({
+        gateway,
+        dispatcher,
+        idGenerator,
+        targetBoardId,
+        leafCards: [card],
+        portals: [],
+      })
+        .then((receipt) => {
           // If the target is the currently open board, show it in its Unsorted
           // panel; otherwise the card simply left this board (it will appear in
           // the target board's Unsorted when that board is opened).
-          if (targetBoardId === boardRef.current?.id) {
+          if (receipt.targetBoardId === boardRef.current?.id) {
             dispatch({ type: "cardMovedToUnsorted", id: cardId });
           } else {
             dispatch({ type: "cardsRemoved", ids: [cardId] });

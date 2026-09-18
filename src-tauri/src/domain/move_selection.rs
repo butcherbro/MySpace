@@ -361,9 +361,20 @@ pub fn undo_move_selection(
             ],
         )?;
         if restored == 0 {
+            // Раньше здесь дублировали after_revision в оба поля — тост всегда
+            // показывал "actual N, expected N" и не давал понять, что реально
+            // разошлось. Читаем настоящую текущую ревизию из БД, как это уже
+            // делает update_note.
+            let actual: i64 = tx
+                .query_row(
+                    "SELECT revision FROM cards WHERE id = ?1",
+                    [card.id.as_str()],
+                    |r| r.get(0),
+                )
+                .unwrap_or(card.after_revision);
             return Err(WorkspaceError::StaleRevision {
                 expected: card.after_revision,
-                actual: card.after_revision,
+                actual,
             });
         }
     }
@@ -380,9 +391,16 @@ pub fn undo_move_selection(
             ],
         )?;
         if restored_board == 0 {
+            let actual: i64 = tx
+                .query_row(
+                    "SELECT revision FROM boards WHERE id = ?1",
+                    [board.board_id.as_str()],
+                    |r| r.get(0),
+                )
+                .unwrap_or(board.after_board_revision);
             return Err(WorkspaceError::StaleRevision {
                 expected: board.after_board_revision,
-                actual: board.after_board_revision,
+                actual,
             });
         }
         let restored_portal = tx.execute(
@@ -398,9 +416,16 @@ pub fn undo_move_selection(
             ],
         )?;
         if restored_portal == 0 {
+            let actual: i64 = tx
+                .query_row(
+                    "SELECT revision FROM cards WHERE id = ?1",
+                    [board.portal_card_id.as_str()],
+                    |r| r.get(0),
+                )
+                .unwrap_or(board.after_portal_revision);
             return Err(WorkspaceError::StaleRevision {
                 expected: board.after_portal_revision,
-                actual: board.after_portal_revision,
+                actual,
             });
         }
     }

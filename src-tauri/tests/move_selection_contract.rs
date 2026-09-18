@@ -816,3 +816,43 @@ fn undo_is_all_or_nothing_when_a_member_changed_since_the_move() {
         .unwrap();
     assert_eq!(note, ("b".to_string(), 1));
 }
+
+#[test]
+fn undo_stale_revision_reports_the_true_current_revision_not_a_duplicate_of_expected() {
+    // Root cause of "undo does nothing, toast shows stale_revision: actual N,
+    // expected N": undo_move_selection's StaleRevision arms echoed
+    // `after_revision` back as `actual` instead of reading the row's real
+    // current revision, so the banner was always uninformative (equal
+    // numbers) no matter what really raced the undo.
+    use myspace_lib::db::{bootstrap, open_in_memory};
+    use myspace_lib::domain::errors::WorkspaceError;
+    use myspace_lib::domain::move_selection::{move_selection_to_board, undo_move_selection};
+
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let _home = mixed_fixture(&conn);
+
+    let receipt = move_selection_to_board(&mut conn, &mixed_move("op-undo-actual")).unwrap();
+
+    // Something bumps the note's revision twice after the move (e.g. a
+    // late-landing draft flush), so its real revision is two past what the
+    // receipt expects.
+    conn.execute(
+        "UPDATE cards SET revision = revision + 2 WHERE id = 'n1'",
+        [],
+    )
+    .unwrap();
+
+    let err = undo_move_selection(&mut conn, &receipt).unwrap_err();
+    match err {
+        WorkspaceError::StaleRevision { expected, actual } => {
+            assert_eq!(expected, receipt.cards[0].after_revision);
+            assert_eq!(
+                actual,
+                receipt.cards[0].after_revision + 2,
+                "must report the row's real current revision, not a copy of `expected`"
+            );
+        }
+        other => panic!("expected StaleRevision, got {other:?}"),
+    }
+}

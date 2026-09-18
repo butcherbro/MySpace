@@ -136,4 +136,72 @@ describe("moveSelectionOntoBoard", () => {
     ).rejects.toMatchObject({ code: "stale_revision" });
     expect(moveSelectionToBoard).toHaveBeenCalledTimes(2);
   });
+
+  /**
+   * Regression for the "Cmd+Z after a single-card drop onto a board portal
+   * does nothing" bug (tasks/lessons.md 2026-09-18): the single-card drop
+   * handler in App.tsx used to call `gateway.moveCardsToBoardUnsorted`
+   * directly, bypassing the CommandDispatcher entirely, so that move never
+   * entered undo history — Cmd+Z instead undid whatever older command
+   * happened to be on top, which had usually gone stale, surfacing an
+   * unrelated "stale_revision" toast. The handler now goes through
+   * `moveSelectionOntoBoard` (this module) for a single leaf card with no
+   * portals, exactly like the group-drop path, so it is recorded on the
+   * dispatcher's undo stack and Cmd+Z reverses it cleanly.
+   */
+  it("leaves a single-leaf-card move (no portals) undoable via the dispatcher", async () => {
+    // A tiny in-memory "backend": tracks the card's live revision so the
+    // undo call can be checked against real post-move state, not a canned
+    // response.
+    let liveRevision = 3;
+    const originalFrame = { x: 0, y: 0, width: 320, height: 900 };
+
+    const readCard = vi.fn(async () => noteCard("note-1", liveRevision));
+    const moveSelectionToBoard = vi.fn(async (input: MoveSelectionToBoardInput) => {
+      const before = liveRevision;
+      liveRevision += 1;
+      return {
+        operationId: "op-move",
+        targetBoardId: input.targetBoardId,
+        cards: input.cards.map((c) => ({
+          id: c.id,
+          previousBoardId: "home",
+          previousUnsorted: false,
+          previousFrame: originalFrame,
+          beforeRevision: before,
+          afterRevision: liveRevision,
+        })),
+        boards: [],
+      };
+    });
+    const undoMoveSelection = vi.fn(async (receipt) => {
+      const card = receipt.cards[0];
+      if (card.afterRevision !== liveRevision) {
+        throw { code: "stale_revision", message: { expected: card.afterRevision, actual: liveRevision } };
+      }
+      liveRevision += 1;
+    });
+    const gateway = {
+      readCard,
+      moveSelectionToBoard,
+      undoMoveSelection,
+    } as unknown as WorkspaceGateway;
+    const dispatcher = new CommandDispatcher(gateway);
+
+    await moveSelectionOntoBoard({
+      gateway,
+      dispatcher,
+      idGenerator: new UuidV7Generator(),
+      targetBoardId: "board-b",
+      leafCards: [noteCard("note-1", 3)],
+      portals: [],
+    });
+
+    // The move must have entered undo history...
+    expect(dispatcher.canUndo()).toBe(true);
+
+    // ...and Cmd+Z must reverse it cleanly, with no stale_revision.
+    await expect(dispatcher.undo()).resolves.toBe(true);
+    expect(undoMoveSelection).toHaveBeenCalledTimes(1);
+  });
 });

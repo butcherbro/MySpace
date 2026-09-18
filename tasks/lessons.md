@@ -275,3 +275,46 @@
   processes from earlier failed runs were still alive 30+ minutes later at
   0% CPU; always check `ps` for leftover children by name, not just the PID
   you started, when a "timeout" didn't actually stop the process tree.
+
+## 2026-09-18 — An undoable move must go through the dispatcher, not the gateway directly
+
+- User-reported failure: dragging a large note onto another board's portal
+  worked (card correctly landed in the target's Unsorted panel), but `Cmd+Z`
+  right after did nothing visible and raised a `stale_revision` toast with
+  equal expected/actual numbers.
+- Both hypotheses in the bug report were plausible but wrong: the TS error
+  renderer (`src/services/error-message.ts`) already correctly unpacks
+  `{ expected, actual }` and was already covered by a test with distinct
+  values — not the bug. And `MoveSelectionCommand.undo` does use the
+  receipt's real `afterRevision`, not a stale pre-retry value — also not
+  the bug for the path actually hit.
+- Real root cause: the single-card "drop onto a board portal" handler
+  (`handleCardDroppedOnPortal`'s leaf branch, `src/App.tsx`) called
+  `gateway.moveCardsToBoardUnsorted(...)` directly instead of going through
+  `CommandDispatcher.execute(...)`. The sibling group-drop handler
+  (`handleCardsDroppedOnBoard`) and the board-portal branch of the same
+  handler both dispatch commands correctly — only this one leaf-card path
+  was wired straight to the gateway, so the move never entered undo history.
+  `Cmd+Z` then undid whichever older command was still on top of the stack,
+  which had since gone stale — hence an unrelated `stale_revision` toast and
+  no visible change.
+- Fix: the leaf branch now calls `moveSelectionOntoBoard` (the same
+  dispatcher-integrated helper the group path already used), for a
+  single-leaf selection with no portals.
+- Secondary, masking bug found and fixed along the way:
+  `undo_move_selection` (`src-tauri/src/domain/move_selection.rs`) echoed
+  `after_revision` back as both `expected` and `actual` on a stale-revision
+  refusal, instead of reading the row's real current revision (the pattern
+  `update_note` already uses). This made every undo stale-revision toast for
+  the mixed-selection path uninformative — equal numbers regardless of what
+  actually raced it — and is why the reported numbers looked identical.
+- Lesson: any user-facing action that has an "undo" affordance (Cmd+Z, an
+  Undo button) must be verified end-to-end through the exact code path the
+  UI wires it to, not just at the level of the reusable helper function. A
+  helper being correct and well-tested (`moveSelectionOntoBoard` already
+  was) does not mean every call site actually uses it — grep every call site
+  of the raw gateway method the helper wraps before trusting "it's tested."
+  Also: when a bare `WorkspaceError::StaleRevision` refusal is constructed
+  from a failed conditional `UPDATE ... WHERE id=? AND revision=?`, the
+  `actual` field must be a fresh `SELECT`, never a copy of `expected` — a
+  copy is silently indistinguishable from "nothing is wrong" in the message.
