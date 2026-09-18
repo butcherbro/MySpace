@@ -3,6 +3,7 @@ import type { ImageCardDto } from "../../services/workspace-gateway";
 import { HighlightedText } from "../../components/HighlightedText";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { useDocumentDraft } from "../../editor/use-document-draft";
+import { computeResizedImageFrameSize } from "./image-card-geometry";
 import "./image-card.css";
 
 interface ImageCardProps {
@@ -51,9 +52,16 @@ export function ImageCard({
     .filter(Boolean)
     .join(" ");
 
-  const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const resizeStart = useRef<{ x: number; y: number; w: number; h: number; captionHeight: number } | null>(
+    null,
+  );
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
   const draftSizeRef = useRef<{ width: number; height: number } | null>(null);
+  // Natural aspect ratio (width/height) картинки — известна только после
+  // загрузки <img> в браузере (backend её не хранит). Пока null — resize
+  // остаётся свободным (старое поведение), чтобы не блокировать интеракцию.
+  const imageAspectRatio = useRef<number | null>(null);
+  const captionRef = useRef<HTMLDivElement | null>(null);
 
   const appliedWidth = draftSize?.width ?? image.frame.width;
   const appliedHeight = draftSize?.height ?? image.frame.height;
@@ -77,6 +85,9 @@ export function ImageCard({
       y: e.clientY,
       w: image.frame.width,
       h: image.frame.height,
+      // Измеряем подпись сейчас, а не по CAPTION_BASE_HEIGHT — она может быть
+      // многострочной, и высота image area должна остаться честной.
+      captionHeight: captionRef.current?.getBoundingClientRect().height ?? 0,
     };
     window.addEventListener("pointermove", onResizeMove);
     window.addEventListener("pointerup", onResizeUp);
@@ -86,10 +97,24 @@ export function ImageCard({
     if (!resizeStart.current) return;
     const dx = e.clientX - resizeStart.current.x;
     const dy = e.clientY - resizeStart.current.y;
-    const next = {
-      width: Math.max(120, resizeStart.current.w + dx),
-      height: Math.max(48, resizeStart.current.h + dy),
-    };
+    const aspect = imageAspectRatio.current;
+    let next: { width: number; height: number };
+    if (aspect) {
+      // Aspect-lock: ширина ведёт (drag по диагонали), высота image area
+      // считается по пропорциям картинки + фактическая высота подписи.
+      next = computeResizedImageFrameSize(
+        resizeStart.current.w + dx,
+        aspect,
+        resizeStart.current.captionHeight,
+      );
+    } else {
+      // Пропорции ещё не известны (картинка не догрузилась) — старое
+      // свободное поведение, чтобы resize не блокировался.
+      next = {
+        width: Math.max(120, resizeStart.current.w + dx),
+        height: Math.max(48, resizeStart.current.h + dy),
+      };
+    }
     draftSizeRef.current = next;
     setDraftSize(next);
   }
@@ -130,9 +155,18 @@ export function ImageCard({
           setPreview(true);
         }}
       >
-        <img src={src} alt={image.asset.fileName} />
+        <img
+          src={src}
+          alt={image.asset.fileName}
+          onLoad={(e) => {
+            const el = e.currentTarget;
+            imageAspectRatio.current =
+              el.naturalWidth > 0 && el.naturalHeight > 0 ? el.naturalWidth / el.naturalHeight : null;
+          }}
+        />
       </div>
       <div
+        ref={captionRef}
         className="image-card__caption"
         onDoubleClick={(e) => {
           e.stopPropagation();

@@ -1,5 +1,21 @@
 # Lessons
 
+## 2026-09-18 — Asset natural size is never persisted; the frontend must read it
+
+- Root cause found while fixing image cards cropping under a mismatched frame:
+  `assets.width`/`height` columns exist in the DB (`src-tauri/migrations/0002_assets.sql`)
+  and the `AssetDto` type carries them, but `import_asset` in
+  `src-tauri/src/domain/asset_service.rs` never populates them — every import
+  writes `NULL`. Any frontend code that assumes `asset.width`/`height` are
+  usable is wrong today; only a browser-side `Image()`/`<img>.naturalWidth`
+  read is reliable (see `src/cards/image/image-card-geometry.ts`).
+- Consequence: don't add an `image` crate / backend dimension read for this
+  unless a second consumer needs it server-side (e.g. thumbnail generation
+  without a renderer) — YAGNI for a single UI-only need. If a future feature
+  needs natural size before the asset is even displayed (no `<img>` mounted
+  yet), that is the trigger to finally wire real width/height into
+  `import_asset`.
+
 ## 2026-09-09 — External-agent handoff is a routing decision
 
 - User correction: when the user asks to hand work to an external agent in

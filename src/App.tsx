@@ -43,6 +43,7 @@ import { createGateway } from "./services/create-gateway";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickImageFile } from "./services/asset-picker";
+import { computeInitialImageFrameSize, loadNaturalImageSize } from "./cards/image/image-card-geometry";
 import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { copyText } from "./services/clipboard";
 import type {
@@ -507,11 +508,17 @@ function App() {
           fileName,
           mimeType,
         });
+        // Backend не читает natural width/height картинки при импорте
+        // (assets.width/height в БД всегда NULL), поэтому пропорции для
+        // стартового frame берём в браузере — иначе карточка получает
+        // фиксированный 320x240 и обрезает картинку под рамку (todo.md №3).
+        const natural = await loadNaturalImageSize(`myspace-asset://localhost/${asset.filePath}`);
+        const { width, height } = computeInitialImageFrameSize(natural?.width, natural?.height);
         const card: ImageCardDto = {
           kind: "image",
           id: cardId,
           boardId: currentBoard.id,
-          frame: { x, y, width: 320, height: 240 },
+          frame: { x, y, width, height },
           zIndex: cardsRef.current.length,
           revision: 1,
           asset,
