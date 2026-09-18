@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ImageCardDto } from "../../services/workspace-gateway";
 import { HighlightedText } from "../../components/HighlightedText";
 import { NoteEditor } from "../../editor/NoteEditor";
@@ -193,15 +194,23 @@ export function ImageCard({
       </div>
       {saving && <div className="image-card__status">Saving…</div>}
       {error && <div className="image-card__status image-card__status--error">{error}</div>}
-      {preview && (
-        <div
-          className="image-card__preview"
-          data-testid="image-preview"
-          onClick={() => setPreview(false)}
-        >
-          <img src={src} alt={image.asset.fileName} />
-        </div>
-      )}
+      {preview &&
+        // Портал в document.body: React Flow позиционирует карточки через
+        // CSS `transform`, а трансформированный предок становится containing
+        // block для `position: fixed` — без портала просмотр раскрывался бы
+        // от позиции миниатюры и мог уезжать за край окна. Через портал
+        // `fixed` считается от настоящего viewport окна, независимо от того,
+        // где на доске стоит миниатюра и какой сейчас зум канваса.
+        createPortal(
+          <div
+            className="image-card__preview"
+            data-testid="image-preview"
+            onClick={() => setPreview(false)}
+          >
+            <img src={src} alt={image.asset.fileName} />
+          </div>,
+          document.body,
+        )}
       <div
         className="image-card__resize nodrag nopan"
         data-testid="image-resize"

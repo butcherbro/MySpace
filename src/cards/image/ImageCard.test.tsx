@@ -105,6 +105,68 @@ describe("ImageCard", () => {
     expect(lastEditorProps()?.editable).toBe(true);
   });
 
+  describe("fullscreen preview", () => {
+    // React Flow позиционирует карточки через CSS `transform` на узле-обёртке.
+    // Любой предок с `transform` становится containing block для `position: fixed`
+    // потомков (это в спеке CSS), поэтому просмотр раньше "прилипал" к позиции
+    // миниатюры и уходил за край экрана вместо того, чтобы покрыть весь viewport.
+    // Заворачиваем карточку в такой же трансформированный контейнер, чтобы тест
+    // ловил регрессию, а не проходил случайно из-за отсутствия transform в jsdom.
+    function renderInsideTransformedCanvasNode() {
+      const wrapper = document.createElement("div");
+      wrapper.setAttribute("data-testid", "react-flow-node-stand-in");
+      wrapper.style.transform = "translate(50px, 900px) scale(0.4)";
+      wrapper.style.overflow = "hidden";
+      document.body.appendChild(wrapper);
+
+      render(
+        <ImageCard
+          image={makeImage()}
+          onUpdate={vi.fn().mockResolvedValue(undefined)}
+          onResize={vi.fn()}
+          onContextMenu={vi.fn()}
+        />,
+        { container: wrapper },
+      );
+
+      return wrapper;
+    }
+
+    it("opens the preview on a double click of the image", () => {
+      renderInsideTransformedCanvasNode();
+
+      expect(screen.queryByTestId("image-preview")).not.toBeInTheDocument();
+      fireEvent.doubleClick(screen.getByAltText("photo.png"));
+      expect(screen.getByTestId("image-preview")).toBeInTheDocument();
+    });
+
+    it("renders the preview outside the transformed card ancestor (portal to document.body)", () => {
+      const wrapper = renderInsideTransformedCanvasNode();
+      fireEvent.doubleClick(screen.getByAltText("photo.png"));
+
+      const preview = screen.getByTestId("image-preview");
+      // Если бы просмотр остался вложенным узлом карточки, он бы читал
+      // `position: fixed` относительно трансформированного `wrapper` (баг) —
+      // и оказывался бы где-то возле миниатюры, а не по центру окна.
+      expect(wrapper.contains(preview)).toBe(false);
+      expect(document.body.contains(preview)).toBe(true);
+    });
+
+    it("closes the preview on click and on Escape", () => {
+      renderInsideTransformedCanvasNode();
+      fireEvent.doubleClick(screen.getByAltText("photo.png"));
+      expect(screen.getByTestId("image-preview")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("image-preview"));
+      expect(screen.queryByTestId("image-preview")).not.toBeInTheDocument();
+
+      fireEvent.doubleClick(screen.getByAltText("photo.png"));
+      expect(screen.getByTestId("image-preview")).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByTestId("image-preview")).not.toBeInTheDocument();
+    });
+  });
+
   it("shows saving while the caption flush is in flight", async () => {
     const save = deferred<void>();
     render(
