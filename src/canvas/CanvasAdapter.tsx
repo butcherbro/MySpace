@@ -249,14 +249,48 @@ export function CanvasAdapter({
     events.onSelectionChanged?.({ ids: [focusRequest.cardId] });
   }, [focusRequest, nodes, events]);
 
-  // Returns the portal card whose frame is covered most by the dragged card, or
-  // null when no portal is overlapped enough. Using surface overlap (instead of
-  // a single center point) makes a wide note reliably "cover" a smaller portal.
-  // A board_portal source may target OTHER portals (Board-on-Board), never itself.
+  // Resolves the portal a drag/drop should target. The CURSOR wins first: a
+  // portal whose frame contains the pointer's board-space position is the
+  // target the user is actually looking at, regardless of how much of the
+  // dragged card's own frame happens to overlap a neighbouring portal. Before
+  // this, the target was picked purely by frame-overlap ratio (see
+  // tasks/lessons.md 2026-09-08), so a large card dragged toward portal A
+  // would drop onto portal B instead whenever B's edge caught more of the
+  // card's rectangle than A did — even with the pointer sitting squarely over
+  // A (todo.md №22). Overlap is now only a FALLBACK for when the cursor is
+  // not over any portal at all (e.g. a big card whose body still meaningfully
+  // covers a portal even though the pointer let go just outside its frame).
+  // Several portals can overlap each other; among cursor hits, the top one
+  // (highest zIndex) wins. A board_portal source may target OTHER portals
+  // (Board-on-Board), never itself.
   const PORTAL_DROP_THRESHOLD = 0.25;
-  const portalAtPoint = (node: Node<CardNodeData>): CanvasCard | null => {
+  const portalAtPoint = (
+    node: Node<CardNodeData>,
+    cursor: { x: number; y: number } | null,
+  ): CanvasCard | null => {
     const source = cards.find((c) => c.id === node.id);
     if (!source) return null;
+
+    if (cursor) {
+      let cursorHit: CanvasCard | null = null;
+      let bestZ = -Infinity;
+      for (const c of cards) {
+        if (c.kind !== "board_portal" || !c.targetBoardId) continue;
+        if (c.id === source.id) continue; // never drop onto itself
+        const { frame } = c;
+        const inside =
+          cursor.x >= frame.x &&
+          cursor.x <= frame.x + frame.width &&
+          cursor.y >= frame.y &&
+          cursor.y <= frame.y + frame.height;
+        if (inside && c.zIndex > bestZ) {
+          bestZ = c.zIndex;
+          cursorHit = c;
+        }
+      }
+      if (cursorHit) return cursorHit;
+    }
+
     const rect = {
       x: node.position.x,
       y: node.position.y,
@@ -278,6 +312,16 @@ export function CanvasAdapter({
     return bestRatio >= PORTAL_DROP_THRESHOLD ? best : null;
   };
 
+  // Converts a drag event's screen-space pointer into a board-space point,
+  // when the event carries client coordinates (mouse events do; some
+  // synthetic/touch paths may not).
+  const cursorFlowPoint = (
+    event: React.MouseEvent | MouseEvent | TouchEvent | undefined,
+  ): { x: number; y: number } | null => {
+    if (!event || !("clientX" in event)) return null;
+    return flowRef.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) ?? null;
+  };
+
   const handleNodesChange = (changes: NodeChange<Node<CardNodeData>>[]) => {
     setNodes((prev) => applyNodeChanges(changes, prev) as Node<CardNodeData>[]);
   };
@@ -288,11 +332,17 @@ export function CanvasAdapter({
     events.onSelectionChanged?.({ ids });
   };
 
-  const handleNodeDragStop = (_: unknown, node: Node<CardNodeData> | undefined) => {
+  const handleNodeDragStop = (
+    event: React.MouseEvent | MouseEvent | TouchEvent | undefined,
+    node: Node<CardNodeData> | undefined,
+  ) => {
     // The drag session owns the dragged card id. A cross-board drop replaces the
     // board snapshot, so the React Flow node can already be gone when drag-stop
     // fires; `node` is then absent and must never be dereferenced.
     const draggedCardId = draggingCardIdRef.current ?? node?.id ?? null;
+    // Board-space cursor position at release, used to resolve the portal drop
+    // target by where the pointer actually is (see `portalAtPoint`).
+    const cursorPoint = cursorFlowPoint(event);
     const selected = selectedIdsRef.current;
     const ids =
       draggedCardId !== null && selected.has(draggedCardId) && selected.size > 1
@@ -327,7 +377,7 @@ export function CanvasAdapter({
     // portal, move the whole selection there instead of repositioning.
     const dragged = nodesRef.current.find((n) => n.id === ids[0]);
     if (dragged) {
-      const portal = portalAtPoint(dragged);
+      const portal = portalAtPoint(dragged, cursorPoint);
       if (portal?.targetBoardId) {
         events.onCardsDroppedOnPortal?.(ids, portal.targetBoardId);
         return;
@@ -371,7 +421,10 @@ export function CanvasAdapter({
   // can highlight it. Only emit on change to avoid redundant renders. Also
   // surface the screen-space pointer so the parent can hit-test breadcrumbs.
   const handleNodeDrag = (event: React.MouseEvent | MouseEvent | TouchEvent, node: Node<CardNodeData>) => {
-    const portal = portalAtPoint(node);
+    // The hover highlight must resolve the same way the eventual drop will
+    // (cursor-first, overlap fallback) — otherwise the highlighted portal
+    // would lie about where the card is about to land.
+    const portal = portalAtPoint(node, cursorFlowPoint(event));
     const portalId = portal?.id ?? null;
     if (portalId !== highlightedPortalRef.current) {
       highlightedPortalRef.current = portalId;

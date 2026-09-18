@@ -451,6 +451,146 @@ describe("CanvasAdapter", () => {
     }
   });
 
+  describe("portal drop target (todo.md №22)", () => {
+    // A big note that overlaps portal A only partially (ratio 0.5) but
+    // overlaps portal B fully (ratio 1.0) -- the OLD pure frame-overlap
+    // resolution would always pick B here, even when the user's cursor is
+    // clearly over A when they let go.
+    const bigNote: CanvasCard = {
+      id: "n1",
+      boardId: "home",
+      kind: "note",
+      frame: { x: 0, y: 0, width: 300, height: 100 },
+      zIndex: 0,
+      revision: 1,
+    };
+    const portalA: CanvasCard = {
+      id: "pA",
+      boardId: "home",
+      kind: "board_portal",
+      frame: { x: 250, y: 0, width: 100, height: 100 },
+      zIndex: 1,
+      revision: 1,
+      targetBoardId: "board-a",
+    };
+    const portalB: CanvasCard = {
+      id: "pB",
+      boardId: "home",
+      kind: "board_portal",
+      frame: { x: 0, y: 0, width: 100, height: 100 },
+      zIndex: 1,
+      revision: 1,
+      targetBoardId: "board-b",
+    };
+    // A second plain card, far from both portals, used only to prove group
+    // drops resolve by the single shared cursor position, not by any one
+    // selected node's own frame.
+    const farNote: CanvasCard = {
+      id: "n2",
+      boardId: "home",
+      kind: "note",
+      frame: { x: 800, y: 800, width: 50, height: 50 },
+      zIndex: 0,
+      revision: 1,
+    };
+    const portalCards = [bigNote, farNote, portalA, portalB];
+
+    function renderPortalCanvas(events: Parameters<typeof CanvasAdapter>[0]["events"]) {
+      reactFlowProps.length = 0;
+      render(
+        <CanvasAdapter
+          cards={portalCards}
+          viewport={{ x: 0, y: 0, zoom: 1 }}
+          viewportResetToken={1}
+          events={events}
+          renderCard={(card) => <span data-testid={`card-${card.id}`}>{card.id}</span>}
+        />,
+      );
+      return reactFlowProps[reactFlowProps.length - 1] as {
+        onNodeDragStart?: (event: MouseEvent, node: { id: string }) => void;
+        onNodeDragStop?: (event: MouseEvent, node?: { id: string }) => void;
+        onNodeDrag?: (event: MouseEvent, node: { id: string }) => void;
+        onSelectionChange?: (params: { nodes: Array<{ id: string }> }) => void;
+      };
+    }
+
+    it("drops onto the portal under the cursor, not the one with more frame overlap", () => {
+      const onCardsDroppedOnPortal = vi.fn();
+      const props = renderPortalCanvas({ onCardsDroppedOnPortal });
+
+      props.onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "n1" });
+      // Cursor sits inside portal A's frame (x 250-350, y 0-100).
+      props.onNodeDragStop?.(
+        { clientX: 280, clientY: 50 } as unknown as MouseEvent,
+        { id: "n1" },
+      );
+
+      expect(onCardsDroppedOnPortal).toHaveBeenCalledWith(["n1"], "board-a");
+    });
+
+    it("drops onto portal B when the cursor is over B instead", () => {
+      const onCardsDroppedOnPortal = vi.fn();
+      const props = renderPortalCanvas({ onCardsDroppedOnPortal });
+
+      props.onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "n1" });
+      // Cursor sits inside portal B's frame (x 0-100, y 0-100).
+      props.onNodeDragStop?.(
+        { clientX: 50, clientY: 50 } as unknown as MouseEvent,
+        { id: "n1" },
+      );
+
+      expect(onCardsDroppedOnPortal).toHaveBeenCalledWith(["n1"], "board-b");
+    });
+
+    it("falls back to frame overlap when the cursor is over neither portal", () => {
+      const onCardsDroppedOnPortal = vi.fn();
+      const props = renderPortalCanvas({ onCardsDroppedOnPortal });
+
+      props.onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "n1" });
+      // Cursor is over the note but outside both portal frames (x 175 is
+      // between A's start at 250 and B's end at 100).
+      props.onNodeDragStop?.(
+        { clientX: 175, clientY: 50 } as unknown as MouseEvent,
+        { id: "n1" },
+      );
+
+      // Overlap-only resolution: B (ratio 1.0) beats A (ratio 0.5).
+      expect(onCardsDroppedOnPortal).toHaveBeenCalledWith(["n1"], "board-b");
+    });
+
+    it("resolves a group drag by the single cursor position, not per-node overlap", () => {
+      const onCardsDroppedOnPortal = vi.fn();
+      const props = renderPortalCanvas({ onCardsDroppedOnPortal });
+
+      // Select both n1 and the far-away n2, then drag n1 (the group's anchor).
+      // n2's own frame is nowhere near either portal; only the shared cursor
+      // position should decide the target for the whole group.
+      props.onSelectionChange?.({ nodes: [{ id: "n1" }, { id: "n2" }] });
+      props.onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "n1" });
+      props.onNodeDragStop?.(
+        { clientX: 280, clientY: 50 } as unknown as MouseEvent,
+        { id: "n1" },
+      );
+
+      expect(onCardsDroppedOnPortal).toHaveBeenCalledWith(
+        expect.arrayContaining(["n1", "n2"]),
+        "board-a",
+      );
+    });
+
+    it("highlights the same portal during drag that the drop would land on", () => {
+      const onPortalHighlight = vi.fn();
+      const props = renderPortalCanvas({ onPortalHighlight });
+
+      props.onNodeDrag?.(
+        { clientX: 280, clientY: 50 } as unknown as MouseEvent,
+        { id: "n1" },
+      );
+
+      expect(onPortalHighlight).toHaveBeenCalledWith("pA");
+    });
+  });
+
   /**
    * Regression for "ghost frame" during resize (backlog problem 7): the
    * `.canvas-card-frame` wrapper `nodeTypes.card` renders used to be forced

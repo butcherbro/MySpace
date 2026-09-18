@@ -172,6 +172,16 @@
 - `elementFromPoint` on a dropped board portal resolves the dragged node itself
   (it follows the cursor), so portal drops must be resolved in the canvas by frame
   overlap (`portalAtPoint`), not by `data-board-drop-id` hit-testing.
+  - 2026-09-18 addendum (todo.md №22): pure frame-overlap picked whichever
+    portal the dragged card's edge covered *most*, so a big card dragged toward
+    portal A could still resolve onto neighbouring portal B whenever B's edge
+    happened to catch a larger fraction of the card's own rectangle — even with
+    the pointer sitting squarely over A. `portalAtPoint` (`src/canvas/CanvasAdapter.tsx`)
+    now checks the release-time cursor position (board-space, via
+    `screenToFlowPosition`) against each portal's frame FIRST, and only falls
+    back to frame-overlap when the cursor itself is not over any portal. The
+    hover highlight (`onNodeDrag`) uses the same resolution so it never shows a
+    portal the drop will not actually land on.
 - `set_note_color` must NOT bump the card revision: color is orthogonal to text, and
   bumping it races the text autosave's `expected_revision` on the same card.
 
