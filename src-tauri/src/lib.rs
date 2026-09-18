@@ -131,6 +131,7 @@ pub fn run() {
             commands::boards::move_board,
             commands::boards::set_board_cover,
             commands::boards::remove_board_cover,
+            commands::boards::duplicate_board,
             commands::cards::create_note,
             commands::cards::read_card,
             commands::cards::create_image_card,

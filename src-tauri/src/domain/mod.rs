@@ -2,6 +2,7 @@
 
 pub mod asset_service;
 pub mod board_service;
+pub mod duplicate_board;
 pub mod errors;
 pub mod filesystem_alias_service;
 pub mod link_metadata;

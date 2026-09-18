@@ -8,7 +8,8 @@ use tauri::State;
 pub use crate::domain::board_service;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    BoardSnapshot, BoardSummary, CreateChildBoardInput, MoveBoardInput, UpdateViewportInput,
+    BoardSnapshot, BoardSummary, CreateChildBoardInput, DuplicateBoardInput, DuplicateBoardReceipt,
+    MoveBoardInput, UpdateViewportInput,
 };
 use crate::repositories::workspace_repository;
 
@@ -147,4 +148,17 @@ pub fn remove_board_cover(db: DbState<'_>, board_id: String) -> Result<(), Works
         .lock()
         .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
     board_service::set_board_cover(&mut conn, &board_id, None)
+}
+
+/// Duplicates a Board Portal's whole subtree, recursively, in one atomic
+/// transaction (todo.md №16).
+#[tauri::command]
+pub fn duplicate_board(
+    db: DbState<'_>,
+    input: DuplicateBoardInput,
+) -> Result<DuplicateBoardReceipt, WorkspaceError> {
+    let mut conn = db
+        .lock()
+        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+    crate::domain::duplicate_board::duplicate_board(&mut conn, &input)
 }
