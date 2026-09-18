@@ -405,10 +405,42 @@ pub fn read_text_preview(asset_dir: &Path, asset: &AssetDto, limit: usize) -> St
     preview.trim().chars().take(limit).collect()
 }
 
+/// `qlmanage` can hang indefinitely (NSRunLoop never returns) when it has no
+/// window-server session — headless CI, a detached agent shell, sandboxed
+/// tests — or when the QuickLook generator for the source file never replies.
+/// `Command::status()` blocks on that forever, so we poll `try_wait()` instead
+/// and kill the child once this deadline passes.
+const QLMANAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs `qlmanage` with the given args, killing it if it does not exit within
+/// `QLMANAGE_TIMEOUT`. Returns `true` only on a successful, bounded exit.
+#[cfg(target_os = "macos")]
+fn run_qlmanage_bounded(args: &[&std::ffi::OsStr]) -> bool {
+    let mut child = match std::process::Command::new("qlmanage").args(args).spawn() {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let deadline = std::time::Instant::now() + QLMANAGE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
 /// Renders a macOS Quick Look thumbnail (256px PNG) and stores it as a managed
 /// file without touching the database. Returns None when the OS tool is
-/// unavailable or the file has no supported preview (never fails the File Card
-/// import).
+/// unavailable, hangs, or the file has no supported preview (never fails the
+/// File Card import).
 pub fn stage_thumbnail(
     asset_dir: &Path,
     source_path: &str,
@@ -416,16 +448,16 @@ pub fn stage_thumbnail(
     #[cfg(target_os = "macos")]
     {
         let tmp = std::env::temp_dir().join(format!("myspace-thumb-{}", uuid::Uuid::now_v7()));
-        let status = std::process::Command::new("qlmanage")
-            .arg("-t")
-            .arg("-s")
-            .arg("256")
-            .arg("-o")
-            .arg(&tmp)
-            .arg(source_path)
-            .status();
-        let ok = matches!(status, Ok(s) if s.success());
+        let ok = run_qlmanage_bounded(&[
+            std::ffi::OsStr::new("-t"),
+            std::ffi::OsStr::new("-s"),
+            std::ffi::OsStr::new("256"),
+            std::ffi::OsStr::new("-o"),
+            tmp.as_os_str(),
+            std::ffi::OsStr::new(source_path),
+        ]);
         if !ok {
+            let _ = std::fs::remove_dir_all(&tmp);
             return Ok(None);
         }
         // qlmanage writes `<filename>.png` next to `-o` (or for some types a dir).

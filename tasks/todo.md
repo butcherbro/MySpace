@@ -184,7 +184,15 @@ precision for lists and code blocks. Reasons and owners are in
    область. Нужно: увеличенный просмотр всегда целиком в видимой части экрана
    (центрирован по viewport, вписан по размеру), независимо от того, где стоит
    миниатюра на доске.
-6. `open` — **Rust-тест виснет**: `src-tauri/tests/asset_service.rs::
+6. `fixed` — **Rust-тест виснет**: `src-tauri/tests/asset_service.rs::
    a_failed_thumbnail_leaves_no_orphan_and_still_creates_the_card` не завершается
    (0% CPU, даже при `--test-threads=1`). Блокирует `cargo test` целиком — каждая
    проверка ждёт вечно. Найдено 2026-09-18 при прогоне после фикса №1.
+   Корень: продуктовый дефект — `qlmanage` в `stage_thumbnail`
+   (`src-tauri/src/domain/asset_service.rs:412`) звался через `Command::status()`
+   без таймаута; в этом окружении `qlmanage` зависает в NSRunLoop навсегда
+   (нет сессии WindowServer). Тот же путь используется при живом импорте файла
+   (`src-tauri/src/commands/filesystem_aliases.rs:281`), поэтому импорт мог
+   зависнуть и в приложении. Исправлено 2026-09-18: `qlmanage` теперь запускается
+   через `spawn()` + опрос `try_wait()` с дедлайном 5с и `kill()` по истечении
+   (`run_qlmanage_bounded`, `src-tauri/src/domain/asset_service.rs`).

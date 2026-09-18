@@ -244,3 +244,34 @@
   read-then-write-elsewhere-then-write pattern like this needs either a retry
   bounded by the specific error it's guarding against, or the write it's
   racing against must itself be awaited before the read.
+
+## 2026-09-18 — An unbounded external-process call is a product hang, not just a flaky test
+
+- `asset_service::stage_thumbnail` (`src-tauri/src/domain/asset_service.rs:412`)
+  shelled out to macOS `qlmanage -t` via `Command::status()` with no timeout,
+  to render a Quick Look thumbnail during file-card import. `qlmanage` parks
+  its main thread in an `NSRunLoop` and never returns when it has no
+  WindowServer session (headless shell, sandboxed test run, some CI/agent
+  environments) — confirmed with `sample <pid>` on the hung process. Test
+  `asset_service.rs::a_failed_thumbnail_leaves_no_orphan_and_still_creates_the_card`
+  hit this by calling `stage_thumbnail` against a nonexistent path.
+- This was not a test-only artifact: `stage_thumbnail` is called from the live
+  import path (`src-tauri/src/commands/filesystem_aliases.rs:281`), so the same
+  hang could freeze a real file-card import inside the shipped app, on any
+  machine/session where `qlmanage` can't reach WindowServer.
+- Fix: `run_qlmanage_bounded` spawns the child with `Command::spawn()` and polls
+  `try_wait()` against a 5s deadline, `kill()`-ing the child on timeout, instead
+  of blocking on `.status()`. No new dependency (no tokio in this crate) —
+  a `spawn` + poll loop is enough for a single bounded external call.
+- Lesson: any `Command::status()`/`.output()` call to an external OS tool from
+  request-handling code is an unbounded wait by default. If the tool can ever
+  hang (missing display session, missing daemon, waiting on a dialog), that
+  hang reaches the caller — test or production — exactly the same way. Treat
+  every shell-out as needing an explicit timeout unless the tool's own
+  contract guarantees bounded execution.
+- Also: killing a parent process (Ctrl-C, a broken `timeout` wrapper, a test
+  harness deadline) does not kill an orphaned grandchild it spawned via
+  `Command` — those reparent to pid 1 and keep running. Stray `qlmanage`
+  processes from earlier failed runs were still alive 30+ minutes later at
+  0% CPU; always check `ps` for leftover children by name, not just the PID
+  you started, when a "timeout" didn't actually stop the process tree.
