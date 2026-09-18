@@ -234,7 +234,7 @@ describe("CanvasAdapter", () => {
     props.onPaneClick!({ clientX: 121, clientY: 81 });
 
     expect(onPaneDoubleClick).toHaveBeenCalledTimes(1);
-    expect(onPaneDoubleClick).toHaveBeenCalledWith({ x: 121, y: 81 });
+    expect(onPaneDoubleClick).toHaveBeenCalledWith({ x: 121, y: 81 }, { x: 121, y: 81 });
     vi.useRealTimers();
   });
 
@@ -263,6 +263,32 @@ describe("CanvasAdapter", () => {
 
     expect(onPaneDoubleClick).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it("emits onPaneContextMenu with screen coordinates on pane right-click", () => {
+    reactFlowProps.length = 0;
+    const onPaneContextMenu = vi.fn();
+
+    render(
+      <CanvasAdapter
+        cards={cards}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        viewportResetToken={1}
+        events={{ onPaneContextMenu }}
+        renderCard={(card) => <span data-testid={`card-${card.id}`} />}
+      />,
+    );
+
+    const props = reactFlowProps[reactFlowProps.length - 1] as {
+      onPaneContextMenu?: (e: { clientX: number; clientY: number; preventDefault: () => void }) => void;
+    };
+    expect(props.onPaneContextMenu).toBeTypeOf("function");
+
+    const preventDefault = vi.fn();
+    props.onPaneContextMenu!({ clientX: 50, clientY: 70, preventDefault });
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(onPaneContextMenu).toHaveBeenCalledWith(50, 70);
   });
 
   it("re-renders a card when its revision changes (content edit)", () => {

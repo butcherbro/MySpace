@@ -354,3 +354,27 @@
   the drag is wrong. Prefer wrappers that size themselves from their content
   (`fit-content`, or no explicit size at all) over wrappers that duplicate a
   size from persisted state, whenever the content can change size on its own.
+
+## 2026-09-18 — `onPaneDoubleClick` changed contract: emits flow point + screen point
+
+- Task: `tasks/todo.md` №10 — double-click and right-click on the empty canvas
+  now open a compact create menu ("Add Note" / "Add Board") at the cursor,
+  instead of double-click creating a note directly.
+- Contract change: `CanvasEvents.onPaneDoubleClick` (`src/canvas/canvas-types.ts`)
+  used to hand the caller only the board-space point (for creating a card
+  there). Placing a *menu* needs the screen-space point too — CSS `position:
+  fixed` menus are laid out in client coordinates, not board coordinates, and
+  those only coincide at zoom 1 / pan (0,0). Rather than have the caller
+  reverse-derive screen coordinates from a board point (there is no
+  `flowToScreenPosition` plumbed through the adapter, and adding one just to
+  invert a conversion the adapter had already done once is circular), the
+  adapter now emits both: `onPaneDoubleClick(point, screen)`. Same reasoning
+  applies to any future canvas event that positions a screen-space overlay
+  from a pointer gesture — pass both spaces the first time, since the flow
+  point can be recovered from raw state but the screen point cannot be
+  recovered downstream without another conversion path.
+- Also folded "Add Note"/"Add Board" into the existing pane `ContextMenu`
+  (right-click) rather than building a separate menu component, and added
+  Esc-to-close to `ContextMenu` itself (it only closed on backdrop click
+  before) — a generic fix that now benefits every context menu in the app,
+  not a special case for this one.

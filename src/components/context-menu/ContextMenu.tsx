@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import "./context-menu.css";
 
 export interface ContextMenuAction {
@@ -21,6 +22,15 @@ interface ContextMenuProps {
  * positioning, the action list, and the closing backdrop.
  */
 export function ContextMenu({ x, y, actions, onClose, testId = "context-menu" }: ContextMenuProps) {
+  // Esc закрывает меню — иначе единственный выход был клик мимо.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
     <>
       <div className="context-menu" style={{ left: x, top: y }} data-testid={testId}>

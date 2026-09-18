@@ -202,7 +202,7 @@ export function CanvasAdapter({
         paneClickTimerRef.current = null;
       }
       lastPaneClickRef.current = null;
-      events.onPaneDoubleClick?.({ x: point.x, y: point.y });
+      events.onPaneDoubleClick?.({ x: point.x, y: point.y }, { x: event.clientX, y: event.clientY });
       return;
     }
 

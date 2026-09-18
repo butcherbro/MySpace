@@ -31,4 +31,12 @@ describe("ContextMenu", () => {
     await user.click(container.querySelector(".context-menu__backdrop") as HTMLElement);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("closes on Escape", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(<ContextMenu x={0} y={0} actions={actions} onClose={onClose} />);
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

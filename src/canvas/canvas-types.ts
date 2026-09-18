@@ -100,8 +100,9 @@ export interface CanvasEvents {
   onCardActivated?(id: string): void;
   /** A card was double-clicked (open board portals). */
   onCardOpened?(id: string): void;
-  /** The empty canvas pane was double-clicked (create a note at that point). */
-  onPaneDoubleClick?(point: Point): void;
+  /** The empty canvas pane was double-clicked (create menu at that point). `point` is
+   * board-space (for placing the new card), `screen` is client-space (for the menu). */
+  onPaneDoubleClick?(point: Point, screen: Point): void;
   /** A card was right-clicked (request a context menu). Coordinates are screen-space. */
   onCardContextMenu?(id: string, x: number, y: number): void;
   /** The empty canvas pane was right-clicked (request a board context menu). */

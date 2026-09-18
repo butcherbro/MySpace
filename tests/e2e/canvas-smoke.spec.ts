@@ -296,7 +296,11 @@ test("the canvas cannot pan above or left of its origin", async ({ page }) => {
     .not.toContain("translate(0px, 0px)");
 });
 
-test("double-clicking empty canvas creates a note near the click point", async ({ page }) => {
+// Double-click used to create a note directly; it now opens a create menu
+// (`Add Note` / `Add Board`) at the click point instead — see the "double-click
+// empty canvas opens a create menu" test below for the full flow and the
+// left-top-corner-at-cursor assertion.
+test("double-clicking empty canvas opens the create menu instead of creating a note directly", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("note-card")).toHaveCount(0);
 
@@ -305,21 +309,10 @@ test("double-clicking empty canvas creates a note near the click point", async (
   expect(box).not.toBeNull();
   if (!box) return;
 
-  const clickX = box.x + 220;
-  const clickY = box.y + 160;
+  await page.mouse.dblclick(box.x + 220, box.y + 160);
 
-  await page.mouse.dblclick(clickX, clickY);
-
-  await expect(page.getByTestId("note-card")).toHaveCount(1);
-  // The note's frame origin should be near the click point (board-space ==
-  // screen-space at the default viewport of 0,0).
-  const frame = await page.evaluate(() => {
-    const el = document.querySelector(".note-card")!;
-    const r = el.getBoundingClientRect();
-    return { x: r.x, y: r.y };
-  });
-  expect(Math.abs(frame.x - clickX)).toBeLessThan(40);
-  expect(Math.abs(frame.y - clickY)).toBeLessThan(40);
+  await expect(page.getByTestId("pane-context-menu")).toBeVisible();
+  await expect(page.getByTestId("note-card")).toHaveCount(0);
 });
 
 // --- Board hierarchy and breadcrumb drag-and-drop acceptance ---
@@ -625,4 +618,75 @@ test("right-click empty canvas copies the current board's MySpace link", async (
 
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
   expect(clipboard).toMatch(/^myspace:\/\/board\/.+$/);
+});
+
+test("double-click empty canvas opens a create menu; Add Note places the note at the cursor", async ({ page }) => {
+  await page.goto("/");
+
+  const pane = page.locator(".react-flow__pane");
+  const box = await pane.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  const clickPoint = { x: box.x + 260, y: box.y + 180 };
+  await page.mouse.dblclick(clickPoint.x, clickPoint.y);
+
+  const menu = page.getByTestId("pane-context-menu");
+  await expect(menu).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add Note" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add Board" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Add Note" }).click();
+  await expect(menu).toHaveCount(0);
+
+  const noteCard = page.locator(".note-card");
+  await expect(noteCard).toHaveCount(1);
+  await page.waitForFunction(() => {
+    const el = document.querySelector(".note-card");
+    return el && el.getBoundingClientRect().width > 0;
+  });
+  const noteBox = await noteCard.boundingBox();
+  expect(noteBox).not.toBeNull();
+  if (!noteBox) return;
+  // Левый верхний угол новой карточки должен оказаться в точке клика (в пикселях
+  // экрана, при дефолтном zoom 1 board-space совпадает со screen-space).
+  expect(Math.abs(noteBox.x - clickPoint.x)).toBeLessThan(2);
+  expect(Math.abs(noteBox.y - clickPoint.y)).toBeLessThan(2);
+});
+
+test("Escape closes the pane create menu", async ({ page }) => {
+  await page.goto("/");
+
+  const pane = page.locator(".react-flow__pane");
+  const box = await pane.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  await page.mouse.dblclick(box.x + 200, box.y + 200);
+  const menu = page.getByTestId("pane-context-menu");
+  await expect(menu).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+});
+
+test("double-click on an existing card does not open the pane create menu", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "New note" }).click();
+  const noteCard = page.locator(".note-card");
+  await expect(noteCard).toHaveCount(1);
+  await page.waitForFunction(() => {
+    const el = document.querySelector(".note-card");
+    return el && el.getBoundingClientRect().width > 0;
+  });
+
+  const rect = await page.evaluate(() => {
+    const el = document.querySelector(".note-card")!;
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await page.mouse.dblclick(rect.x, rect.y);
+
+  await expect(page.getByTestId("pane-context-menu")).toHaveCount(0);
 });

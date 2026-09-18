@@ -72,7 +72,11 @@ function App() {
 
   const [state, dispatch] = useReducer(reducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
-  const [paneContextMenu, setPaneContextMenu] = useState<{ x: number; y: number } | null>(null);
+  // x/y — экранные координаты для позиционирования меню; flowX/flowY — координаты
+  // доски (с учётом zoom/pan) для размещения левого верхнего угла новой карточки.
+  const [paneContextMenu, setPaneContextMenu] = useState<
+    { x: number; y: number; flowX: number; flowY: number } | null
+  >(null);
   const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
@@ -1238,7 +1242,9 @@ function App() {
   }, [board]);
 
   const handlePaneContextMenu = useCallback((x: number, y: number) => {
-    setPaneContextMenu({ x, y });
+    const flow = screenToFlowRef.current;
+    const point = flow ? flow(x, y) : { x, y };
+    setPaneContextMenu({ x, y, flowX: point.x, flowY: point.y });
   }, []);
 
   // Copy the images of the current selection to the system clipboard.
@@ -1949,6 +1955,17 @@ function App() {
             x={paneContextMenu.x}
             y={paneContextMenu.y}
             actions={[
+              {
+                id: "add-note",
+                label: "Add Note",
+                onSelect: () => void handleCreateNote({ x: paneContextMenu.flowX, y: paneContextMenu.flowY }),
+              },
+              {
+                id: "add-board",
+                label: "Add Board",
+                onSelect: () =>
+                  void handleCreateChildBoard({ x: paneContextMenu.flowX, y: paneContextMenu.flowY }),
+              },
               { id: "copy-board-link", label: "Copy MySpace Link", onSelect: () => void handleCopyBoardLink() },
             ]}
             onClose={() => setPaneContextMenu(null)}
@@ -2059,8 +2076,8 @@ function App() {
               onPortalHighlight: setHighlightedPortalId,
               onCardDragMove: crossBoardDragSession.onDragMove,
               onCardDragEnd: handleCardDragEnd,
-              onPaneDoubleClick: (point) => {
-                void handleCreateNote(point);
+              onPaneDoubleClick: (point, screen) => {
+                setPaneContextMenu({ x: screen.x, y: screen.y, flowX: point.x, flowY: point.y });
               },
             }}
             renderCard={(card) => {
