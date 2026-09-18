@@ -1,15 +1,25 @@
 // Tiptap extension configuration: the approved StarterKit subset (plan D2).
-// Paragraph, headings 1-3, bold, italic, bullet/ordered lists, blockquote.
+// Paragraph, headings 1-3, bold, italic, strike, bullet/ordered lists, blockquote.
 //
 // Everything outside V1 is explicitly disabled so that pastes and shortcuts
-// cannot silently introduce structures (links, code blocks, strike, underline,
+// cannot silently introduce structures (links, code blocks, underline,
 // horizontal rules, task items, etc.) into persisted documents before the schema
 // and runtime validation catch up.
 
 import Link from "@tiptap/extension-link";
+import Strike from "@tiptap/extension-strike";
 import StarterKit from "@tiptap/starter-kit";
 import { SearchHighlightExtension } from "./search-highlight";
 import { TextColor } from "./text-color";
+
+// Tiptap's Strike по умолчанию биндит Mod-Shift-s; постановка задачи требует
+// Cmd+Shift+X — переопределяем шорткат отдельным расширением вместо
+// StarterKit-варианта.
+const StrikeWithShortcut = Strike.extend({
+  addKeyboardShortcuts() {
+    return { "Mod-Shift-x": () => this.editor.commands.toggleStrike() };
+  },
+});
 
 export function createEditorExtensions() {
   return [
@@ -24,6 +34,7 @@ export function createEditorExtensions() {
       // autolink/paste options stay explicit; disabling it here avoids a
       // duplicate extension.
       link: false,
+      // Strike is added separately below with a custom shortcut.
       strike: false,
       underline: false,
       horizontalRule: false,
@@ -35,6 +46,7 @@ export function createEditorExtensions() {
       autolink: true,
       linkOnPaste: true,
     }),
+    StrikeWithShortcut,
     SearchHighlightExtension,
     TextColor,
   ];

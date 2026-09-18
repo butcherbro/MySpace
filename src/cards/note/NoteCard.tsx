@@ -26,6 +26,10 @@ interface NoteCardProps {
   onCommandsReady?: (commands: NoteEditorCommands | null) => void;
   /** Called with the current bold-active state. */
   onBoldStateChange?: (active: boolean) => void;
+  /** Called with the current italic-active state. */
+  onItalicStateChange?: (active: boolean) => void;
+  /** Called with the current strike-active state. */
+  onStrikeStateChange?: (active: boolean) => void;
   /** Called with the current text color. */
   onTextColorChange?: (color: TextColorId) => void;
 }
@@ -46,6 +50,8 @@ export function NoteCard({
   highlightQuery = "",
   onCommandsReady,
   onBoldStateChange,
+  onItalicStateChange,
+  onStrikeStateChange,
   onTextColorChange,
 }: NoteCardProps) {
   const { draft, saving, error, handleChange, handleBlur, handleFinalize } = useDocumentDraft({
@@ -192,6 +198,8 @@ export function NoteCard({
         highlightQuery={highlightQuery}
         onCommandsReady={onCommandsReady}
         onBoldStateChange={onBoldStateChange}
+        onItalicStateChange={onItalicStateChange}
+        onStrikeStateChange={onStrikeStateChange}
         onTextColorChange={onTextColorChange}
       />
       {saving && <div className="note-card__status note-card__status--saving">Saving…</div>}

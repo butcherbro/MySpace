@@ -12,7 +12,9 @@ export type IconName =
   | "redo"
   | "bookmark"
   | "trash"
-  | "bold";
+  | "bold"
+  | "italic"
+  | "strike";
 
 interface IconProps {
   name: IconName;
@@ -94,6 +96,20 @@ const ICONS: Record<IconName, () => React.JSX.Element> = {
       <path d="M8 5h4a2.5 2.5 0 0 1 0 5H8z" />
       <path d="M8 10h5a2.5 2.5 0 0 1 0 5H8z" />
       <path d="M8 5v10" />
+    </>
+  ),
+  italic: () => (
+    <>
+      <path d="M13 5h4" />
+      <path d="M7 15h4" />
+      <path d="M12.5 5 9.5 15" />
+    </>
+  ),
+  strike: () => (
+    <>
+      <path d="M6 12h12" />
+      <path d="M8.5 8.5c0-2 1.5-3.5 3.5-3.5s3.5 1 3.5 2.5" />
+      <path d="M8.5 15.5c0 2 1.5 3.5 3.5 3.5s3.5-1.5 3.5-3" />
     </>
   ),
 };

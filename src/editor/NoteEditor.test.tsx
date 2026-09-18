@@ -114,6 +114,10 @@ describe("NoteEditor", () => {
     expect(box.commands).not.toBeNull();
     expect(typeof box.commands?.toggleBold).toBe("function");
     expect(typeof box.commands?.isBoldActive).toBe("function");
+    expect(typeof box.commands?.toggleItalic).toBe("function");
+    expect(typeof box.commands?.isItalicActive).toBe("function");
+    expect(typeof box.commands?.toggleStrike).toBe("function");
+    expect(typeof box.commands?.isStrikeActive).toBe("function");
 
     rerender(
       <NoteEditor document={doc} editable={false} onChange={vi.fn()} onCommandsReady={(c) => {
@@ -137,5 +141,52 @@ describe("NoteEditor", () => {
     );
     expect(box.commands?.getTextColor()).toBe("default");
     expect(() => box.commands?.setTextColor("blue")).not.toThrow();
+  });
+
+  it("applies italic on toggleItalic and reports the active state", () => {
+    const box: { commands: NoteEditorCommands | null } = { commands: null };
+    const onItalicStateChange = vi.fn();
+    render(
+      <NoteEditor
+        document={doc}
+        editable={true}
+        onChange={vi.fn()}
+        onCommandsReady={(c) => {
+          box.commands = c;
+        }}
+        onItalicStateChange={onItalicStateChange}
+      />,
+    );
+
+    // Стартовое состояние репортится сразу при монтировании (as-is для Bold).
+    expect(onItalicStateChange).toHaveBeenCalledWith(false);
+    expect(box.commands?.isItalicActive()).toBe(false);
+
+    box.commands?.toggleItalic();
+
+    expect(box.commands?.isItalicActive()).toBe(true);
+  });
+
+  it("applies strike on toggleStrike and reports the active state", () => {
+    const box: { commands: NoteEditorCommands | null } = { commands: null };
+    const onStrikeStateChange = vi.fn();
+    render(
+      <NoteEditor
+        document={doc}
+        editable={true}
+        onChange={vi.fn()}
+        onCommandsReady={(c) => {
+          box.commands = c;
+        }}
+        onStrikeStateChange={onStrikeStateChange}
+      />,
+    );
+
+    expect(onStrikeStateChange).toHaveBeenCalledWith(false);
+    expect(box.commands?.isStrikeActive()).toBe(false);
+
+    box.commands?.toggleStrike();
+
+    expect(box.commands?.isStrikeActive()).toBe(true);
   });
 });

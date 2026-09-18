@@ -12,6 +12,10 @@ function renderRail(overrides: Partial<React.ComponentProps<typeof ToolRail>> = 
     onOpenTrash: vi.fn(),
     onBold: vi.fn(),
     boldActive: false,
+    onItalic: vi.fn(),
+    italicActive: false,
+    onStrike: vi.fn(),
+    strikeActive: false,
     onBackToCreate: vi.fn(),
     textColor: "default" as const,
     onTextColor: vi.fn(),
@@ -48,11 +52,13 @@ describe("ToolRail", () => {
     expect(screen.getByRole("button", { name: "New note" })).not.toHaveClass("tool-button--board");
   });
 
-  it("renders note tools (back + bold + color swatches) plus trash in note mode", () => {
+  it("renders note tools (back + bold/italic/strike + color swatches) plus trash in note mode", () => {
     renderRail({ mode: "note" });
 
     expect(screen.getByRole("button", { name: "Back to tools" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Italic" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Strike" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Trash" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "New note" })).not.toBeInTheDocument();
   });
@@ -68,9 +74,37 @@ describe("ToolRail", () => {
     expect(props.onBackToCreate).toHaveBeenCalledTimes(1);
   });
 
+  it("calls onItalic when the Italic button is clicked", async () => {
+    const user = userEvent.setup();
+    const { props } = renderRail({ mode: "note" });
+
+    await user.click(screen.getByRole("button", { name: "Italic" }));
+
+    expect(props.onItalic).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onStrike when the Strike button is clicked", async () => {
+    const user = userEvent.setup();
+    const { props } = renderRail({ mode: "note" });
+
+    await user.click(screen.getByRole("button", { name: "Strike" }));
+
+    expect(props.onStrike).toHaveBeenCalledTimes(1);
+  });
+
   it("marks the bold button active", () => {
     renderRail({ mode: "note", boldActive: true });
     expect(screen.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("marks the italic button active", () => {
+    renderRail({ mode: "note", italicActive: true });
+    expect(screen.getByRole("button", { name: "Italic" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("marks the strike button active", () => {
+    renderRail({ mode: "note", strikeActive: true });
+    expect(screen.getByRole("button", { name: "Strike" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("renders the text-color swatches in note mode and reports a selection", async () => {
@@ -100,6 +134,10 @@ describe("ToolRail", () => {
         onOpenTrash={vi.fn()}
         onBold={vi.fn()}
         boldActive={false}
+        onItalic={vi.fn()}
+        italicActive={false}
+        onStrike={vi.fn()}
+        strikeActive={false}
         onBackToCreate={vi.fn()}
         textColor="default"
         onTextColor={vi.fn()}

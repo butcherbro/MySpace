@@ -10,6 +10,14 @@ export interface NoteEditorCommands {
   toggleBold(): void;
   /** Whether bold is active at the current cursor/selection. */
   isBoldActive(): boolean;
+  /** Toggle italic on the current selection / next-typed text. */
+  toggleItalic(): void;
+  /** Whether italic is active at the current cursor/selection. */
+  isItalicActive(): boolean;
+  /** Toggle strike on the current selection / next-typed text. */
+  toggleStrike(): void;
+  /** Whether strike is active at the current cursor/selection. */
+  isStrikeActive(): boolean;
   /** Apply a text color (or `default` to clear) to the selection / next text. */
   setTextColor(color: TextColorId): void;
   /** The text color active at the current cursor/selection (`default` = none). */

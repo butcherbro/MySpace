@@ -118,6 +118,8 @@ function App() {
   // Contextual note rail: the active note's editor command surface + bold state.
   const noteCommandsRef = useRef<NoteEditorCommands | null>(null);
   const [boldActive, setBoldActive] = useState(false);
+  const [italicActive, setItalicActive] = useState(false);
+  const [strikeActive, setStrikeActive] = useState(false);
   const [textColor, setTextColor] = useState<TextColorId>("default");
 
   // Serializes mutations (save/drag) so they never race on a card's revision.
@@ -1506,11 +1508,23 @@ function App() {
   // note's editor (Tiptap-free contract).
   const handleNoteCommands = useCallback((commands: NoteEditorCommands | null) => {
     noteCommandsRef.current = commands;
-    if (!commands) setBoldActive(false);
+    if (!commands) {
+      setBoldActive(false);
+      setItalicActive(false);
+      setStrikeActive(false);
+    }
   }, []);
 
   const handleNoteBoldStateChange = useCallback((active: boolean) => {
     setBoldActive(active);
+  }, []);
+
+  const handleNoteItalicStateChange = useCallback((active: boolean) => {
+    setItalicActive(active);
+  }, []);
+
+  const handleNoteStrikeStateChange = useCallback((active: boolean) => {
+    setStrikeActive(active);
   }, []);
 
   const handleNoteTextColorChange = useCallback((color: TextColorId) => {
@@ -1519,6 +1533,14 @@ function App() {
 
   const handleBold = useCallback(() => {
     noteCommandsRef.current?.toggleBold();
+  }, []);
+
+  const handleItalic = useCallback(() => {
+    noteCommandsRef.current?.toggleItalic();
+  }, []);
+
+  const handleStrike = useCallback(() => {
+    noteCommandsRef.current?.toggleStrike();
   }, []);
 
   const handleTextColor = useCallback((color: TextColorId) => {
@@ -1820,6 +1842,10 @@ function App() {
           onOpenTrash={trash.openDrawer}
           onBold={handleBold}
           boldActive={boldActive}
+          onItalic={handleItalic}
+          italicActive={italicActive}
+          onStrike={handleStrike}
+          strikeActive={strikeActive}
           onBackToCreate={handleBackToCreate}
           textColor={textColor}
           onTextColor={handleTextColor}
@@ -2064,6 +2090,8 @@ function App() {
                 highlightQuery: search.highlightQuery,
                 onNoteCommands: handleNoteCommands,
                 onNoteBoldStateChange: handleNoteBoldStateChange,
+                onNoteItalicStateChange: handleNoteItalicStateChange,
+                onNoteStrikeStateChange: handleNoteStrikeStateChange,
                 onNoteTextColorChange: handleNoteTextColorChange,
               });
             }}

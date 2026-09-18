@@ -62,6 +62,10 @@ export interface CardRenderContext {
   onNoteCommands: (commands: NoteEditorCommands | null) => void;
   /** Called with the active note's bold-active state. */
   onNoteBoldStateChange: (active: boolean) => void;
+  /** Called with the active note's italic-active state. */
+  onNoteItalicStateChange: (active: boolean) => void;
+  /** Called with the active note's strike-active state. */
+  onNoteStrikeStateChange: (active: boolean) => void;
   /** Called with the active note's text color. */
   onNoteTextColorChange: (color: TextColorId) => void;
 }
@@ -81,6 +85,8 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         highlightQuery={ctx.highlightQuery}
         onCommandsReady={ctx.onNoteCommands}
         onBoldStateChange={ctx.onNoteBoldStateChange}
+        onItalicStateChange={ctx.onNoteItalicStateChange}
+        onStrikeStateChange={ctx.onNoteStrikeStateChange}
         onTextColorChange={ctx.onNoteTextColorChange}
       />
     );

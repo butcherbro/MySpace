@@ -25,6 +25,10 @@ interface NoteEditorProps {
   onCommandsReady?: (commands: NoteEditorCommands | null) => void;
   /** Called with the current bold-active state whenever it changes. */
   onBoldStateChange?: (active: boolean) => void;
+  /** Called with the current italic-active state whenever it changes. */
+  onItalicStateChange?: (active: boolean) => void;
+  /** Called with the current strike-active state whenever it changes. */
+  onStrikeStateChange?: (active: boolean) => void;
   /** Called with the current text color whenever it changes. */
   onTextColorChange?: (color: TextColorId) => void;
 }
@@ -43,6 +47,8 @@ export function NoteEditor({
   highlightQuery = "",
   onCommandsReady,
   onBoldStateChange,
+  onItalicStateChange,
+  onStrikeStateChange,
   onTextColorChange,
 }: NoteEditorProps) {
   const editor = useEditor({
@@ -107,6 +113,14 @@ export function NoteEditor({
         editor.chain().focus().toggleBold().run();
       },
       isBoldActive: () => editor.isActive("bold"),
+      toggleItalic: () => {
+        editor.chain().focus().toggleItalic().run();
+      },
+      isItalicActive: () => editor.isActive("italic"),
+      toggleStrike: () => {
+        editor.chain().focus().toggleStrike().run();
+      },
+      isStrikeActive: () => editor.isActive("strike"),
       setTextColor: (color) => {
         if (color === "default") {
           editor.chain().focus().unsetMark("textColor").run();
@@ -121,11 +135,13 @@ export function NoteEditor({
     });
   }, [editor, editable, onCommandsReady]);
 
-  // Report formatting state (bold + text color) changes.
+  // Report formatting state (bold/italic/strike + text color) changes.
   useEffect(() => {
     if (!editor || !editable) return;
     const handler = () => {
       onBoldStateChange?.(editor.isActive("bold"));
+      onItalicStateChange?.(editor.isActive("italic"));
+      onStrikeStateChange?.(editor.isActive("strike"));
       const color = editor.getAttributes("textColor").color as TextColorId | null | undefined;
       onTextColorChange?.(color ?? "default");
     };
@@ -134,7 +150,7 @@ export function NoteEditor({
     return () => {
       editor.off("selectionUpdate", handler);
     };
-  }, [editor, editable, onBoldStateChange, onTextColorChange]);
+  }, [editor, editable, onBoldStateChange, onItalicStateChange, onStrikeStateChange, onTextColorChange]);
 
   // In display mode (not editing), a click on an inline link should open it in
   // the OS browser and must NOT bubble up into React Flow as a drag or an

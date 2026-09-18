@@ -18,6 +18,14 @@ interface ToolRailProps {
   onBold: () => void;
   /** Whether bold is active at the active note's caret/selection. */
   boldActive: boolean;
+  /** Toggle italic on the active note's editor. */
+  onItalic: () => void;
+  /** Whether italic is active at the active note's caret/selection. */
+  italicActive: boolean;
+  /** Toggle strike on the active note's editor. */
+  onStrike: () => void;
+  /** Whether strike is active at the active note's caret/selection. */
+  strikeActive: boolean;
   /** Return to the default creation tools. */
   onBackToCreate: () => void;
   /** The active text color (preset id). */
@@ -42,6 +50,10 @@ export function ToolRail({
   onOpenTrash,
   onBold,
   boldActive,
+  onItalic,
+  italicActive,
+  onStrike,
+  strikeActive,
   onBackToCreate,
   textColor,
   onTextColor,
@@ -65,6 +77,22 @@ export function ToolRail({
             visibleLabel="Bold"
             onClick={onBold}
             active={boldActive}
+            onMouseDown={(event) => event.preventDefault()}
+          />
+          <ToolButton
+            icon="italic"
+            label="Italic"
+            visibleLabel="Italic"
+            onClick={onItalic}
+            active={italicActive}
+            onMouseDown={(event) => event.preventDefault()}
+          />
+          <ToolButton
+            icon="strike"
+            label="Strike"
+            visibleLabel="Strike"
+            onClick={onStrike}
+            active={strikeActive}
             onMouseDown={(event) => event.preventDefault()}
           />
           <div className="tool-rail__section" aria-label="Text color">
