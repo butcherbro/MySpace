@@ -52,9 +52,16 @@
 }
 
 .canvas-surface .react-flow__node .canvas-card-frame {
+  /* fit-content, не 100%: узел React Flow сохраняет свой инлайн-размер
+     из card.frame (persisted) до коммита resize, а рамка должна следовать
+     за живым размером контента внутри, а не за этим устаревающим боксом
+     (иначе во время drag видна старая рамка вокруг уже сжавшегося
+     содержимого — tasks/lessons.md 2026-09-18). Сам узел невидим
+     (см. правило выше), так что его собственный устаревающий размер во
+     время drag ни на что не влияет визуально.*/
   display: block;
-  width: 100%;
-  height: 100%;
+  width: fit-content;
+  height: fit-content;
   border: 1px solid transparent;
   border-radius: inherit;
   box-sizing: border-box;

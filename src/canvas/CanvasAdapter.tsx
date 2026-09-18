@@ -40,12 +40,18 @@ interface CanvasAdapterProps {
 type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"] };
 
 const nodeTypes: NodeTypes = {
+  // Раньше рамка была принудительно 100%/100% от React Flow узла, чей
+  // width/height берётся из card.frame (сохранённого, обновляется только
+  // по коммиту resize). Каждая resizable-карточка уже держит свой live
+  // размер на собственном корне (стиль width/height от локального draft-
+  // состояния во время drag) — рамка должна брать размер у контента, а не
+  // навязывать свой, иначе во время drag виден «призрак» старой рамки
+  // вокруг уже сжавшегося содержимого (tasks/lessons.md 2026-09-18).
   card: ({ data, selected }: { data: CardNodeData; selected?: boolean }) => (
     <div
       className="canvas-card-frame"
       data-card-kind={data.kind}
       data-selected={selected ? "true" : undefined}
-      style={{ width: "100%", height: "100%" }}
     >
       {data.content}
     </div>

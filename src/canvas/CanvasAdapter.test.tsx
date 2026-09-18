@@ -1,8 +1,10 @@
 import { useEffect } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CanvasAdapter } from "./CanvasAdapter";
+import { ImageCard } from "../cards/image/ImageCard";
 import type { CanvasCard } from "./canvas-types";
+import type { ImageCardDto } from "../services/workspace-gateway";
 
 const setViewport = vi.fn();
 const setCenter = vi.fn();
@@ -421,5 +423,80 @@ describe("CanvasAdapter", () => {
         expect(card.frame).toBeDefined();
       }
     }
+  });
+
+  /**
+   * Regression for "ghost frame" during resize (backlog problem 7): the
+   * `.canvas-card-frame` wrapper `nodeTypes.card` renders used to be forced
+   * to `width: 100%; height: 100%` of its React Flow node — a box sized from
+   * `card.frame.width/height` (persisted), unchanged until the resize
+   * commits on pointer-up. Every resizable card already tracks its own live
+   * drag size on its own root (`appliedWidth`/`appliedHeight`, applied as an
+   * inline `style`), so the wrapper's forced 100% sat at the stale size
+   * while the content inside it visibly shrank — the ghost border. The
+   * wrapper must instead take its size from its child (one source of truth),
+   * so it has no competing width/height of its own.
+   */
+  it("does not force the card frame to a fixed size that could go stale during a resize drag", () => {
+    const image: ImageCardDto = {
+      kind: "image",
+      id: "img-1",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 320, height: 240 },
+      zIndex: 0,
+      revision: 1,
+      asset: {
+        id: "asset-1",
+        fileName: "shot.png",
+        mimeType: "image/png",
+        width: null,
+        height: null,
+        sizeBytes: 1024,
+        filePath: "asset-1.png",
+      },
+      captionJson: {},
+      captionPlainText: "",
+    };
+
+    render(
+      <CanvasAdapter
+        cards={[{ ...image }]}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        events={{}}
+        renderCard={() => (
+          <ImageCard
+            image={image}
+            onUpdate={async () => {}}
+            onResize={() => {}}
+            onContextMenu={() => {}}
+          />
+        )}
+      />,
+    );
+
+    const frame = document.querySelector(".canvas-card-frame") as HTMLElement;
+    expect(frame).toBeTruthy();
+    // The wrapper must not carry its own competing size: it has to hug
+    // whatever the card inside it renders at, at every point during a drag.
+    expect(frame.style.width).toBe("");
+    expect(frame.style.height).toBe("");
+
+    const contentRoot = screen.getByTestId("image-card");
+    expect(contentRoot.style.width).toBe("320px");
+
+    // Drag the resize handle inward, well before pointer-up (the commit).
+    const handle = screen.getByTestId("image-resize");
+    // jsdom doesn't implement the Pointer Events capture API used by the drag handler.
+    (handle as unknown as { setPointerCapture: () => void }).setPointerCapture = vi.fn();
+    fireEvent.pointerDown(handle, { clientX: 300, clientY: 220 });
+    fireEvent.pointerMove(window, { clientX: 200, clientY: 160 });
+
+    // The content shrinks immediately...
+    expect(contentRoot.style.width).toBe("220px");
+    expect(contentRoot.style.height).toBe("180px");
+    // ...and the frame wrapper still has no fixed size of its own fighting
+    // it: nothing pins it to the pre-drag 320x240 box.
+    expect(frame.style.width).toBe("");
+    expect(frame.style.height).toBe("");
   });
 });

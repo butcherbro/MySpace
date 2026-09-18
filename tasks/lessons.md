@@ -318,3 +318,39 @@
   from a failed conditional `UPDATE ... WHERE id=? AND revision=?`, the
   `actual` field must be a fresh `SELECT`, never a copy of `expected` — a
   copy is silently indistinguishable from "nothing is wrong" in the message.
+
+## 2026-09-18 — A drag preview needs one size, owned by the same state, everywhere it's drawn
+
+- User-reported failure: dragging a resize handle on an image or note card
+  inward shrank the content immediately, but a "ghost" border at the old size
+  stayed visible around it until the pointer was released, then snapped to
+  match.
+- Root cause: `.canvas-card-frame` (`src/canvas/CanvasAdapter.tsx`), the
+  element that paints the selection border, was forced to `width: 100%;
+  height: 100%` of its React Flow node — and the node's own box comes from
+  `card.frame.width/height`, the *persisted* frame, which only changes when
+  the resize commits on pointer-up. Every resizable card (note, image, embed,
+  file, folder shortcut) already tracks its own live drag size on its own
+  root via an inline `style={{ width, height }}` sourced from local draft
+  state — so during a drag there were two competing sizes for the same
+  visual object: the content's live one and the frame's stale one.
+- Fix: stopped forcing the frame's size at all — `width/height: fit-content`
+  in CSS, and dropped the inline `style={{ width: "100%", height: "100%" }}`
+  React was adding on top of it. The frame now has no size of its own; it
+  takes it entirely from its child, so it can never go stale relative to the
+  content it wraps. The underlying React Flow node's own box stays stale
+  during a drag exactly as before (it still only updates on commit), but
+  that's invisible now — canvas.css already makes `.react-flow__node` itself
+  paint nothing (`background: transparent; border: 0; box-shadow: none`), so
+  its lagging size no longer matters visually.
+- Lesson: when several DOM layers represent "the same thing" during an
+  interactive drag (a resize, a drag-reorder, anything with a committed vs.
+  live state), a fixed/percentage size on an outer wrapper is a second,
+  independent source of truth for that thing's size. It will silently
+  disagree with whatever inner element tracks the live value, and the
+  disagreement is invisible until you actually watch the drag frame-by-frame
+  — a before/after screenshot comparison (pointer down vs. pointer up) can't
+  catch it, because both endpoints already match; only the state *during*
+  the drag is wrong. Prefer wrappers that size themselves from their content
+  (`fit-content`, or no explicit size at all) over wrappers that duplicate a
+  size from persisted state, whenever the content can change size on its own.
