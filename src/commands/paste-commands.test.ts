@@ -14,6 +14,30 @@ function gatewaySpy() {
     setNoteColor: vi.fn(async (input) => {
       calls.push({ fn: "setNoteColor", args: input });
     }),
+    duplicateBoard: vi.fn(async (input) => {
+      calls.push({ fn: "duplicateBoard", args: input });
+      return {
+        newBoardId: input.newBoardId,
+        portal: {
+          kind: "board_portal",
+          id: input.newPortalCardId,
+          boardId: input.targetBoardId,
+          frame: input.frame,
+          zIndex: 0,
+          revision: 1,
+          target: {
+            id: input.newBoardId,
+            boardRevision: 1,
+            title: "Template copy",
+            colorToken: "terracotta",
+            symbol: null,
+            childBoardCount: 0,
+            childCardCount: 0,
+            coverAsset: null,
+          },
+        },
+      };
+    }),
     trashSelection: vi.fn(async (input) => {
       calls.push({ fn: "trashSelection", args: input });
       return "batch-1";
@@ -53,7 +77,53 @@ function specs(): PasteCardSpec[] {
   ];
 }
 
+const boardSpec: PasteCardSpec = {
+  kind: "board",
+  id: "portal-copy-1",
+  boardId: "board-a",
+  frame: { x: 40, y: 40, width: 120, height: 112 },
+  zIndex: 2,
+  sourceBoardId: "template",
+  newBoardId: "board-copy-1",
+};
+
 describe("PasteCardsCommand", () => {
+  it("duplicates a copied board via the atomic backend call and returns its portal DTO", async () => {
+    const { gateway, calls } = gatewaySpy();
+    const cmd = new PasteCardsCommand("paste-1", [boardSpec]);
+
+    const portals = await cmd.execute(gateway);
+
+    expect(calls).toEqual([
+      {
+        fn: "duplicateBoard",
+        args: {
+          sourceBoardId: "template",
+          targetBoardId: "board-a",
+          newBoardId: "board-copy-1",
+          newPortalCardId: "portal-copy-1",
+          frame: boardSpec.frame,
+        },
+      },
+    ]);
+    expect(portals).toHaveLength(1);
+    expect(portals[0]).toMatchObject({ id: "portal-copy-1", target: { id: "board-copy-1", title: "Template copy" } });
+  });
+
+  it("undo of a copied board sends the new board id as a board_portal trash item", async () => {
+    const { gateway, calls } = gatewaySpy();
+    const cmd = new PasteCardsCommand("paste-1", [boardSpec]);
+    await cmd.execute(gateway);
+
+    await cmd.undo(gateway);
+
+    const trash = calls.find((c) => c.fn === "trashSelection");
+    expect(trash?.args).toEqual({
+      items: [{ id: "board-copy-1", kind: "board_portal" }],
+    });
+  });
+
+
   it("creates every card in the group, with a follow-up color write for a non-default note", async () => {
     const { gateway, calls } = gatewaySpy();
     const cmd = new PasteCardsCommand("paste-1", specs());

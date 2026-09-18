@@ -22,6 +22,7 @@ import { PasteCardsCommand, type PasteCardSpec } from "./commands/paste-commands
 import { buildPasteSpecs, readCardClipboard, setCardClipboard, type CopiedCard } from "./app/card-clipboard";
 import {
   CreateChildBoardCommand,
+  DuplicateBoardCommand,
   MoveBoardCommand,
   RenameBoardCommand,
 } from "./commands/board-commands";
@@ -706,7 +707,8 @@ function App() {
     );
     void (async () => {
       try {
-        await dispatcher.execute(new PasteCardsCommand(idGenerator.nextId(), specs));
+        const portals = await dispatcher.execute(new PasteCardsCommand(idGenerator.nextId(), specs));
+        const portalById = new Map(portals.map((p) => [p.id, p]));
         for (const spec of specs) {
           if (spec.kind === "note") {
             const card: NoteCardDto = {
@@ -721,7 +723,7 @@ function App() {
               colorToken: spec.colorToken,
             };
             dispatch({ type: "cardAdded", card });
-          } else {
+          } else if (spec.kind === "image") {
             const asset = assetById.get(spec.assetId);
             if (!asset) continue; // unreachable: built from the same copied list
             const card: ImageCardDto = {
@@ -735,6 +737,12 @@ function App() {
               captionJson: spec.captionJson,
               captionPlainText: spec.captionPlainText,
             };
+            dispatch({ type: "cardAdded", card });
+          } else {
+            // Duplicate-board's title/counts are backend-assigned (ADR-0009):
+            // pasted here, not predicted, unlike note/image above.
+            const card = portalById.get(spec.id);
+            if (!card) continue; // unreachable: one receipt per board spec
             dispatch({ type: "cardAdded", card });
           }
         }
@@ -1354,6 +1362,39 @@ function App() {
   }, []);
 
   // Copy the images of the current selection to the system clipboard.
+  // "Duplicate" on a portal's context menu (todo.md №16): a copy of the
+  // portal's whole board subtree appears on the SAME board, offset +24/+24
+  // from the source — the menu-driven counterpart of copy/paste, sharing the
+  // same atomic backend call and undo (DuplicateBoardCommand).
+  const handleDuplicatePortal = useCallback(
+    (portal: BoardPortalDto) => {
+      const newBoardId = idGenerator.nextId();
+      const newPortalCardId = idGenerator.nextId();
+      void (async () => {
+        try {
+          const receipt = await dispatcher.execute(
+            new DuplicateBoardCommand(idGenerator.nextId(), {
+              sourceBoardId: portal.target.id,
+              targetBoardId: portal.boardId,
+              newBoardId,
+              newPortalCardId,
+              frame: {
+                x: portal.frame.x + 24,
+                y: portal.frame.y + 24,
+                width: portal.frame.width,
+                height: portal.frame.height,
+              },
+            }),
+          );
+          dispatch({ type: "cardAdded", card: receipt.portal });
+        } catch (e) {
+          dispatch({ type: "failed", message: errorMessage(e) });
+        }
+      })();
+    },
+    [dispatcher, idGenerator],
+  );
+
   const handleCopySelectionImages = useCallback(() => {
     const imageIds = state.selection.filter((id) => {
       const card = state.cards.find((c) => c.id === id);
@@ -1374,35 +1415,46 @@ function App() {
     const selected = state.selection
       .map((id) => state.cards.find((c) => c.id === id))
       .filter(
-        (c): c is NoteCardDto | ImageCardDto =>
-          c != null && (c.kind === "note" || c.kind === "image"),
+        (c): c is NoteCardDto | ImageCardDto | BoardPortalDto =>
+          c != null && (c.kind === "note" || c.kind === "image" || c.kind === "board_portal"),
       );
     if (selected.length > 0) {
       const minX = Math.min(...selected.map((c) => c.frame.x));
       const minY = Math.min(...selected.map((c) => c.frame.y));
-      const copied: CopiedCard[] = selected.map((c) =>
-        c.kind === "note"
-          ? {
-              kind: "note",
-              dx: c.frame.x - minX,
-              dy: c.frame.y - minY,
-              width: c.frame.width,
-              height: c.frame.height,
-              documentJson: c.documentJson,
-              plainText: c.plainText,
-              colorToken: c.colorToken,
-            }
-          : {
-              kind: "image",
-              dx: c.frame.x - minX,
-              dy: c.frame.y - minY,
-              width: c.frame.width,
-              height: c.frame.height,
-              asset: c.asset,
-              captionJson: c.captionJson,
-              captionPlainText: c.captionPlainText,
-            },
-      );
+      const copied: CopiedCard[] = selected.map((c) => {
+        if (c.kind === "note") {
+          return {
+            kind: "note",
+            dx: c.frame.x - minX,
+            dy: c.frame.y - minY,
+            width: c.frame.width,
+            height: c.frame.height,
+            documentJson: c.documentJson,
+            plainText: c.plainText,
+            colorToken: c.colorToken,
+          };
+        }
+        if (c.kind === "image") {
+          return {
+            kind: "image",
+            dx: c.frame.x - minX,
+            dy: c.frame.y - minY,
+            width: c.frame.width,
+            height: c.frame.height,
+            asset: c.asset,
+            captionJson: c.captionJson,
+            captionPlainText: c.captionPlainText,
+          };
+        }
+        return {
+          kind: "board",
+          dx: c.frame.x - minX,
+          dy: c.frame.y - minY,
+          width: c.frame.width,
+          height: c.frame.height,
+          sourceBoardId: c.target.id,
+        };
+      });
       setCardClipboard(copied);
     }
     handleCopySelectionImages();
@@ -2095,6 +2147,7 @@ function App() {
             }
             if (isPortal) {
               actions.push(
+                { id: "duplicate", label: "Duplicate", onSelect: () => handleDuplicatePortal(card as BoardPortalDto) },
                 { id: "set-cover-clipboard", label: "Set Cover from Clipboard", onSelect: () => void handleSetCoverFromClipboard() },
                 { id: "choose-cover", label: "Choose Cover…", onSelect: () => void handleChooseCover() },
               );

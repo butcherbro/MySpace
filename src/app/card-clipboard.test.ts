@@ -85,6 +85,22 @@ describe("buildPasteSpecs", () => {
     expect((spec as { assetId: string }).assetId).toBe("asset-shared-1");
   });
 
+  it("a board spec generates a fresh id for BOTH the portal card and the new board", () => {
+    const copied: CopiedCard[] = [
+      { kind: "board", dx: 0, dy: 0, width: 120, height: 112, sourceBoardId: "template" },
+    ];
+    const [spec] = buildPasteSpecs(copied, { x: 500, y: 300 }, "board-b", 0, makeIdGen());
+    expect(spec).toEqual({
+      kind: "board",
+      id: "new-1",
+      boardId: "board-b",
+      frame: { x: 500, y: 300, width: 120, height: 112 },
+      zIndex: 0,
+      sourceBoardId: "template",
+      newBoardId: "new-2",
+    });
+  });
+
   it("assigns increasing zIndex from the given base, and pastes onto whatever boardId is passed (a different board than the source)", () => {
     const copied: CopiedCard[] = [
       { kind: "note", dx: 0, dy: 0, width: 240, height: 120, documentJson: {}, plainText: "", colorToken: "default" },

@@ -20,6 +20,21 @@
 import type { AssetDto, Frame } from "../services/workspace-gateway";
 import type { PasteCardSpec } from "../commands/paste-commands";
 
+/**
+ * A copied Board Portal (todo.md №16). Unlike a note/image, there is no
+ * content to snapshot here — the backend's `duplicateBoard` reads the source
+ * board's live content itself (ADR-0009), so the clipboard only needs to
+ * remember which board to duplicate and the portal's own on-screen size.
+ */
+export interface CopiedBoardCard {
+  kind: "board";
+  dx: number;
+  dy: number;
+  width: number;
+  height: number;
+  sourceBoardId: string;
+}
+
 export interface CopiedNoteCard {
   kind: "note";
   dx: number;
@@ -43,7 +58,7 @@ export interface CopiedImageCard {
   captionPlainText: string;
 }
 
-export type CopiedCard = CopiedNoteCard | CopiedImageCard;
+export type CopiedCard = CopiedNoteCard | CopiedImageCard | CopiedBoardCard;
 
 let buffer: CopiedCard[] | null = null;
 
@@ -83,26 +98,38 @@ export function buildPasteSpecs(
     };
     const id = nextId();
     const zIndex = baseZIndex + index;
-    return c.kind === "note"
-      ? {
-          kind: "note" as const,
-          id,
-          boardId,
-          frame,
-          zIndex,
-          documentJson: c.documentJson,
-          plainText: c.plainText,
-          colorToken: c.colorToken,
-        }
-      : {
-          kind: "image" as const,
-          id,
-          boardId,
-          frame,
-          zIndex,
-          assetId: c.asset.id,
-          captionJson: c.captionJson,
-          captionPlainText: c.captionPlainText,
-        };
+    if (c.kind === "note") {
+      return {
+        kind: "note" as const,
+        id,
+        boardId,
+        frame,
+        zIndex,
+        documentJson: c.documentJson,
+        plainText: c.plainText,
+        colorToken: c.colorToken,
+      };
+    }
+    if (c.kind === "image") {
+      return {
+        kind: "image" as const,
+        id,
+        boardId,
+        frame,
+        zIndex,
+        assetId: c.asset.id,
+        captionJson: c.captionJson,
+        captionPlainText: c.captionPlainText,
+      };
+    }
+    return {
+      kind: "board" as const,
+      id,
+      boardId,
+      frame,
+      zIndex,
+      sourceBoardId: c.sourceBoardId,
+      newBoardId: nextId(),
+    };
   });
 }

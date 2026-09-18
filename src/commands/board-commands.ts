@@ -2,6 +2,8 @@
 
 import type {
   CreateChildBoardInput,
+  DuplicateBoardInput,
+  DuplicateBoardReceipt,
   Frame,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
@@ -31,6 +33,46 @@ export class CreateChildBoardCommand implements WorkspaceCommand {
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
     this.trashBatchId = await gateway.trashBoard(this.input.boardId);
+  }
+}
+
+/**
+ * Duplicates a Board Portal's whole subtree recursively (todo.md №16). `undo`
+ * trashes the new subtree via the existing Trash cascade — the same mechanism
+ * `CreateChildBoardCommand` reuses above, and it already cascades correctly
+ * because `duplicateBoard`'s new board is a completely ordinary board.
+ */
+export class DuplicateBoardCommand implements WorkspaceCommand<DuplicateBoardReceipt> {
+  id: string;
+  label = "Duplicate board";
+  private trashBatchId: string | null = null;
+  private receipt: DuplicateBoardReceipt | null = null;
+
+  constructor(
+    id: string,
+    private input: DuplicateBoardInput,
+  ) {
+    this.id = id;
+  }
+
+  async execute(gateway: WorkspaceGateway): Promise<DuplicateBoardReceipt> {
+    if (this.trashBatchId) {
+      await gateway.restoreTrashBatch(this.trashBatchId);
+      this.trashBatchId = null;
+      if (!this.receipt) {
+        throw new Error("duplicate board redo ran before its first execute");
+      }
+      return this.receipt;
+    }
+    this.receipt = await gateway.duplicateBoard(this.input);
+    return this.receipt;
+  }
+
+  async undo(gateway: WorkspaceGateway): Promise<void> {
+    if (!this.receipt) {
+      throw new Error("duplicate board cannot be undone before it ran");
+    }
+    this.trashBatchId = await gateway.trashBoard(this.receipt.newBoardId);
   }
 }
 

@@ -56,6 +56,42 @@ describe("TauriWorkspaceGateway", () => {
     expect(invokeMock).toHaveBeenCalledWith("update_note", { input });
   });
 
+  it("calls duplicate_board with a wrapped input payload and returns the receipt", async () => {
+    const receipt = {
+      newBoardId: "board-copy",
+      portal: {
+        kind: "board_portal",
+        id: "portal-copy",
+        boardId: "home",
+        frame: { x: 40, y: 40, width: 120, height: 112 },
+        zIndex: 0,
+        revision: 1,
+        target: {
+          id: "board-copy",
+          boardRevision: 1,
+          title: "Template copy",
+          colorToken: "terracotta",
+          symbol: null,
+          childBoardCount: 0,
+          childCardCount: 0,
+          coverAsset: null,
+        },
+      },
+    };
+    invokeMock.mockResolvedValue(receipt);
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      sourceBoardId: "template",
+      targetBoardId: "home",
+      newBoardId: "board-copy",
+      newPortalCardId: "portal-copy",
+      frame: { x: 40, y: 40, width: 120, height: 112 },
+    };
+    const result = await gw.duplicateBoard(input);
+    expect(invokeMock).toHaveBeenCalledWith("duplicate_board", { input });
+    expect(result).toEqual(receipt);
+  });
+
   it("calls move_card with a wrapped input payload", async () => {
     invokeMock.mockResolvedValue(undefined);
     const gw = new TauriWorkspaceGateway();

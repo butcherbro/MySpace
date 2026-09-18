@@ -1,6 +1,7 @@
 import type {
   AddQuickBoardInput,
   AssetDto,
+  BoardPortalDto,
   BoardSnapshot,
   BoardSummary,
   CardDto,
@@ -11,6 +12,8 @@ import type {
   CreateFolderAliasInput,
   CreateImageCardInput,
   CreateNoteInput,
+  DuplicateBoardInput,
+  DuplicateBoardReceipt,
   EmbedCardDto,
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
@@ -71,6 +74,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     { cards: CardDto[]; boards: BoardSummary[]; deletedAt: number }
   >();
   private trashSequence = 0;
+  private duplicateSequence = 0;
 
   private dataVersion = 0;
 
@@ -312,6 +316,112 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     };
     this.snapshot.cards.push(portal);
     return Promise.resolve();
+  }
+
+  /** Finder-style unique title among `parentBoardId`'s direct children. */
+  private uniqueDuplicateTitle(parentBoardId: string, sourceTitle: string): string {
+    const base = `${sourceTitle.trim()} copy`;
+    const existing = new Set(
+      Array.from(this.boards.values())
+        .filter((b) => b.parentBoardId === parentBoardId)
+        .map((b) => b.title),
+    );
+    if (!existing.has(base)) return base;
+    let n = 2;
+    while (existing.has(`${base} ${n}`)) n += 1;
+    return `${base} ${n}`;
+  }
+
+  /**
+   * Recursively copies `sourceBoardId`'s cards into a fresh board parented at
+   * `parentBoardId`, mirroring the real backend's `duplicate_board` (ADR-0009):
+   * only the root gets a frontend-supplied id, every descendant id is
+   * generated here. Simplified test double — no depth limit, since fixtures
+   * are shallow.
+   */
+  private copyBoardSubtree(sourceBoardId: string, newBoardId: string, parentBoardId: string, title: string): void {
+    const source = this.boards.get(sourceBoardId);
+    if (!source) throw new Error(`board not found: ${sourceBoardId}`);
+    this.boards.set(newBoardId, {
+      id: newBoardId,
+      title,
+      parentBoardId,
+      revision: 1,
+      colorToken: source.colorToken,
+      symbol: source.symbol,
+      coverAsset: source.coverAsset,
+    });
+
+    const sourceCards = this.snapshot.cards.filter((c) => c.boardId === sourceBoardId);
+    for (const card of sourceCards) {
+      const newCardId = `dup-card-${this.duplicateSequence++}`;
+      if (card.kind === "board_portal") {
+        const nestedNewBoardId = `dup-board-${this.duplicateSequence++}`;
+        this.copyBoardSubtree(card.target.id, nestedNewBoardId, newBoardId, card.target.title);
+        const nested = this.boards.get(nestedNewBoardId)!;
+        this.snapshot.cards.push({
+          ...structuredClone(card),
+          id: newCardId,
+          boardId: newBoardId,
+          revision: 1,
+          target: {
+            ...structuredClone(card.target),
+            id: nestedNewBoardId,
+            boardRevision: 1,
+            childBoardCount: this.countChildBoards(nestedNewBoardId),
+            childCardCount: this.countChildCards(nestedNewBoardId),
+          },
+        });
+        void nested;
+      } else {
+        this.snapshot.cards.push({
+          ...structuredClone(card),
+          id: newCardId,
+          boardId: newBoardId,
+          revision: 1,
+        });
+      }
+    }
+  }
+
+  private countChildBoards(boardId: string): number {
+    return Array.from(this.boards.values()).filter((b) => b.parentBoardId === boardId).length;
+  }
+
+  private countChildCards(boardId: string): number {
+    return this.snapshot.cards.filter((c) => c.boardId === boardId).length;
+  }
+
+  duplicateBoard(input: DuplicateBoardInput): Promise<DuplicateBoardReceipt> {
+    const source = this.boards.get(input.sourceBoardId);
+    if (!source) return Promise.reject(new Error(`board not found: ${input.sourceBoardId}`));
+    if (!this.boards.has(input.targetBoardId)) {
+      return Promise.reject(new Error(`board not found: ${input.targetBoardId}`));
+    }
+
+    const title = this.uniqueDuplicateTitle(input.targetBoardId, source.title);
+    this.copyBoardSubtree(input.sourceBoardId, input.newBoardId, input.targetBoardId, title);
+
+    const portal: BoardPortalDto = {
+      kind: "board_portal",
+      id: input.newPortalCardId,
+      boardId: input.targetBoardId,
+      frame: { ...input.frame },
+      zIndex: 0,
+      revision: 1,
+      target: {
+        id: input.newBoardId,
+        boardRevision: 1,
+        title,
+        colorToken: source.colorToken,
+        symbol: source.symbol,
+        childBoardCount: this.countChildBoards(input.newBoardId),
+        childCardCount: this.countChildCards(input.newBoardId),
+        coverAsset: source.coverAsset,
+      },
+    };
+    this.snapshot.cards.push(portal);
+    return Promise.resolve({ newBoardId: input.newBoardId, portal });
   }
 
   renameBoard(boardId: string, title: string): Promise<void> {

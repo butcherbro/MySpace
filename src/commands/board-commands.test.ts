@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { CreateChildBoardCommand, MoveBoardCommand, MoveSelectionCommand } from "./board-commands";
+import {
+  CreateChildBoardCommand,
+  DuplicateBoardCommand,
+  MoveBoardCommand,
+  MoveSelectionCommand,
+} from "./board-commands";
 import type { MoveBoardInput, WorkspaceGateway } from "../services/workspace-gateway";
 
 function gatewaySpy() {
@@ -99,6 +104,72 @@ describe("CreateChildBoardCommand", () => {
 
     expect(gateway.createChildBoard).toHaveBeenCalledTimes(1);
     expect(gateway.restoreTrashBatch).toHaveBeenCalledWith("batch-board");
+  });
+});
+
+describe("DuplicateBoardCommand", () => {
+  const input = {
+    sourceBoardId: "template",
+    targetBoardId: "home",
+    newBoardId: "board-copy",
+    newPortalCardId: "portal-copy",
+    frame: nextFrame,
+  };
+  const receipt = {
+    newBoardId: "board-copy",
+    portal: {
+      kind: "board_portal" as const,
+      id: "portal-copy",
+      boardId: "home",
+      frame: nextFrame,
+      zIndex: 0,
+      revision: 1,
+      target: {
+        id: "board-copy",
+        boardRevision: 1,
+        title: "Template copy",
+        colorToken: "terracotta",
+        symbol: null,
+        childBoardCount: 0,
+        childCardCount: 0,
+        coverAsset: null,
+      },
+    },
+  };
+  type Gateway = Parameters<DuplicateBoardCommand["execute"]>[0];
+
+  it("duplicates the board and returns the receipt", async () => {
+    const gateway = {
+      duplicateBoard: vi.fn().mockResolvedValue(receipt),
+    } as unknown as Gateway;
+
+    const command = new DuplicateBoardCommand("cmd-1", input);
+    await expect(command.execute(gateway)).resolves.toBe(receipt);
+    expect(gateway.duplicateBoard).toHaveBeenCalledWith(input);
+  });
+
+  it("undo trashes the new board; redo restores the same batch instead of duplicating again", async () => {
+    const gateway = {
+      duplicateBoard: vi.fn().mockResolvedValue(receipt),
+      trashBoard: vi.fn().mockResolvedValue("batch-dup"),
+      restoreTrashBatch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Gateway;
+
+    const command = new DuplicateBoardCommand("cmd-1", input);
+    await command.execute(gateway);
+    await command.undo(gateway);
+    expect(gateway.trashBoard).toHaveBeenCalledWith("board-copy");
+
+    await command.execute(gateway);
+    expect(gateway.restoreTrashBatch).toHaveBeenCalledWith("batch-dup");
+    expect(gateway.duplicateBoard).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to undo a command that never ran", async () => {
+    const gateway = { trashBoard: vi.fn() } as unknown as Gateway;
+    const command = new DuplicateBoardCommand("cmd-2", input);
+    await expect(command.undo(gateway)).rejects.toThrow();
+    expect(gateway.trashBoard).not.toHaveBeenCalled();
   });
 });
 

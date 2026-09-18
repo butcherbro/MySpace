@@ -8,6 +8,8 @@ import type {
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateChildBoardInput,
+  DuplicateBoardInput,
+  DuplicateBoardReceipt,
   CreateFileCardInput,
   CreateFolderAliasInput,
   CreateImageCardInput,
@@ -92,6 +94,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   createChildBoard(input: CreateChildBoardInput): Promise<void> {
     return invoke<void>("create_child_board", { input });
+  }
+
+  duplicateBoard(input: DuplicateBoardInput): Promise<DuplicateBoardReceipt> {
+    return invoke<DuplicateBoardReceipt>("duplicate_board", { input });
   }
 
   renameBoard(boardId: string, title: string): Promise<void> {

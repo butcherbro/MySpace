@@ -32,7 +32,8 @@ That is Task 20, and it needs a person at the app.
 
 - Tauri 2 + React 19 + TypeScript + Vite, React Flow behind `CanvasAdapter`,
   SQLite via `rusqlite`. The frontend generates ids (UUIDv7); IDs stay an input
-  to every `create_*`.
+  to every `create_*` — except `duplicate_board`'s copied descendants, which the
+  backend generates inside its one recursive-copy transaction (ADR-0009).
 - `documentJson` is authoritative for note text; plain text is derived.
 - Every mutation carries an optimistic `revision` and is rejected when stale.
 - SQLite is the authority for durable ownership; `assets/` is a managed

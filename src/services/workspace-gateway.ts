@@ -277,6 +277,26 @@ export interface CreateChildBoardInput {
   title: string;
 }
 
+/**
+ * Duplicates a Board Portal's whole subtree recursively (todo.md №16). Only
+ * the root board/portal ids are frontend-generated; the backend generates
+ * every copied descendant's id inside its one transaction (ADR-0009) — the
+ * frontend has no visibility into what a board contains before the copy runs.
+ */
+export interface DuplicateBoardInput {
+  sourceBoardId: string;
+  /** The board the new portal is placed on (may equal the source's own parent). */
+  targetBoardId: string;
+  newBoardId: string;
+  newPortalCardId: string;
+  frame: Frame;
+}
+
+export interface DuplicateBoardReceipt {
+  newBoardId: string;
+  portal: BoardPortalDto;
+}
+
 export interface ImportAssetInput {
   id: string;
   sourcePath: string;
@@ -441,6 +461,7 @@ export interface WorkspaceGateway {
   moveBoard(input: MoveBoardInput): Promise<void>;
   saveViewport(input: SaveViewportInput): Promise<void>;
   createChildBoard(input: CreateChildBoardInput): Promise<void>;
+  duplicateBoard(input: DuplicateBoardInput): Promise<DuplicateBoardReceipt>;
   renameBoard(boardId: string, title: string): Promise<void>;
   trashNote(cardId: string): Promise<string>;
   trashBoard(boardId: string): Promise<string>;
