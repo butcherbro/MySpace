@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CreateNoteCommand, MoveCardsCommand, MoveCardToBoardCommand } from "./card-commands";
+import { CreateImageCardCommand, CreateNoteCommand, MoveCardsCommand, MoveCardToBoardCommand } from "./card-commands";
 import type { MoveCardToBoardInput, MoveCardsInput, WorkspaceGateway } from "../services/workspace-gateway";
 
 function gatewaySpy() {
@@ -113,5 +113,55 @@ describe("CreateNoteCommand", () => {
 
     expect(gateway.createNote).toHaveBeenCalledTimes(1);
     expect(gateway.restoreTrashBatch).toHaveBeenCalledWith("batch-note");
+  });
+});
+
+describe("CreateImageCardCommand", () => {
+  it("undo trashes the image card as its own batch, keyed by kind 'image'", async () => {
+    const gateway = {
+      createImageCard: vi.fn(async () => {}),
+      trashSelection: vi.fn(async () => "batch-image"),
+      restoreTrashBatch: vi.fn(async () => {}),
+    } as unknown as WorkspaceGateway;
+    const cmd = new CreateImageCardCommand("create", {
+      id: "image-1",
+      boardId: "home",
+      frame: sourceFrame,
+      zIndex: 0,
+      assetId: "asset-1",
+      captionJson: { type: "doc" },
+      captionPlainText: "",
+    });
+
+    await cmd.execute(gateway);
+    await cmd.undo(gateway);
+
+    expect(gateway.trashSelection).toHaveBeenCalledWith({
+      items: [{ id: "image-1", kind: "image" }],
+    });
+  });
+
+  it("redoes by restoring the trash batch instead of recreating", async () => {
+    const gateway = {
+      createImageCard: vi.fn(async () => {}),
+      trashSelection: vi.fn(async () => "batch-image"),
+      restoreTrashBatch: vi.fn(async () => {}),
+    } as unknown as WorkspaceGateway;
+    const cmd = new CreateImageCardCommand("create", {
+      id: "image-1",
+      boardId: "home",
+      frame: sourceFrame,
+      zIndex: 0,
+      assetId: "asset-1",
+      captionJson: { type: "doc" },
+      captionPlainText: "",
+    });
+
+    await cmd.execute(gateway);
+    await cmd.undo(gateway);
+    await cmd.execute(gateway);
+
+    expect(gateway.createImageCard).toHaveBeenCalledTimes(1);
+    expect(gateway.restoreTrashBatch).toHaveBeenCalledWith("batch-image");
   });
 });

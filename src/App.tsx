@@ -12,7 +12,14 @@ import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import { moveSelectionOntoBoard } from "./canvas/move-selection-onto-board";
 import type { CanvasCard } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
-import { MoveCardsCommand, CreateNoteCommand, MoveCardToBoardCommand, SetNoteColorCommand } from "./commands/card-commands";
+import {
+  MoveCardsCommand,
+  CreateNoteCommand,
+  MoveCardToBoardCommand,
+  SetNoteColorCommand,
+} from "./commands/card-commands";
+import { PasteCardsCommand, type PasteCardSpec } from "./commands/paste-commands";
+import { buildPasteSpecs, readCardClipboard, setCardClipboard, type CopiedCard } from "./app/card-clipboard";
 import {
   CreateChildBoardCommand,
   MoveBoardCommand,
@@ -138,6 +145,11 @@ function App() {
   useEffect(() => {
     cardsRef.current = state.cards;
   }, [state.cards]);
+
+  // Last known pointer position over the canvas, in board-space (flow
+  // coordinates). Drives paste placement (todo.md №15): pasted cards land
+  // under the cursor, not at a fixed origin.
+  const lastCanvasPointRef = useRef<{ x: number; y: number } | null>(null);
 
   // Always reflects the latest selection, so a drag start can snapshot all
   // currently-selected card ids for a group move.
@@ -658,7 +670,63 @@ function App() {
     },
     [handleCreateNote],
   );
-  useCanvasPaste({ enabled: Boolean(board), onPaste: handleCanvasPaste });
+  // Paste the internal card clipboard (todo.md №15): duplicates land under the
+  // last known cursor position, keeping the copied group's relative layout.
+  // One PasteCardsCommand = one undo entry for the whole group.
+  const handlePasteCards = useCallback((): boolean => {
+    if (!board) return false;
+    const copied = readCardClipboard();
+    if (!copied || copied.length === 0) return false;
+    const cursor = lastCanvasPointRef.current ?? { x: 40, y: 40 + notes.length * 24 };
+    const baseZ = cardsRef.current.length;
+    const specs: PasteCardSpec[] = buildPasteSpecs(copied, cursor, board.id, baseZ, () =>
+      idGenerator.nextId(),
+    );
+    const assetById = new Map(
+      copied.filter((c): c is Extract<CopiedCard, { kind: "image" }> => c.kind === "image").map((c) => [c.asset.id, c.asset]),
+    );
+    void (async () => {
+      try {
+        await dispatcher.execute(new PasteCardsCommand(idGenerator.nextId(), specs));
+        for (const spec of specs) {
+          if (spec.kind === "note") {
+            const card: NoteCardDto = {
+              kind: "note",
+              id: spec.id,
+              boardId: spec.boardId,
+              frame: spec.frame,
+              zIndex: spec.zIndex,
+              revision: 1,
+              documentJson: spec.documentJson,
+              plainText: spec.plainText,
+              colorToken: spec.colorToken,
+            };
+            dispatch({ type: "cardAdded", card });
+          } else {
+            const asset = assetById.get(spec.assetId);
+            if (!asset) continue; // unreachable: built from the same copied list
+            const card: ImageCardDto = {
+              kind: "image",
+              id: spec.id,
+              boardId: spec.boardId,
+              frame: spec.frame,
+              zIndex: spec.zIndex,
+              revision: 1,
+              asset,
+              captionJson: spec.captionJson,
+              captionPlainText: spec.captionPlainText,
+            };
+            dispatch({ type: "cardAdded", card });
+          }
+        }
+      } catch (e) {
+        dispatch({ type: "failed", message: errorMessage(e) });
+      }
+    })();
+    return true;
+  }, [board, dispatcher, idGenerator, notes.length]);
+
+  useCanvasPaste({ enabled: Boolean(board), onPaste: handleCanvasPaste, onPasteCards: handlePasteCards });
 
   const handleUpdateNote = useCallback(
     (id: string, document: unknown): Promise<void> => {
@@ -1280,6 +1348,47 @@ function App() {
       });
   }, [state.selection, state.cards, gateway]);
 
+  // Cmd+C over a canvas selection: fills the internal card clipboard
+  // (todo.md №15) with every copyable card (note/image) in the selection, in
+  // addition to the existing system-clipboard image copy above (unchanged).
+  const handleCopySelection = useCallback(() => {
+    const selected = state.selection
+      .map((id) => state.cards.find((c) => c.id === id))
+      .filter(
+        (c): c is NoteCardDto | ImageCardDto =>
+          c != null && (c.kind === "note" || c.kind === "image"),
+      );
+    if (selected.length > 0) {
+      const minX = Math.min(...selected.map((c) => c.frame.x));
+      const minY = Math.min(...selected.map((c) => c.frame.y));
+      const copied: CopiedCard[] = selected.map((c) =>
+        c.kind === "note"
+          ? {
+              kind: "note",
+              dx: c.frame.x - minX,
+              dy: c.frame.y - minY,
+              width: c.frame.width,
+              height: c.frame.height,
+              documentJson: c.documentJson,
+              plainText: c.plainText,
+              colorToken: c.colorToken,
+            }
+          : {
+              kind: "image",
+              dx: c.frame.x - minX,
+              dy: c.frame.y - minY,
+              width: c.frame.width,
+              height: c.frame.height,
+              asset: c.asset,
+              captionJson: c.captionJson,
+              captionPlainText: c.captionPlainText,
+            },
+      );
+      setCardClipboard(copied);
+    }
+    handleCopySelectionImages();
+  }, [state.selection, state.cards, handleCopySelectionImages]);
+
   // Applying a loaded snapshot is the store's concern, not navigation's: note
   // documents are normalized here, and both the startup load and every later
   // navigation go through this one place.
@@ -1776,6 +1885,22 @@ function App() {
 
   const canvasRef = useRef<HTMLDivElement>(null);
 
+  // Tracks pointer position over the canvas in board-space, for paste
+  // placement. The canvas element is stable for the app's lifetime, so one
+  // listener suffices; screenToFlowRef may not be ready on the very first
+  // paint, in which case the move is simply skipped (next move catches up).
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    function handleMove(e: PointerEvent) {
+      const flow = screenToFlowRef.current;
+      if (!flow) return;
+      lastCanvasPointRef.current = flow(e.clientX, e.clientY);
+    }
+    el.addEventListener("pointermove", handleMove);
+    return () => el.removeEventListener("pointermove", handleMove);
+  }, []);
+
   const handleEditDeactivate = useCallback(() => {
     dispatch({ type: "editingStopped" });
     // Return focus to the canvas so keyboard shortcuts (e.g. Cmd+A) and the
@@ -1825,12 +1950,12 @@ function App() {
         }
       } else if (e.key.toLowerCase() === "c") {
         e.preventDefault();
-        handleCopySelectionImages();
+        handleCopySelection();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelectionImages, trashOpen, closeTrashDrawer]);
+  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelection, trashOpen, closeTrashDrawer]);
 
   return (
     <AppShell

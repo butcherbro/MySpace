@@ -57,6 +57,7 @@ export function BoardTabs({
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>, boardId: string) {
     // Home is pinned: neither draggable nor a drop target.
     if (!onReorder || boardId === homeBoardId || event.button !== 0) return;
+    const reorder = onReorder;
     const startX = event.clientX;
     const startY = event.clientY;
     let dragging = false;
@@ -77,7 +78,7 @@ export function BoardTabs({
       window.removeEventListener("pointerup", handleUp);
       if (dragging) {
         const finalIndex = indexAtClientX(upEvent.clientX);
-        onReorder(boardId, finalIndex);
+        reorder(boardId, finalIndex);
       }
       setDraggedId(null);
       setDropIndex(null);

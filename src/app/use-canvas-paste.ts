@@ -9,6 +9,11 @@ export interface CanvasPasteOptions {
   /** Paste is a no-op when no board is open. */
   enabled: boolean;
   onPaste: (data: CanvasPasteData) => void;
+  /**
+   * Checked first, before text/html: pastes the internal card clipboard
+   * (todo.md №15) if it holds anything. Returns whether it handled the paste.
+   */
+  onPasteCards?: () => boolean;
 }
 
 /**
@@ -25,7 +30,7 @@ export interface CanvasPasteOptions {
  * canvas-paste path existed before this hook, and building it is out of scope
  * for formatted-text paste (todo.md №13).
  */
-export function useCanvasPaste({ enabled, onPaste }: CanvasPasteOptions): void {
+export function useCanvasPaste({ enabled, onPaste, onPasteCards }: CanvasPasteOptions): void {
   useEffect(() => {
     if (!enabled) return;
 
@@ -41,6 +46,15 @@ export function useCanvasPaste({ enabled, onPaste }: CanvasPasteOptions): void {
         target instanceof Element && target.closest('[contenteditable="true"], textarea, input') != null;
       if (inTextEntry) return;
 
+      // Our own card clipboard wins whenever it holds anything: it is only
+      // ever populated by this app's own Cmd+C, so it is always the more
+      // specific, more recent intent than whatever text/html happens to sit
+      // on the system pasteboard.
+      if (onPasteCards && onPasteCards()) {
+        e.preventDefault();
+        return;
+      }
+
       const html = e.clipboardData?.getData("text/html") ?? "";
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!html.trim() && !text.trim()) return;
@@ -51,5 +65,5 @@ export function useCanvasPaste({ enabled, onPaste }: CanvasPasteOptions): void {
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [enabled, onPaste]);
+  }, [enabled, onPaste, onPasteCards]);
 }

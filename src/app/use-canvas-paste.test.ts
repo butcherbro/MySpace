@@ -105,4 +105,38 @@ describe("useCanvasPaste", () => {
     expect(onPaste).not.toHaveBeenCalled();
     canvasDiv.remove();
   });
+
+  it("checks onPasteCards first: when it handles the paste, html/text is never read", () => {
+    const onPaste = vi.fn();
+    const onPasteCards = vi.fn(() => true);
+    renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPasteCards }));
+
+    const canvasDiv = document.createElement("div");
+    document.body.appendChild(canvasDiv);
+
+    act(() => {
+      dispatchPaste(canvasDiv, { "text/html": "<p>hi</p>", "text/plain": "hi" });
+    });
+
+    expect(onPasteCards).toHaveBeenCalledTimes(1);
+    expect(onPaste).not.toHaveBeenCalled();
+    canvasDiv.remove();
+  });
+
+  it("falls back to html/text when onPasteCards declines (empty card clipboard)", () => {
+    const onPaste = vi.fn();
+    const onPasteCards = vi.fn(() => false);
+    renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPasteCards }));
+
+    const canvasDiv = document.createElement("div");
+    document.body.appendChild(canvasDiv);
+
+    act(() => {
+      dispatchPaste(canvasDiv, { "text/plain": "just text" });
+    });
+
+    expect(onPasteCards).toHaveBeenCalledTimes(1);
+    expect(onPaste).toHaveBeenCalledWith({ html: "", text: "just text" });
+    canvasDiv.remove();
+  });
 });

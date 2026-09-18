@@ -156,3 +156,32 @@ export class SetNoteColorCommand implements WorkspaceCommand {
     return null;
   }
 }
+
+/** Creates an image card (reusing an existing asset id). `undo` trashes it. */
+export class CreateImageCardCommand implements WorkspaceCommand {
+  id: string;
+  label = "Create image";
+  private trashBatchId: string | null = null;
+
+  constructor(
+    id: string,
+    private input: Parameters<WorkspaceGateway["createImageCard"]>[0],
+  ) {
+    this.id = id;
+  }
+
+  async execute(gateway: WorkspaceGateway): Promise<void> {
+    if (this.trashBatchId) {
+      await gateway.restoreTrashBatch(this.trashBatchId);
+      this.trashBatchId = null;
+      return;
+    }
+    await gateway.createImageCard(this.input);
+  }
+
+  async undo(gateway: WorkspaceGateway): Promise<void> {
+    this.trashBatchId = await gateway.trashSelection({
+      items: [{ id: this.input.id, kind: "image" }],
+    });
+  }
+}

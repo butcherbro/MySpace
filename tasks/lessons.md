@@ -420,3 +420,36 @@
   (and here did, twice) come back empty. Do that grep before opening any file
   to fix, and say plainly in the report that both guesses were wrong instead
   of quietly building around them.
+
+## 2026-09-18 — Card copy/paste (№15): in-memory clipboard chosen over a custom system-clipboard mime
+
+- New contract: `src/app/card-clipboard.ts` is a module-level (not React
+  state) buffer for `Cmd+C`/`Cmd+V` of notes/images. Considered writing a
+  custom mime (`web application/x-myspace-cards+json`) via
+  `navigator.clipboard.write`/`ClipboardItem` instead — rejected because
+  `ClipboardItem` only accepts a browser-approved type whitelist
+  (`text/plain`, `text/html`, image formats); WKWebView enforces the same
+  restriction, so a custom mime throws rather than round-tripping. The
+  in-memory buffer is therefore the only reliable V1 answer, at the cost of
+  same-window-only paste (acceptable per the brief). `use-canvas-paste.ts`'s
+  `handlePaste` checks it first (`onPasteCards`), before text/html — it wins
+  unconditionally whenever non-empty, since it's the only way to interpret a
+  paste as ours vs. some earlier system-clipboard content.
+- `image_cards.asset_id` GC (`src-tauri/src/domain/asset_service.rs`,
+  `collect_orphaned_assets`) already does `NOT EXISTS (SELECT 1 FROM
+  image_cards i WHERE i.asset_id = a.id)` — i.e. it counts *any* row, not a
+  specific card — so several image cards already safely share one asset_id
+  with no backend change needed for the copy-in paste model.
+- Pure placement math (`buildPasteSpecs` in `card-clipboard.ts`: cursor +
+  each card's `dx`/`dy` offset from the copied group's top-left) was
+  extracted out of `App.tsx` specifically so it has its own unit tests —
+  `App.tsx` itself has no test harness (no `App.test.tsx` exists in this
+  repo), so anything that needs isolated coverage has to be pulled into its
+  own module before it's wired in, not tested by proxy through the giant
+  component.
+- One dispatcher entry per pasted group: `PasteCardsCommand`
+  (`src/commands/paste-commands.ts`) creates every card in `execute`, then
+  trashes them all as a single batch in `undo` (reusing the existing
+  `trashSelection`/`restoreTrashBatch` batch primitive) — never delegates to
+  per-card sub-commands' own undo, which would have produced N separate Trash
+  batches instead of one Cmd+Z.
