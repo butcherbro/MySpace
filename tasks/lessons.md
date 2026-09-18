@@ -159,6 +159,32 @@
 - `set_note_color` must NOT bump the card revision: color is orthogonal to text, and
   bumping it races the text autosave's `expected_revision` on the same card.
 
+## 2026-09-18 — `cardsRef` is only eventually-consistent across chained queue tasks
+
+- New contract discovered while fixing note auto-grow (backlog problem 2): `App.tsx`
+  keeps `cardsRef.current` in sync with `state.cards` via a plain `useEffect`
+  (`src/App.tsx:128`). That effect runs on React's next commit — a macrotask-ish
+  scheduler tick — but `MutationQueue.run()` (`src/persistence/entity-write-queue.ts`)
+  chains queued tasks with plain `Promise.then`, which resolves as a *microtask*.
+  Two mutations enqueued back-to-back on the same card (e.g. a content autosave and
+  a resize, both debounced off the same keystroke) can therefore have the second
+  task read a stale `revision` from `cardsRef.current` before the effect from the
+  first task's dispatch has run — the backend then rejects it as `stale_revision`,
+  even though the two writes were correctly serialized by the queue.
+- Consequence: any queued mutation callback that dispatches a revision-bumping
+  action must also patch `cardsRef.current` synchronously, right next to the
+  `dispatch(...)` call, mirroring exactly what the reducer does for that action
+  (see `src/App.tsx` — `handleUpdateNote`, `handleFinalizeNote`,
+  `handleResizeNote`, and the pre-existing `requestEmbedMetadata` for the
+  original instance of this pattern). Relying on the `useEffect` sync alone is
+  only safe for a *single* isolated mutation, never for two that can queue in
+  the same tick.
+- This is the same family of bug as the 2026-09-08 group-move revision race
+  above, but on the "two of the app's own debounced autosaves collide" axis
+  rather than "a drag snapshot outlives its window" axis — worth checking
+  whenever a new debounced write is added next to an existing one on the same
+  card (e.g. future image/caption auto-fit).
+
 ## 2026-09-09 — Filesystem shortcuts must read as folders and reveal names
 
 - User preference: a folder shortcut should keep a large, unmistakable blue

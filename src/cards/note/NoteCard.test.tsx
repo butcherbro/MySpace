@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { NoteCard } from "./NoteCard";
 import type { NoteCardDto } from "../../services/workspace-gateway";
@@ -131,6 +131,70 @@ describe("NoteCard", () => {
     // A subsequent blur (still editing) retries the same save.
     await act(async () => lastEditorProps()?.onBlur?.());
     expect(onUpdate).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("grows the card height to fit overflowing content while editing, debounced like autosave", () => {
+    vi.useFakeTimers();
+    const onResize = vi.fn();
+    render(
+      <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn().mockResolvedValue(undefined)} onContextMenu={vi.fn()} onResize={onResize} />,
+    );
+
+    // jsdom has no real layout engine: fake the measurement the component reads
+    // (scrollHeight = full content height, clientHeight = the currently applied
+    // frame height) to simulate a paste that overflows the 80px starting frame.
+    const card = screen.getByTestId("note-card");
+    Object.defineProperty(card, "clientHeight", { configurable: true, value: 80 });
+    Object.defineProperty(card, "scrollHeight", { configurable: true, value: 220 });
+
+    act(() => lastEditorProps()?.onChange(changedDoc));
+
+    // No avalanche of writes: the grow, like content autosave, is debounced.
+    expect(onResize).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(250));
+    expect(onResize).toHaveBeenCalledWith("note-1", 200, 220);
+    vi.useRealTimers();
+  });
+
+  it("does not fight a manual shrink below content height after growing", () => {
+    vi.useFakeTimers();
+    const onResize = vi.fn();
+    const { rerender } = render(
+      <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn().mockResolvedValue(undefined)} onContextMenu={vi.fn()} onResize={onResize} />,
+    );
+
+    const card = screen.getByTestId("note-card");
+    Object.defineProperty(card, "clientHeight", { configurable: true, value: 80 });
+    Object.defineProperty(card, "scrollHeight", { configurable: true, value: 220 });
+    act(() => lastEditorProps()?.onChange(changedDoc));
+    act(() => vi.advanceTimersByTime(250));
+    expect(onResize).toHaveBeenCalledWith("note-1", 200, 220);
+
+    // The note re-renders with the grown, persisted frame (as the parent would
+    // after the resize command lands), then the user manually drags the handle
+    // down to something smaller than the content needs.
+    onResize.mockClear();
+    // Real layout would now report clientHeight === scrollHeight (the frame
+    // grew to fit); jsdom doesn't lay anything out, so the fake measurement is
+    // updated by hand to keep matching what the applied height would produce.
+    Object.defineProperty(card, "clientHeight", { configurable: true, value: 220 });
+    Object.defineProperty(card, "scrollHeight", { configurable: true, value: 220 });
+    rerender(
+      <NoteCard note={makeNote({ frame: { x: 0, y: 0, width: 200, height: 220 } })} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn().mockResolvedValue(undefined)} onContextMenu={vi.fn()} onResize={onResize} />,
+    );
+    const handle = screen.getByTestId("note-resize");
+    // jsdom doesn't implement the Pointer Events capture API used by the drag handler.
+    (handle as unknown as { setPointerCapture: () => void }).setPointerCapture = vi.fn();
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 220 });
+    fireEvent.pointerMove(window, { clientX: 0, clientY: 100 }); // drag up by 120 -> height 100
+    fireEvent.pointerUp(window);
+    expect(onResize).toHaveBeenLastCalledWith("note-1", 200, 100);
+
+    // No further grow write should fire just from the shrink settling.
+    onResize.mockClear();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(onResize).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 

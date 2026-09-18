@@ -649,10 +649,19 @@ function App() {
           documentJson: document,
           plainText,
         });
+        // Keep the ref authoritative *inside this microtask*: the note's own
+        // auto-grow (NoteCard) debounces a resize write off the same keystroke
+        // and can land right behind this one in the queue, before React's
+        // effect has re-synced `cardsRef` from state (see the embed-metadata
+        // note above for the same pattern).
+        const nextRevision = note.revision + 1;
+        cardsRef.current = cardsRef.current.map((c) =>
+          c.id === id ? { ...c, revision: nextRevision, documentJson: document, plainText } : c,
+        );
         dispatch({
           type: "cardContentUpdated",
           id,
-          revision: note.revision + 1,
+          revision: nextRevision,
           documentJson: document,
           plainText,
         });
@@ -686,6 +695,7 @@ function App() {
             descriptionJson: plainTextToDocument(""),
             descriptionPlainText: "",
           });
+          cardsRef.current = cardsRef.current.map((c) => (c.id === id ? embed : c));
           dispatch({ type: "cardReplaced", id, card: embed });
           return;
         }
@@ -697,10 +707,16 @@ function App() {
           documentJson: document,
           plainText,
         });
+        // Same ref-staleness guard as handleUpdateNote above: a pending
+        // auto-grow resize can be queued right behind this finalize.
+        const nextRevision = note.revision + 1;
+        cardsRef.current = cardsRef.current.map((c) =>
+          c.id === id ? { ...c, revision: nextRevision, documentJson: document, plainText } : c,
+        );
         dispatch({
           type: "cardContentUpdated",
           id,
-          revision: note.revision + 1,
+          revision: nextRevision,
           documentJson: document,
           plainText,
         });
@@ -1091,7 +1107,15 @@ function App() {
             expectedRevision: current.revision,
             frame,
           });
-          dispatch({ type: "cardMoved", id, revision: current.revision + 1, frame });
+          // Same ref-staleness guard as content saves above: NoteCard's
+          // auto-grow can queue a resize right behind a content autosave for
+          // the same keystroke, and the two must not read the same stale
+          // revision (tasks/lessons.md 2026-09-08).
+          const nextRevision = current.revision + 1;
+          cardsRef.current = cardsRef.current.map((c) =>
+            c.id === id ? { ...c, revision: nextRevision, frame } : c,
+          );
+          dispatch({ type: "cardMoved", id, revision: nextRevision, frame });
         })
         .catch((e) => {
           dispatch({ type: "failed", message: errorMessage(e) });
