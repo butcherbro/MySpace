@@ -150,6 +150,11 @@ function App() {
   // coordinates). Drives paste placement (todo.md №15): pasted cards land
   // under the cursor, not at a fixed origin.
   const lastCanvasPointRef = useRef<{ x: number; y: number } | null>(null);
+  // Declared here (rather than by the JSX below) so the paste callbacks —
+  // defined further up the component — can close over it: it's still the
+  // same DOM node either way, since the render effect that attaches it runs
+  // once for the app's lifetime (see the pointermove effect near the JSX).
+  const canvasRef = useRef<HTMLDivElement>(null);
 
   // Always reflects the latest selection, so a drag start can snapshot all
   // currently-selected card ids for a group move.
@@ -657,6 +662,19 @@ function App() {
     onError: onCanvasError,
   });
 
+  // Fallback paste position when the cursor was never over the canvas (e.g.
+  // paste fired right after the app opened, before any pointermove) — the
+  // center of the visible canvas, not a fixed corner (todo.md №18). Both
+  // paste paths below share it so a fix to one can't drift from the other.
+  const fallbackPastePosition = useCallback((): { x: number; y: number } => {
+    const flow = screenToFlowRef.current;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (flow && rect && rect.width > 0 && rect.height > 0) {
+      return flow(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    }
+    return { x: 40, y: 40 + notes.length * 24 };
+  }, [notes.length]);
+
   // Paste onto the empty canvas (no editor open) creates a note. `text/html`
   // (Telegram/browser copy) keeps its bold/italic/strike/paragraphs/lists —
   // pasting *into* an open note editor already gets this for free from
@@ -666,9 +684,10 @@ function App() {
       const useHtml = html.trim().length > 0;
       const documentJson = useHtml ? htmlToDocument(html, text) : plainTextToDocument(text);
       const plainText = useHtml ? documentToPlainText(documentJson) : text;
-      void handleCreateNote(undefined, { content: { documentJson, plainText } });
+      const position = lastCanvasPointRef.current ?? fallbackPastePosition();
+      void handleCreateNote(position, { content: { documentJson, plainText } });
     },
-    [handleCreateNote],
+    [handleCreateNote, fallbackPastePosition],
   );
   // Paste the internal card clipboard (todo.md №15): duplicates land under the
   // last known cursor position, keeping the copied group's relative layout.
@@ -677,7 +696,7 @@ function App() {
     if (!board) return false;
     const copied = readCardClipboard();
     if (!copied || copied.length === 0) return false;
-    const cursor = lastCanvasPointRef.current ?? { x: 40, y: 40 + notes.length * 24 };
+    const cursor = lastCanvasPointRef.current ?? fallbackPastePosition();
     const baseZ = cardsRef.current.length;
     const specs: PasteCardSpec[] = buildPasteSpecs(copied, cursor, board.id, baseZ, () =>
       idGenerator.nextId(),
@@ -724,7 +743,7 @@ function App() {
       }
     })();
     return true;
-  }, [board, dispatcher, idGenerator, notes.length]);
+  }, [board, dispatcher, idGenerator, fallbackPastePosition]);
 
   useCanvasPaste({ enabled: Boolean(board), onPaste: handleCanvasPaste, onPasteCards: handlePasteCards });
 
@@ -1882,8 +1901,6 @@ function App() {
   const handleNavigateForward = navigation.goForward;
   const handleTabActivate = navigation.activateTab;
   const handleTabClose = navigation.closeTab;
-
-  const canvasRef = useRef<HTMLDivElement>(null);
 
   // Tracks pointer position over the canvas in board-space, for paste
   // placement. The canvas element is stable for the app's lifetime, so one
