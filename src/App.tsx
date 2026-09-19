@@ -154,6 +154,19 @@ function App() {
   // coordinates). Drives paste placement (todo.md №15): pasted cards land
   // under the cursor, not at a fixed origin.
   const lastCanvasPointRef = useRef<{ x: number; y: number } | null>(null);
+  // A board switch (todo.md №25) must drop any pointer position tracked for
+  // the *previous* board: `lastCanvasPointRef` holds flow-space coordinates,
+  // which are only meaningful relative to the React Flow instance that
+  // produced them. Without this, pasting right after opening a different
+  // board — before the mouse moves again — reused the old board's stale
+  // coordinate, landing the note off in whatever spot that number happens to
+  // map to on the new board (seen live as "paste lands in the corner").
+  // Falling back to `null` here means the very next paste instead uses
+  // `fallbackPastePosition()` (viewport center) until a real pointermove
+  // re-establishes a same-board position.
+  useEffect(() => {
+    lastCanvasPointRef.current = null;
+  }, [boardOpenRevision]);
   // Declared here (rather than by the JSX below) so the paste callbacks —
   // defined further up the component — can close over it: it's still the
   // same DOM node either way, since the render effect that attaches it runs

@@ -61,6 +61,30 @@ describe("useCanvasPaste", () => {
     editable.remove();
   });
 
+  it("ignores paste when document.activeElement is the editor, even if e.target is document (todo.md №25: WKWebView paste can target document while something is focused)", () => {
+    const onPaste = vi.fn();
+    const onPasteCards = vi.fn(() => false);
+    renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPasteCards }));
+
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    editable.tabIndex = 0;
+    document.body.appendChild(editable);
+    editable.focus();
+    expect(document.activeElement).toBe(editable);
+
+    act(() => {
+      // Simulate the real WKWebView paste: the DOM event's `target` is the
+      // document, not the focused contenteditable — only `document.activeElement`
+      // still points at the editor.
+      dispatchPaste(document, { "text/html": "<p>hi</p>", "text/plain": "hi" });
+    });
+
+    expect(onPaste).not.toHaveBeenCalled();
+    expect(onPasteCards).not.toHaveBeenCalled();
+    editable.remove();
+  });
+
   it("ignores paste targeting an input/textarea", () => {
     const onPaste = vi.fn();
     renderHook(() => useCanvasPaste({ enabled: true, onPaste }));

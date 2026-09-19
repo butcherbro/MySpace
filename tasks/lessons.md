@@ -1,5 +1,34 @@
 # Lessons
 
+## 2026-09-19 — Paste e2e must go through real focus/keyboard, not a synthetic dispatch on window
+
+- Bug (todo.md №25): Cmd+V inside an open note editor both pasted text into it
+  AND created a duplicate canvas-level note. `src/app/use-canvas-paste.ts`
+  guarded against this with `e.target instanceof Element && target.closest(...)`
+  — but the existing e2e coverage (`tests/e2e/paste-cursor.spec.ts`) dispatched
+  a synthetic `ClipboardEvent` straight onto `window`, which always has
+  `e.target === window`. That made "not in a text entry" trivially true on
+  purpose and could never exercise the one case that matters: a paste that
+  reaches the handler while a contenteditable genuinely holds focus. The gap
+  hid the real defect (confirmed live in the Tauri WKWebView build: a Cmd+V
+  routed through the native Edit-menu accelerator can dispatch `paste` with
+  `e.target === document` even though `document.activeElement` is the focused
+  editor) for two feature commits (4971206, 5361cab) plus a whole todo entry.
+- Fix: the guard now checks `document.activeElement` in addition to
+  `e.target`, trusting whichever one actually resolves to the editor.
+- Test-writing consequence: an e2e/unit test for a paste-guard must put real
+  DOM focus on the target element (`.focus()` / click-to-edit) and dispatch
+  paste with a **mismatched** `target` (e.g. `document.dispatchEvent`, not
+  `window.dispatchEvent`) to reproduce the WKWebView shape — a same-target
+  synthetic dispatch cannot fail this class of bug even in principle.
+- Also caught while writing that regression test: `handleCreateNote` awaits
+  `CreateNoteCommand` before dispatching `cardAdded`, so `expect(locator).
+toHaveCount(1)` right after the paste can pass **before** an async duplicate
+  lands — Playwright's polling assertion stops as soon as it matches once, so
+  a premature check silently hides a real bug. Any assertion after an
+  action that goes through the command dispatcher needs either a settle wait
+  or an `expect.poll` that must hold true, not just match once.
+
 ## 2026-09-18 — Asset natural size is never persisted; the frontend must read it
 
 - Root cause found while fixing image cards cropping under a mismatched frame:

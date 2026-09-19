@@ -56,16 +56,29 @@ export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath }: 
   useEffect(() => {
     if (!enabled) return;
 
+    // Matches the editor's own contenteditable root (ProseMirror sets both the
+    // attribute and the class) plus any plain textarea/input the app uses
+    // (e.g. the top-bar search field).
+    const TEXT_ENTRY_SELECTOR = '[contenteditable="true"], .ProseMirror, textarea, input';
+
     function handlePaste(e: ClipboardEvent) {
       // `closest` (attribute-based) instead of the `isContentEditable` DOM property:
       // jsdom doesn't compute that property from the attribute, which would make
       // this untestable, and the selector is exactly as correct in a real browser.
       // `e.target` is `Element` for a real paste, but can be `document`/`window`
-      // for a paste with nothing focused (confirmed by the e2e run below) — guard
-      // with `instanceof Element` before calling `closest`.
+      // for a paste with nothing focused, AND — confirmed live in the Tauri
+      // WKWebView build (todo.md №25) — it can *also* be `document` for a Cmd+V
+      // routed through the native Edit-menu accelerator while a contenteditable
+      // genuinely holds focus (WebKit dispatches the synthesized DOM event on the
+      // document rather than the focused node in that path). `e.target` alone is
+      // therefore not trustworthy for "is the user editing text right now"; only
+      // `document.activeElement` reliably answers that, so this checks both and
+      // trusts either one — whichever manages to point at the real editor wins.
       const target = e.target;
+      const active = document.activeElement;
       const inTextEntry =
-        target instanceof Element && target.closest('[contenteditable="true"], textarea, input') != null;
+        (target instanceof Element && target.closest(TEXT_ENTRY_SELECTOR) != null) ||
+        (active instanceof Element && active.closest(TEXT_ENTRY_SELECTOR) != null);
       if (inTextEntry) return;
 
       // Our own card clipboard wins whenever it holds anything: it is only
