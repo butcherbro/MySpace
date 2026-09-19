@@ -360,13 +360,32 @@ precision for lists and code blocks. Reasons and owners are in
     редактора, застарелый курсор при смене доски). См. `tasks/lessons.md`
     2026-09-19 — синтетический `paste` на `window` не мог поймать этот класс
     багов в принципе (target всегда совпадал).
-26. `open` — **«Пружина» при скролле доски.** Периодически на разных досках нельзя
-    прокрутить вниз (иногда и вправо): при скролле вниз viewport выталкивает
-    обратно наверх. То появляется, то пропадает. Чтобы добраться до карточки ниже
-    экрана — приходится уменьшать масштаб. Гипотезы: `translateExtent`/`nodeExtent`
-    React Flow считается по границам карточек и не учитывает что-то; либо цикл
-    сохранения/восстановления viewport (board_view_states) откатывает позицию;
-    либо авторост заметки (№2, onResize по scrollHeight) провоцирует reload snapshot.
+26. `fixed 2026-09-19` — **«Пружина» при скролле доски.** Периодически на разных
+    досках нельзя прокрутить вниз (иногда и вправо): при скролле вниз viewport
+    выталкивает обратно наверх. Корень (`src/canvas/CanvasAdapter.tsx` +
+    `src/state/use-viewport-controller.ts`): `translateExtent`/`nodeExtent` ни при
+    чём (уже бесконечны вправо/вниз) — не подтвердилось. Реальная причина: одно и
+    то же значение обслуживало два разных назначения. `handleViewportChanged`
+    нарочно приравнивает сохраняемый viewport к `{x:0,y:0}` на каждом устаканивании
+    пан-жеста (ADR-0003 — пан не персистится, только zoom) и кладёт это же
+    обнулённое значение в `state.viewport`. А `CanvasAdapter` брал ИМЕННО его же
+    для `defaultViewport`/`onInit`'s `setViewport` при любом remount `<ReactFlow
+    key={interactionResetRevision}>` — а этот remount существует для НЕсвязанной
+    причины: WKWebView может потерять `pointerup` посреди marquee-выделения,
+    оставляя `.react-flow__selection` висящим в DOM; `resetInterruptedMarquee`
+    форс-ремонтирует канвas на blur окна/Escape/visibilitychange, чтобы это
+    убрать. Стоило пользователю один раз прокрутить (viewport обнулился для
+    персистентности) и потом словить любой такой remount (алт-таб, Escape,
+    залипший pointerup) — живой пан молча откатывался к (0,0). Интермиттентность
+    объясняется именно совпадением: нужен и скролл, и remount-триггер рядом.
+    Фикс: `CanvasAdapter` теперь ведёт собственный `liveViewport` (state,
+    безопасно читать при рендере — в отличие от ref, см. `react-hooks/refs`) +
+    зеркальный `liveViewportRef` (для `onInit`, вне рендера), обновляемые из
+    реальных координат `onMoveEnd`, и обнуляются только на настоящей смене доски
+    (`viewportResetToken`). Тест: `tests/e2e/canvas-viewport-spring.spec.ts` —
+    скролл вниз → зависшее marquee-выделение → `window.dispatchEvent(new
+    Event("blur"))` → pan не откатывается. Подтверждено red на до-фикс коде через
+    `git stash`, green после. См. `tasks/lessons.md` 2026-09-19.
 
 ## Осталось после сессии 2026-09-18
 

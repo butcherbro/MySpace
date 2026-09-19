@@ -94,6 +94,21 @@ export function CanvasAdapter({
     getZoom: () => number;
   } | null>(null);
   const viewportRef = useRef(viewport);
+  // The interaction-reset remount below (todo.md №26) must restore the pan the
+  // user was actually looking at, not the `viewport` *prop* — that prop is
+  // pinned to `{x: 0, y: 0}` by every `onMoveEnd` (ADR-0003: pan is never
+  // persisted, only zoom), so by the time any scroll gesture has settled even
+  // once, `viewport` itself is already stale-zero. Feeding that into
+  // `defaultViewport` on remount is exactly what produced the "spring back to
+  // the top" bug: a `key={interactionResetRevision}` remount (see
+  // `resetInterruptedMarquee` below) re-mounted React Flow with
+  // `defaultViewport={viewport}`, which had already been zeroed by the most
+  // recent scroll settle. `liveViewport` (state, so it's safe to read during
+  // render — a ref is not) tracks the real, continuously updated pan/zoom
+  // instead, independent of what gets persisted; `liveViewportRef` mirrors it
+  // for the `onInit` handler, which runs outside render.
+  const [liveViewport, setLiveViewport] = useState(viewport);
+  const liveViewportRef = useRef(viewport);
   const [nodes, setNodes] = useState<Node<CardNodeData>[]>(() =>
     cards.map((c) => cardToNode(c, renderCard)),
   );
@@ -105,6 +120,10 @@ export function CanvasAdapter({
   // Перемонтируем канвас только при реально зависшей рамке, не затрагивая обычные жесты.
   const resetInterruptedMarquee = useCallback(() => {
     if (!surfaceRef.current?.querySelector(".react-flow__selection")) return;
+    // Sync the render-safe `liveViewport` state from the ref right before the
+    // remount below reads it as `defaultViewport` — todo.md №26: this must be
+    // the pan the user actually had, not stale render-time state.
+    setLiveViewport(liveViewportRef.current);
     setInteractionResetRevision((revision) => revision + 1);
   }, []);
 
@@ -228,6 +247,11 @@ export function CanvasAdapter({
     // первом mount, поэтому при каждом открытии/перезаходе в доску viewport
     // нужно переустанавливать императивно.
     flowRef.current?.setViewport(viewportRef.current);
+    // A genuine board switch is the one case where snapping back to (0,0) is
+    // correct (ADR-0003) — keep the interaction-reset remount's baseline in
+    // sync so it doesn't restore a pan from the board just left.
+    liveViewportRef.current = viewportRef.current;
+    setLiveViewport(viewportRef.current);
   }, [viewportResetToken]);
 
   // Imperative focus: when the parent requests a card (e.g. a search result),
@@ -496,6 +520,10 @@ export function CanvasAdapter({
   };
 
   const handleMoveEnd = (_: unknown, vp: { x: number; y: number; zoom: number }) => {
+    // The real, current pan — kept separate from `onViewportChanged` below,
+    // whose caller pins x/y to 0 before persisting (ADR-0003). Only this ref
+    // may ever hold the live position.
+    liveViewportRef.current = { x: vp.x, y: vp.y, zoom: vp.zoom };
     events.onViewportChanged?.({ viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } });
   };
 
@@ -530,7 +558,7 @@ export function CanvasAdapter({
         nodeTypes={nodeTypes}
         onNodesChange={handleNodesChange}
         deleteKeyCode={null}
-        defaultViewport={viewport}
+        defaultViewport={liveViewport}
         translateExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
         nodeExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
         panOnScroll
@@ -559,7 +587,12 @@ export function CanvasAdapter({
         onMoveEnd={handleMoveEnd}
         onInit={(instance) => {
           flowRef.current = instance;
-          instance.setViewport(viewportRef.current);
+          // `liveViewportRef`, not `viewportRef`: this also runs on the
+          // interaction-reset remount (todo.md №26), where the board hasn't
+          // changed and the live pan must survive. `viewportRef` (the
+          // ADR-0003-pinned, board-open value) is applied separately by the
+          // `viewportResetToken` effect above for genuine board switches.
+          instance.setViewport(liveViewportRef.current);
           onScreenToFlowReady?.((x, y) => instance.screenToFlowPosition({ x, y }));
         }}
         minZoom={0.1}

@@ -1,5 +1,41 @@
 # Lessons
 
+## 2026-09-19 — A "persist-only" value must never double as the live render value
+
+- Bug (todo.md №26): scrolling a board down (or right) intermittently "sprang"
+  the pan back to the top-left origin, forcing a zoom-out to reach content
+  below the fold.
+- Root cause: `src/state/use-viewport-controller.ts`'s `handleViewportChanged`
+  intentionally pins the *persisted* viewport to `{x: 0, y: 0}` on every pan
+  settle (ADR-0003: pan is never saved across a board reopen, only zoom) and
+  reports that same zeroed value back into `state.viewport`. That one value
+  was then reused in `src/canvas/CanvasAdapter.tsx` for two purposes at once:
+  the thing to persist, AND the thing `defaultViewport`/`onInit`'s
+  `instance.setViewport(...)` fall back to whenever `<ReactFlow key={...}>`
+  remounts. The remount key (`interactionResetRevision`) exists for an
+  unrelated reason — WKWebView can lose a `pointerup` mid-marquee, leaving
+  `.react-flow__selection` stuck in the DOM, so `resetInterruptedMarquee`
+  force-remounts on window blur/Escape/visibility-change to clear it. Once any
+  scroll gesture had settled even once (pinning `state.viewport` to zero), any
+  later remount for that unrelated reason silently reset the live pan too —
+  intermittent because it only shows up when a blur/Escape coincides with a
+  stuck selection box after scrolling.
+- Consequence: never let a value computed for "what to persist" also serve as
+  "the live render/remount baseline" — they can have different, legitimate
+  invariants (here: always-zero vs. whatever-the-user-is-looking-at). Track
+  them as two separate pieces of state even when they start out equal.
+  `CanvasAdapter` now keeps its own `liveViewport` (state, safe to read during
+  render — a ref is not, per the `react-hooks/refs` ESLint rule) plus a
+  mirroring `liveViewportRef` (for `onInit`, which runs outside render),
+  updated from the real `onMoveEnd` coordinates and only reset to the
+  ADR-0003-pinned value on a genuine board switch (`viewportResetToken`).
+- e2e repro pattern worth reusing: create enough notes to make a board
+  scrollable, `mouse.wheel()` down, wait for the pan to settle, then force the
+  interaction-reset remount directly (`window.dispatchEvent(new
+Event("blur"))`) while a real marquee drag is left hanging (`mouse.down()` +
+  `mouse.move()`, no `mouse.up()`) to produce `.react-flow__selection` — no
+  live Tauri build needed to catch this class of bug.
+
 ## 2026-09-19 — Paste e2e must go through real focus/keyboard, not a synthetic dispatch on window
 
 - Bug (todo.md №25): Cmd+V inside an open note editor both pasted text into it
