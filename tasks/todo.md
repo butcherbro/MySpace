@@ -386,6 +386,19 @@ precision for lists and code blocks. Reasons and owners are in
     скролл вниз → зависшее marquee-выделение → `window.dispatchEvent(new
     Event("blur"))` → pan не откатывается. Подтверждено red на до-фикс коде через
     `git stash`, green после. См. `tasks/lessons.md` 2026-09-19.
+    **2026-09-24, вторая причина (пользователь: пружина осталась).** Remount при
+    зависшей рамке был не единственным путём к сбросу. `snapshotLoaded` в
+    `src/state/current-board-store.ts` обнулял viewport и увеличивал
+    `boardOpenRevision` при ЛЮБОЙ перезагрузке той же доски, а `CanvasAdapter`
+    по `viewportResetToken={boardOpenRevision}` императивно ставил (0,0). Такие
+    перезагрузки происходят без участия пользователя: undo/redo, rename, и
+    главное — poll `PRAGMA data_version` каждые 3 с в `App.tsx`, который
+    срабатывает после enrichment ссылки (оно пишет через второе соединение) и
+    после любой записи MCP. Отсюда «то есть, то нет»: совпадение скролла с
+    фоновой перезагрузкой. Фикс: перезагрузка той же доски сохраняет pan,
+    редактируемую заметку и выделение (фильтруя исчезнувшие карточки); токен
+    сброса растёт только при смене доски. Тесты в
+    `src/state/current-board-store.test.ts`.
 
 ## Осталось после сессии 2026-09-18
 

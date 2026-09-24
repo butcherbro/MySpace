@@ -78,10 +78,37 @@ export function reducer(
       return { ...state, loading: true, error: null };
 
     case "snapshotLoaded": {
-      // The board always reopens pinned to its top-left origin: one fixed
-      // visible surface, growing right/down only. Ignore any persisted viewport
-      // position so a prior pan never reopens the board scrolled away from the
-      // user's primary content.
+      // A reload of the board that is already open (undo/redo, rename, the
+      // `data_version` poll after a link enrichment or an agent write) is not a
+      // board switch: the user's pan, the note being edited and the selection
+      // must survive it. Bumping `boardOpenRevision` here is what made the
+      // canvas snap back to the origin "at random" (todo.md №26, second cause):
+      // CanvasAdapter re-applies the pinned (0,0) viewport on every bump.
+      const sameBoard = state.board?.id === action.board.id;
+      if (sameBoard) {
+        const ids = new Set([...action.cards, ...action.unsortedCards].map((c) => c.id));
+        return {
+          ...state,
+          board: action.board,
+          breadcrumbs: action.breadcrumbs,
+          viewport: { ...state.viewport, zoom: action.viewport.zoom },
+          viewportRevision: action.viewportRevision,
+          cards: action.cards,
+          unsortedCards: action.unsortedCards,
+          selection: state.selection.filter((id) => ids.has(id)),
+          editingCardId:
+            state.editingCardId !== null && ids.has(state.editingCardId)
+              ? state.editingCardId
+              : null,
+          loading: false,
+          error: null,
+        };
+      }
+
+      // A genuine board switch reopens the board pinned to its top-left
+      // origin: one fixed visible surface, growing right/down only. Ignore any
+      // persisted viewport position so a prior pan never reopens the board
+      // scrolled away from the user's primary content.
       const viewport: CanvasViewport = {
         x: 0,
         y: 0,

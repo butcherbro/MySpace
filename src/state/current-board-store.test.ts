@@ -160,6 +160,93 @@ describe("current board reducer", () => {
     expect(state.selection).toEqual([]);
   });
 
+  it("keeps pan, editing and selection when the same board is reloaded", () => {
+    // todo.md №26 (second cause): undo/redo, rename and the data_version poll
+    // reload the open board; that is not a board switch and must not snap the
+    // canvas back to the origin or close the note being edited.
+    let state = reducer(initialState, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [note("a"), note("b")],
+      unsortedCards: [],
+    });
+    const openRevision = state.boardOpenRevision;
+    state = reducer(state, { type: "viewportChanged", viewport: { x: 0, y: 0, zoom: 1.5 } });
+    state = reducer(state, { type: "editingStarted", id: "a" });
+    state = reducer(state, { type: "selectionChanged", ids: ["a", "b"] });
+
+    state = reducer(state, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1.5 },
+      viewportRevision: 2,
+      cards: [note("a")],
+      unsortedCards: [],
+    });
+    expect(state.boardOpenRevision).toBe(openRevision);
+    expect(state.viewport.zoom).toBe(1.5);
+    expect(state.viewportRevision).toBe(2);
+    expect(state.editingCardId).toBe("a");
+    // A card that vanished from the snapshot leaves the selection.
+    expect(state.selection).toEqual(["a"]);
+    expect(state.cards).toHaveLength(1);
+  });
+
+  it("drops editing when the edited card is gone from the reloaded snapshot", () => {
+    let state = reducer(initialState, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [note("a")],
+      unsortedCards: [],
+    });
+    state = reducer(state, { type: "editingStarted", id: "a" });
+    state = reducer(state, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [],
+      unsortedCards: [],
+    });
+    expect(state.editingCardId).toBeNull();
+    expect(state.selection).toEqual([]);
+  });
+
+  it("switching to another board resets pan, editing and selection", () => {
+    let state = reducer(initialState, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [note("a")],
+      unsortedCards: [],
+    });
+    const openRevision = state.boardOpenRevision;
+    state = reducer(state, { type: "editingStarted", id: "a" });
+    state = reducer(state, {
+      type: "snapshotLoaded",
+      board: { ...home, id: "other" },
+      breadcrumbs: [],
+      viewport: { x: 300, y: 200, zoom: 2 },
+      viewportRevision: 1,
+      cards: [note("a")],
+      unsortedCards: [],
+    });
+    expect(state.boardOpenRevision).toBe(openRevision + 1);
+    expect(state.viewport).toEqual({ x: 0, y: 0, zoom: 2 });
+    expect(state.editingCardId).toBeNull();
+    expect(state.selection).toEqual([]);
+  });
+
   it("resets the viewport to the board origin on load (ignores persisted position)", () => {
     const state = reducer(initialState, {
       type: "snapshotLoaded",
