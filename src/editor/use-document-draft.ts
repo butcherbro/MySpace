@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { registerDraftFlusher } from "./draft-flush-registry";
 
 /**
  * Shared document-draft lifecycle for editable rich-text cards (notes and image
@@ -135,6 +136,15 @@ export function useDocumentDraft(opts: {
       }
     };
   }, [id, onUpdate]);
+
+  // Register with the cross-cutting draft barrier for as long as this draft is
+  // mounted, so a caller (board navigation's `drainPendingWrites`) can flush a
+  // dirty draft *before* replacing the projection, instead of racing the
+  // unmount-flush above, which only fires after the projection has already
+  // swapped (see draft-flush-registry.ts for why that is too late).
+  useEffect(() => {
+    return registerDraftFlusher(handleFinalize);
+  }, [handleFinalize]);
 
   return { draft, saving, error, handleChange, handleBlur, handleFinalize };
 }

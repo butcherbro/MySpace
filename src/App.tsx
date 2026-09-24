@@ -57,6 +57,7 @@ import { computeInitialImageFrameSize, loadNaturalImageSize } from "./cards/imag
 import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
 import { htmlToDocument } from "./editor/html-to-document";
+import { flushAllDrafts } from "./editor/draft-flush-registry";
 import { copyText } from "./services/clipboard";
 import type {
   BoardPortalDto,
@@ -1294,7 +1295,7 @@ function App() {
   // the viewport queue are flushed before the window is allowed to go. See
   // src/app/use-close-flush.ts — the queues keep their own owners.
   useCloseFlush({
-    flushes: [() => queueRef.current.flush(), () => viewportController.flush()],
+    flushes: [() => flushAllDrafts(), () => queueRef.current.flush(), () => viewportController.flush()],
     close: destroyWindow,
     confirmAbandon: confirmAbandonWithDialog,
     onError: (error) => dispatch({ type: "failed", message: errorMessage(error) }),
@@ -1646,6 +1647,11 @@ function App() {
   const navigation = useBoardNavigation({
     gateway,
     drainPendingWrites: useCallback(async () => {
+      // The editing card's own draft (still inside its 250ms debounce) must
+      // land in the mutation queue before the queue is flushed, or navigation
+      // would replace the projection while that write is still in flight —
+      // see draft-flush-registry.ts.
+      await flushAllDrafts();
       await queueRef.current.flush();
       await viewportController.flush();
     }, [viewportController]),
