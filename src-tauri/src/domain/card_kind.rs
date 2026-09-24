@@ -137,6 +137,16 @@ pub struct SearchHit {
     pub created_at: i64,
 }
 
+/// One full-text candidate for a card of a given kind: the card id and
+/// whether the query matched the card's title-level text (the `title` column
+/// of `search_index`, migration 0022). Candidates are already restricted to
+/// live cards on live boards.
+#[derive(Debug, Clone)]
+pub struct SearchCandidate {
+    pub entity_id: String,
+    pub title_hit: bool,
+}
+
 /// Everything the backend does per card kind. One impl per kind in
 /// `domain::kinds`, registered in [`registry`].
 pub trait CardKindHandler: Sync + Send {
@@ -170,14 +180,16 @@ pub trait CardKindHandler: Sync + Send {
     /// the number of rows removed. Must not touch `cards` itself.
     fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError>;
 
-    /// Hits for `query` (already trimmed, non-empty) among live cards of this
-    /// kind on live boards, at most `limit`, best first. Kinds with nothing
-    /// searchable return an empty list.
+    /// Loads the hits for `candidates` — cards of this kind that the
+    /// full-text index matched for `query` (already trimmed, non-empty) —
+    /// with their display title, excerpt and rank. Matching happens in
+    /// `repositories::search`; this only projects. Order is irrelevant (the
+    /// caller ranks). Kinds with nothing searchable return an empty list.
     fn search_rows(
         &self,
         conn: &Connection,
         query: &str,
-        limit: usize,
+        candidates: &[SearchCandidate],
     ) -> Result<Vec<SearchHit>, WorkspaceError>;
 
     /// `(detail table, column)` pairs whose value is an `assets.id` this kind

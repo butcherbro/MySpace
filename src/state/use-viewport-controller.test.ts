@@ -11,7 +11,7 @@ const settled = { x: 0, y: 0, zoom: 1.75 };
 
 describe("useViewportController", () => {
   it("pins the save to the board and revision that were current when it settled", async () => {
-    const saveViewport = vi.fn().mockResolvedValue(undefined);
+    const saveViewport = vi.fn().mockResolvedValue({ revision: 8 });
     const onSettled = vi.fn();
     const { result, rerender } = renderHook(
       (props: { boardId: string | null; revision: number }) =>
@@ -48,7 +48,7 @@ describe("useViewportController", () => {
     const onSettled = vi.fn();
     const { result } = renderHook(() =>
       useViewportController({
-        gateway: gatewayWith(vi.fn().mockResolvedValue(undefined)),
+        gateway: gatewayWith(vi.fn().mockResolvedValue({ revision: 2 })),
         boardId: "board-a",
         revision: 1,
         onSettled,
@@ -64,7 +64,7 @@ describe("useViewportController", () => {
   });
 
   it("ignores a late save that belongs to a board the user has left", async () => {
-    const saveViewport = vi.fn().mockResolvedValue(undefined);
+    const saveViewport = vi.fn().mockResolvedValue({ revision: 2 });
     const onSaved = vi.fn();
     const onError = vi.fn();
     const { result, rerender } = renderHook(
@@ -95,7 +95,7 @@ describe("useViewportController", () => {
     const onSaved = vi.fn();
     const { result } = renderHook(() =>
       useViewportController({
-        gateway: gatewayWith(vi.fn().mockResolvedValue(undefined)),
+        gateway: gatewayWith(vi.fn().mockResolvedValue({ revision: 5 })),
         boardId: "board-a",
         revision: 4,
         onSettled: vi.fn(),
@@ -111,7 +111,7 @@ describe("useViewportController", () => {
   });
 
   it("flushes a pending save for navigation and for the close barrier", async () => {
-    const saveViewport = vi.fn().mockResolvedValue(undefined);
+    const saveViewport = vi.fn().mockResolvedValue({ revision: 3 });
     const { result } = renderHook(() =>
       useViewportController({
         gateway: gatewayWith(saveViewport),

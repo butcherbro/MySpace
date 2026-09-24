@@ -245,14 +245,12 @@ export interface CreateNoteInput {
   frame: Frame;
   zIndex: number;
   documentJson: unknown;
-  plainText: string;
 }
 
 export interface UpdateNoteInput {
   id: string;
   expectedRevision: number;
   documentJson: unknown;
-  plainText: string;
 }
 
 export interface MoveCardInput {
@@ -353,7 +351,6 @@ export interface CreateImageCardInput {
   zIndex: number;
   assetId: string;
   captionJson: unknown;
-  captionPlainText: string;
 }
 
 export interface CreateFolderAliasInput {
@@ -383,7 +380,6 @@ export interface UpdateImageCaptionInput {
   id: string;
   expectedRevision: number;
   captionJson: unknown;
-  captionPlainText: string;
 }
 
 export interface TrashItemInput {
@@ -398,14 +394,12 @@ export interface ConvertNoteToEmbedInput {
   displayUrl: string;
   title: string;
   descriptionJson: unknown;
-  descriptionPlainText: string;
 }
 
 export interface UpdateEmbedDescriptionInput {
   id: string;
   expectedRevision: number;
   descriptionJson: unknown;
-  descriptionPlainText: string;
 }
 
 export interface EnrichEmbedMetadataInput {
@@ -494,6 +488,30 @@ export interface SetNoteColorInput {
   colorToken: string;
 }
 
+/** Receipt of a mutation that only bumps one card's revision. */
+export interface CardReceipt {
+  id: string;
+  revision: number;
+}
+
+/** Receipt of a text mutation: the backend derives `plainText` from the JSON
+ *  document, so the caller never computes or sends it itself. */
+export interface TextReceipt {
+  id: string;
+  revision: number;
+  plainText: string;
+}
+
+/** Receipt of a batch move: one `CardReceipt` per moved card. */
+export interface CardsReceipt {
+  cards: CardReceipt[];
+}
+
+/** Receipt of a viewport save. */
+export interface ViewportReceipt {
+  revision: number;
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
@@ -503,13 +521,13 @@ export interface WorkspaceGateway {
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot>;
   readCard(cardId: string): Promise<CardDto>;
   getDataVersion(): Promise<number>;
-  createNote(input: CreateNoteInput): Promise<void>;
-  updateNote(input: UpdateNoteInput): Promise<void>;
-  moveCard(input: MoveCardInput): Promise<void>;
-  moveCards(input: MoveCardsInput): Promise<void>;
-  moveCardToBoard(input: MoveCardToBoardInput): Promise<void>;
+  createNote(input: CreateNoteInput): Promise<CardReceipt>;
+  updateNote(input: UpdateNoteInput): Promise<TextReceipt>;
+  moveCard(input: MoveCardInput): Promise<CardReceipt>;
+  moveCards(input: MoveCardsInput): Promise<CardsReceipt>;
+  moveCardToBoard(input: MoveCardToBoardInput): Promise<CardReceipt>;
   moveBoard(input: MoveBoardInput): Promise<void>;
-  saveViewport(input: SaveViewportInput): Promise<void>;
+  saveViewport(input: SaveViewportInput): Promise<ViewportReceipt>;
   createChildBoard(input: CreateChildBoardInput): Promise<void>;
   duplicateBoard(input: DuplicateBoardInput): Promise<DuplicateBoardReceipt>;
   renameBoard(boardId: string, title: string): Promise<void>;
@@ -528,10 +546,10 @@ export interface WorkspaceGateway {
   createFileCard(input: CreateFileCardInput): Promise<FileCardDto>;
   openFileCard(cardId: string): Promise<void>;
   revealFileCard(cardId: string): Promise<void>;
-  updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<TextReceipt>;
   convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto>;
   enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto>;
-  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void>;
+  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<TextReceipt>;
   trashSelection(input: TrashSelectionInput): Promise<string>;
   listTrash(): Promise<TrashSummaryDto>;
   emptyTrash(confirmation: string): Promise<EmptyTrashResult>;
@@ -545,12 +563,12 @@ export interface WorkspaceGateway {
   setBoardCover(input: SetBoardCoverInput): Promise<void>;
   removeBoardCover(boardId: string): Promise<void>;
   setNoteColor(input: SetNoteColorInput): Promise<void>;
-  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void>;
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<CardsReceipt>;
   /** One atomic call for a mixed selection of leaves and Board Portals (ADR-0007). */
   moveSelectionToBoard(input: MoveSelectionToBoardInput): Promise<MoveSelectionToBoardReceipt>;
   /** Reverses a mixed-selection move from the receipt that move returned. */
   undoMoveSelection(receipt: MoveSelectionToBoardReceipt): Promise<void>;
-  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void>;
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<CardReceipt>;
   /** Lists backup snapshots under `backups/`, newest first. */
   listBackups(): Promise<BackupSummary[]>;
   /**

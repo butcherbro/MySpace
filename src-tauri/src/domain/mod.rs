@@ -12,4 +12,5 @@ pub mod markdown_preview;
 pub mod models;
 pub mod move_selection;
 pub mod mutation;
+pub mod plain_text;
 pub mod trash_service;

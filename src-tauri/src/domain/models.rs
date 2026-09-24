@@ -359,17 +359,51 @@ pub struct CreateNoteInput {
     pub frame: Frame,
     pub z_index: i64,
     pub document_json: Value,
-    pub plain_text: String,
 }
 
-/// Input for updating a note's content and bumping its revision.
+/// Input for updating a note's content and bumping its revision. The stored
+/// `plain_text` is derived by the backend (`domain::plain_text`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateNoteInput {
     pub id: String,
     pub expected_revision: i64,
     pub document_json: Value,
+}
+
+/// Receipt of a card-level write: the revision the row now has, read back
+/// inside the write transaction (P1.5). The frontend adopts it instead of
+/// computing `revision + 1`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardReceipt {
+    pub id: String,
+    pub revision: i64,
+}
+
+/// Receipt of a text write (note body, image caption, link description): the
+/// stored revision plus the backend-derived plain text, so the UI shows
+/// exactly what was stored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextReceipt {
+    pub id: String,
+    pub revision: i64,
     pub plain_text: String,
+}
+
+/// Receipt of a multi-card write: one entry per card, in input order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardsReceipt {
+    pub cards: Vec<CardReceipt>,
+}
+
+/// Receipt of a viewport save: the board revision now stored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportReceipt {
+    pub revision: i64,
 }
 
 /// Input for setting a note card's background color preset. Does not bump the
@@ -576,7 +610,6 @@ pub struct CreateImageCardInput {
     pub z_index: i64,
     pub asset_id: String,
     pub caption_json: Value,
-    pub caption_plain_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -601,7 +634,6 @@ pub struct UpdateImageCaptionInput {
     pub id: String,
     pub expected_revision: i64,
     pub caption_json: Value,
-    pub caption_plain_text: String,
 }
 
 /// Input for converting a Note into an Embed (Link) Card transactionally. The
@@ -616,7 +648,6 @@ pub struct ConvertNoteToEmbedInput {
     pub display_url: String,
     pub title: String,
     pub description_json: Value,
-    pub description_plain_text: String,
 }
 
 /// Input for updating an embed (Link) card's description body, bumping its
@@ -627,7 +658,6 @@ pub struct UpdateEmbedDescriptionInput {
     pub id: String,
     pub expected_revision: i64,
     pub description_json: Value,
-    pub description_plain_text: String,
 }
 
 /// Input for asynchronously enriching a pending embed (Link) card.
@@ -663,7 +693,6 @@ pub struct ApplyEmbedMetadataInput {
     pub title: String,
     pub provider: Option<String>,
     pub description_json: Value,
-    pub description_plain_text: String,
     pub description_origin: Option<String>,
     pub preview_asset_id: Option<String>,
     pub favicon_asset_id: Option<String>,

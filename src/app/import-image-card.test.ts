@@ -38,7 +38,6 @@ describe("buildCreateImageCardInput", () => {
       zIndex: 0,
       assetId: "existing-asset-42",
       captionJson: null,
-      captionPlainText: "",
     });
   });
 });

@@ -4,10 +4,12 @@
 use rusqlite::{Connection, Row, Transaction};
 
 use super::{card_frame, json_at, load_board_rows, load_one_row, DetailTable, AFTER_CARD};
-use crate::domain::card_kind::{CardKind, CardKindHandler, CopyContext, SearchHit};
+use crate::domain::card_kind::{
+    CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
+};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CardDto, NoteCardDto};
-use crate::repositories::search::{contains_query, rank_and_truncate, search_excerpt};
+use crate::repositories::search::{query_by_ids, search_excerpt};
 
 pub struct NoteHandler;
 
@@ -72,42 +74,30 @@ impl CardKindHandler for NoteHandler {
         &self,
         conn: &Connection,
         query: &str,
-        limit: usize,
+        candidates: &[SearchCandidate],
     ) -> Result<Vec<SearchHit>, WorkspaceError> {
-        let q = query.to_lowercase();
-        let mut stmt = conn.prepare(
+        let ids: Vec<&str> = candidates.iter().map(|c| c.entity_id.as_str()).collect();
+        query_by_ids(
+            conn,
             "SELECT c.id, c.board_id, n.plain_text, c.created_at
              FROM cards c
              JOIN note_cards n ON n.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        })?;
-        let mut hits = Vec::new();
-        for r in rows {
-            let (id, board_id, plain_text, created_at) = r?;
-            if contains_query(&plain_text, &q) {
-                hits.push(SearchHit {
-                    entity_id: id,
+             WHERE c.id",
+            &ids,
+            |row| {
+                let plain_text: String = row.get(2)?;
+                Ok(SearchHit {
+                    entity_id: row.get(0)?,
                     kind: "note",
                     title: search_excerpt(&plain_text, query),
                     excerpt: None,
-                    board_id,
+                    board_id: row.get(1)?,
                     rank: 1,
                     thumbnail_asset: None,
-                    created_at,
-                });
-            }
-        }
-        rank_and_truncate(&mut hits, limit);
-        Ok(hits)
+                    created_at: row.get(3)?,
+                })
+            },
+        )
     }
 
     fn asset_refs(&self) -> &'static [(&'static str, &'static str)] {

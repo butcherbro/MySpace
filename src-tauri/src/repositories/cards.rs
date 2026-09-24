@@ -9,12 +9,13 @@ use crate::domain::card_kind::{handler, registry, sql_in_list, CardKind};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::kinds;
 use crate::domain::models::{
-    ApplyEmbedMetadataInput, CardDto, ConvertNoteToEmbedInput, CreateImageCardInput,
-    CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata,
-    Frame, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, PlaceUnsortedCardInput,
-    SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
-    UpdateNoteInput,
+    ApplyEmbedMetadataInput, CardDto, CardReceipt, CardsReceipt, ConvertNoteToEmbedInput,
+    CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
+    EmbedCardDto, EmbedForMetadata, Frame, MoveCardToBoardInput, MoveCardsInput,
+    MoveCardsToUnsortedInput, PlaceUnsortedCardInput, SetNoteColorInput, TextReceipt,
+    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
 };
+use crate::domain::plain_text::{document_to_plain_text, plain_text_to_document};
 
 use super::super::db;
 use super::immediate_tx;
@@ -56,13 +57,37 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
         .ok_or_else(|| WorkspaceError::NotFound(card_id.to_string()))
 }
 
+/// Reads a card's stored revision back inside the write transaction, so a
+/// receipt reports what SQLite holds rather than a revision computed in Rust.
+fn stored_revision(tx: &Transaction<'_>, id: &str) -> Result<i64, WorkspaceError> {
+    Ok(
+        tx.query_row("SELECT revision FROM cards WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })?,
+    )
+}
+
+/// Reads the stored revision and wraps it in a [`CardReceipt`].
+fn card_receipt(tx: &Transaction<'_>, id: &str) -> Result<CardReceipt, WorkspaceError> {
+    Ok(CardReceipt {
+        id: id.to_string(),
+        revision: stored_revision(tx, id)?,
+    })
+}
+
 /// A failed insert must leave no orphaned `cards` row: both inserts share one
 /// transaction, so any failure rolls both back.
-pub fn create_note(conn: &mut Connection, input: &CreateNoteInput) -> Result<(), WorkspaceError> {
+/// `plain_text` is derived from `document_json` here, never taken from the
+/// caller.
+pub fn create_note(
+    conn: &mut Connection,
+    input: &CreateNoteInput,
+) -> Result<CardReceipt, WorkspaceError> {
     input.frame.validate()?;
     let now = db::migrations::now_millis();
     let document_json = serde_json::to_string(&input.document_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    let plain_text = document_to_plain_text(&input.document_json);
 
     let tx = immediate_tx(conn)?;
     tx.execute(
@@ -83,20 +108,27 @@ pub fn create_note(conn: &mut Connection, input: &CreateNoteInput) -> Result<(),
     tx.execute(
         "INSERT INTO note_cards (card_id, document_json, plain_text)
          VALUES (?1, ?2, ?3)",
-        params![input.id, document_json, input.plain_text],
+        params![input.id, document_json, plain_text],
     )?;
+    let receipt = card_receipt(&tx, &input.id)?;
     tx.commit()?;
 
-    Ok(())
+    Ok(receipt)
 }
 
 /// Updates a note's content, bumping its revision, guarded by an optimistic
 /// `expected_revision`. A stale revision is rejected rather than silently
 /// overwriting newer state (Section C invariant 11).
-pub fn update_note(conn: &mut Connection, input: &UpdateNoteInput) -> Result<(), WorkspaceError> {
+/// The stored `plain_text` is derived from `document_json` and returned in the
+/// receipt.
+pub fn update_note(
+    conn: &mut Connection,
+    input: &UpdateNoteInput,
+) -> Result<TextReceipt, WorkspaceError> {
     let now = db::migrations::now_millis();
     let document_json = serde_json::to_string(&input.document_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    let plain_text = document_to_plain_text(&input.document_json);
 
     let tx = immediate_tx(conn)?;
 
@@ -128,11 +160,16 @@ pub fn update_note(conn: &mut Connection, input: &UpdateNoteInput) -> Result<(),
 
     tx.execute(
         "UPDATE note_cards SET document_json = ?1, plain_text = ?2 WHERE card_id = ?3",
-        params![document_json, input.plain_text, input.id],
+        params![document_json, plain_text, input.id],
     )?;
 
+    let revision = stored_revision(&tx, &input.id)?;
     tx.commit()?;
-    Ok(())
+    Ok(TextReceipt {
+        id: input.id.clone(),
+        revision,
+        plain_text,
+    })
 }
 
 /// Sets a note card's background color preset. This is orthogonal to text
@@ -158,10 +195,11 @@ pub fn set_note_color(
 pub fn update_image_caption(
     conn: &mut Connection,
     input: &UpdateImageCaptionInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<TextReceipt, WorkspaceError> {
     let now = db::migrations::now_millis();
     let caption_json = serde_json::to_string(&input.caption_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    let caption_plain_text = document_to_plain_text(&input.caption_json);
 
     let tx = immediate_tx(conn)?;
 
@@ -193,11 +231,16 @@ pub fn update_image_caption(
 
     tx.execute(
         "UPDATE image_cards SET caption_json = ?1, caption_plain_text = ?2 WHERE card_id = ?3",
-        params![caption_json, input.caption_plain_text, input.id],
+        params![caption_json, caption_plain_text, input.id],
     )?;
 
+    let revision = stored_revision(&tx, &input.id)?;
     tx.commit()?;
-    Ok(())
+    Ok(TextReceipt {
+        id: input.id.clone(),
+        revision,
+        plain_text: caption_plain_text,
+    })
 }
 
 /// Updates a card's frame (position and size), bumping its revision with an
@@ -205,7 +248,7 @@ pub fn update_image_caption(
 pub fn update_card_frame(
     conn: &mut Connection,
     input: &UpdateCardFrameInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardReceipt, WorkspaceError> {
     input.frame.validate()?;
     let now = db::migrations::now_millis();
 
@@ -247,18 +290,23 @@ pub fn update_card_frame(
         });
     }
 
+    let receipt = card_receipt(&tx, &input.id)?;
     tx.commit()?;
-    Ok(())
+    Ok(receipt)
 }
 
 /// Moves multiple cards atomically (one gesture = one transaction). Every card
 /// must match its expected revision, or the whole batch is rejected and rolled
 /// back.
-pub fn move_cards(conn: &mut Connection, input: &MoveCardsInput) -> Result<(), WorkspaceError> {
+pub fn move_cards(
+    conn: &mut Connection,
+    input: &MoveCardsInput,
+) -> Result<CardsReceipt, WorkspaceError> {
     for item in &input.cards {
         item.frame.validate()?;
     }
     let tx = immediate_tx(conn)?;
+    let mut cards = Vec::with_capacity(input.cards.len());
 
     for item in &input.cards {
         let changed = tx.execute(
@@ -295,10 +343,11 @@ pub fn move_cards(conn: &mut Connection, input: &MoveCardsInput) -> Result<(), W
                 actual,
             });
         }
+        cards.push(card_receipt(&tx, &item.id)?);
     }
 
     tx.commit()?;
-    Ok(())
+    Ok(CardsReceipt { cards })
 }
 
 /// Creates an image card referencing an already-imported asset, in one
@@ -312,6 +361,7 @@ pub fn create_image_card(
     let now = db::migrations::now_millis();
     let caption_json = serde_json::to_string(&input.caption_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    let caption_plain_text = document_to_plain_text(&input.caption_json);
 
     let tx = immediate_tx(conn)?;
 
@@ -342,12 +392,7 @@ pub fn create_image_card(
     tx.execute(
         "INSERT INTO image_cards (card_id, asset_id, caption_json, caption_plain_text)
          VALUES (?1, ?2, ?3, ?4)",
-        params![
-            input.id,
-            input.asset_id,
-            caption_json,
-            input.caption_plain_text,
-        ],
+        params![input.id, input.asset_id, caption_json, caption_plain_text,],
     )?;
     tx.commit()?;
 
@@ -369,6 +414,7 @@ pub fn convert_note_to_embed(
     let now = db::migrations::now_millis();
     let description_json = serde_json::to_string(&input.description_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    let description_plain_text = document_to_plain_text(&input.description_json);
 
     let tx = immediate_tx(conn)?;
 
@@ -423,7 +469,7 @@ pub fn convert_note_to_embed(
             input.display_url,
             input.title,
             description_json,
-            input.description_plain_text,
+            description_plain_text,
         ],
     )?;
 
@@ -443,10 +489,11 @@ pub fn load_embed_card(conn: &Connection, card_id: &str) -> Result<EmbedCardDto,
 pub fn update_embed_description(
     conn: &mut Connection,
     input: &UpdateEmbedDescriptionInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<TextReceipt, WorkspaceError> {
     let now = db::migrations::now_millis();
     let description_json = serde_json::to_string(&input.description_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    let description_plain_text = document_to_plain_text(&input.description_json);
 
     let tx = immediate_tx(conn)?;
 
@@ -479,11 +526,16 @@ pub fn update_embed_description(
     // Editing the description in the UI makes it a user-authored comment.
     tx.execute(
         "UPDATE embed_cards SET description_json = ?1, description_plain_text = ?2, description_origin = 'user' WHERE card_id = ?3",
-        params![description_json, input.description_plain_text, input.id],
+        params![description_json, description_plain_text, input.id],
     )?;
 
+    let revision = stored_revision(&tx, &input.id)?;
     tx.commit()?;
-    Ok(())
+    Ok(TextReceipt {
+        id: input.id.clone(),
+        revision,
+        plain_text: description_plain_text,
+    })
 }
 
 /// Reads the minimal embed state needed before metadata fetching. Callers must
@@ -552,6 +604,7 @@ pub fn apply_embed_metadata_in_tx(
     let now = db::migrations::now_millis();
     let description_json = serde_json::to_string(&input.description_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+    let description_plain_text = document_to_plain_text(&input.description_json);
 
     let current_preview_origin: Option<String> = tx
         .query_row(
@@ -596,7 +649,7 @@ pub fn apply_embed_metadata_in_tx(
                 input.title,
                 input.provider,
                 description_json,
-                input.description_plain_text,
+                description_plain_text,
                 input.description_origin,
                 input.favicon_asset_id,
                 input.metadata_status,
@@ -622,7 +675,7 @@ pub fn apply_embed_metadata_in_tx(
                 input.title,
                 input.provider,
                 description_json,
-                input.description_plain_text,
+                description_plain_text,
                 input.description_origin,
                 input.preview_asset_id,
                 input.favicon_asset_id,
@@ -643,7 +696,7 @@ pub fn apply_embed_metadata_in_tx(
 pub fn move_card_to_board(
     conn: &mut Connection,
     input: &MoveCardToBoardInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardReceipt, WorkspaceError> {
     let now = db::migrations::now_millis();
 
     let tx = immediate_tx(conn)?;
@@ -700,8 +753,9 @@ pub fn move_card_to_board(
         });
     }
 
+    let receipt = card_receipt(&tx, &input.id)?;
     tx.commit()?;
-    Ok(())
+    Ok(receipt)
 }
 
 /// Atomically moves a group of cards into a Board's Unsorted panel. Every card
@@ -712,7 +766,7 @@ pub fn move_card_to_board(
 pub fn move_cards_to_board_unsorted(
     conn: &mut Connection,
     input: &MoveCardsToUnsortedInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardsReceipt, WorkspaceError> {
     let now = db::migrations::now_millis();
 
     let tx = immediate_tx(conn)?;
@@ -745,6 +799,7 @@ pub fn move_cards_to_board_unsorted(
         }
     }
 
+    let mut cards = Vec::with_capacity(input.cards.len());
     for item in &input.cards {
         tx.execute(
             &format!(
@@ -755,17 +810,18 @@ pub fn move_cards_to_board_unsorted(
             ),
             params![input.target_board_id, now, item.id, item.expected_revision],
         )?;
+        cards.push(card_receipt(&tx, &item.id)?);
     }
 
     tx.commit()?;
-    Ok(())
+    Ok(CardsReceipt { cards })
 }
 
 /// Places one Unsorted card onto the board at an exact frame (unsorted = 0).
 pub fn place_unsorted_card(
     conn: &mut Connection,
     input: &PlaceUnsortedCardInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardReceipt, WorkspaceError> {
     input.frame.validate()?;
     let now = db::migrations::now_millis();
 
@@ -810,8 +866,9 @@ pub fn place_unsorted_card(
         });
     }
 
+    let receipt = card_receipt(&tx, &input.id)?;
     tx.commit()?;
-    Ok(())
+    Ok(receipt)
 }
 
 /// Creates a batch of Link Cards in one durable operation. Idempotent under a
@@ -859,18 +916,15 @@ pub fn create_link_batch(
         let display_url = link.source_url.clone(); // enriched later if needed
                                                    // A user comment becomes the link's description body (authoritative).
         let description = link.description.trim();
-        let description_json = if description.is_empty() {
-            "{\"type\":\"doc\",\"content\":[]}".to_string()
+        let description_doc = if description.is_empty() {
+            serde_json::json!({"type": "doc", "content": []})
         } else {
-            serde_json::to_string(&serde_json::json!({
-                "type": "doc",
-                "content": [{
-                    "type": "paragraph",
-                    "content": [{ "type": "text", "text": description }]
-                }]
-            }))
-            .map_err(|e| WorkspaceError::Database(e.to_string()))?
+            plain_text_to_document(description)
         };
+        let description_json = serde_json::to_string(&description_doc)
+            .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+        // Derived, never trusted: the same codec as every other text column.
+        let description_plain_text = document_to_plain_text(&description_doc);
 
         let frame = Frame {
             x: 40.0,
@@ -901,7 +955,7 @@ pub fn create_link_batch(
         tx.execute(
             "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, description_origin, metadata_status)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')",
-            params![link.id, link.source_url, display_url, link.title, description_json, description, description_origin],
+            params![link.id, link.source_url, display_url, link.title, description_json, description_plain_text, description_origin],
         )?;
 
         card_ids.push(link.id.clone());

@@ -7,10 +7,12 @@ use super::{
     asset_columns, card_frame, json_at, load_board_rows, load_one_row, required_asset_at,
     DetailTable, AFTER_CARD, ASSET_WIDTH, CARD_COLUMNS,
 };
-use crate::domain::card_kind::{CardKind, CardKindHandler, CopyContext, SearchHit};
+use crate::domain::card_kind::{
+    CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
+};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CardDto, ImageCardDto};
-use crate::repositories::search::{contains_query, rank_and_truncate, search_excerpt};
+use crate::repositories::search::{query_by_ids, search_excerpt};
 
 pub struct ImageHandler;
 
@@ -82,51 +84,40 @@ impl CardKindHandler for ImageHandler {
         &self,
         conn: &Connection,
         query: &str,
-        limit: usize,
+        candidates: &[SearchCandidate],
     ) -> Result<Vec<SearchHit>, WorkspaceError> {
-        let q = query.to_lowercase();
-        let mut stmt = conn.prepare(&format!(
-            "SELECT c.id, c.board_id, i.caption_plain_text, c.created_at, {asset}
-             FROM cards c
-             JOIN image_cards i ON i.card_id = c.id
-             JOIN assets a ON a.id = i.asset_id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-            asset = asset_columns("a")
-        ))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                required_asset_at(row, 4)?,
-            ))
-        })?;
-        let mut hits = Vec::new();
-        for r in rows {
-            let (id, board_id, caption, created_at, thumb) = r?;
-            let file_name = thumb.file_name.clone();
-            if contains_query(&caption, &q) || contains_query(&file_name, &q) {
+        let ids: Vec<&str> = candidates.iter().map(|c| c.entity_id.as_str()).collect();
+        query_by_ids(
+            conn,
+            &format!(
+                "SELECT c.id, c.board_id, i.caption_plain_text, c.created_at, {asset}
+                 FROM cards c
+                 JOIN image_cards i ON i.card_id = c.id
+                 JOIN assets a ON a.id = i.asset_id
+                 WHERE c.id",
+                asset = asset_columns("a")
+            ),
+            &ids,
+            |row| {
+                let caption: String = row.get(2)?;
+                let thumb = required_asset_at(row, 4)?;
                 let title = if caption.trim().is_empty() {
-                    file_name
+                    thumb.file_name.clone()
                 } else {
                     caption
                 };
-                hits.push(SearchHit {
-                    entity_id: id,
+                Ok(SearchHit {
+                    entity_id: row.get(0)?,
                     kind: "image",
                     title: search_excerpt(&title, query),
                     excerpt: None,
-                    board_id,
+                    board_id: row.get(1)?,
                     rank: 1,
                     thumbnail_asset: Some(thumb),
-                    created_at,
-                });
-            }
-        }
-        rank_and_truncate(&mut hits, limit);
-        Ok(hits)
+                    created_at: row.get(3)?,
+                })
+            },
+        )
     }
 
     fn asset_refs(&self) -> &'static [(&'static str, &'static str)] {

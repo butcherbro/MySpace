@@ -11,7 +11,7 @@ pub use crate::domain::board_service;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     BoardSnapshot, BoardSummary, CreateChildBoardInput, DuplicateBoardInput, DuplicateBoardReceipt,
-    MoveBoardInput, UpdateViewportInput,
+    MoveBoardInput, UpdateViewportInput, ViewportReceipt,
 };
 use crate::domain::mutation::Mutation;
 use crate::repositories::workspace_repository;
@@ -46,10 +46,12 @@ pub async fn get_home_board(ws: State<'_, Workspace>) -> Result<BoardSummary, Wo
 pub async fn save_viewport(
     ws: State<'_, Workspace>,
     input: UpdateViewportInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<ViewportReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("save_viewport", async move {
-        ws.apply(Mutation::SaveViewport(input)).await?.into_unit()
+        ws.apply(Mutation::SaveViewport(input))
+            .await?
+            .into_viewport_receipt()
     })
     .await
 }

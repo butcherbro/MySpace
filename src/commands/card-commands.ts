@@ -1,6 +1,6 @@
 // Card-specific workspace commands.
 
-import type { Frame, WorkspaceGateway } from "../services/workspace-gateway";
+import type { CardsReceipt, Frame, WorkspaceGateway } from "../services/workspace-gateway";
 import type { NoteColorId } from "../cards/note/note-color";
 import type { WorkspaceCommand } from "./workspace-command";
 
@@ -15,7 +15,7 @@ interface MovedCard {
  * A drag/resize gesture over one or more cards. One gesture = one command and
  * one undo entry. `undo` re-moves cards back to their pre-gesture frames.
  */
-export class MoveCardsCommand implements WorkspaceCommand {
+export class MoveCardsCommand implements WorkspaceCommand<CardsReceipt> {
   id: string;
   label = "Move";
 
@@ -26,28 +26,38 @@ export class MoveCardsCommand implements WorkspaceCommand {
     this.id = id;
   }
 
-  async execute(gateway: WorkspaceGateway): Promise<void> {
-    await gateway.moveCards({
+  private applyReceipt(receipt: CardsReceipt): CardsReceipt {
+    const revisionById = new Map(receipt.cards.map((c) => [c.id, c.revision]));
+    this.moves = this.moves.map((move) => {
+      const revision = revisionById.get(move.id);
+      // unreachable: the backend returns exactly one CardReceipt per requested card
+      return revision === undefined ? move : { ...move, revision };
+    });
+    return receipt;
+  }
+
+  async execute(gateway: WorkspaceGateway): Promise<CardsReceipt> {
+    const receipt = await gateway.moveCards({
       cards: this.moves.map((m) => ({
         id: m.id,
         expectedRevision: m.revision,
         frame: m.after,
       })),
     });
-    this.moves = this.moves.map((move) => ({ ...move, revision: move.revision + 1 }));
+    return this.applyReceipt(receipt);
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
     // Reverse: move every card back to its prior frame, using the post-move
     // revision (the move bumped each card's revision by one).
-    await gateway.moveCards({
+    const receipt = await gateway.moveCards({
       cards: this.moves.map((m) => ({
         id: m.id,
         expectedRevision: m.revision,
         frame: m.before,
       })),
     });
-    this.moves = this.moves.map((move) => ({ ...move, revision: move.revision + 1 }));
+    this.applyReceipt(receipt);
   }
 
   mergeWith(): WorkspaceCommand<unknown> | null {
@@ -104,25 +114,25 @@ export class MoveCardToBoardCommand implements WorkspaceCommand {
   }
 
   async execute(gateway: WorkspaceGateway): Promise<void> {
-    await gateway.moveCardToBoard({
+    const receipt = await gateway.moveCardToBoard({
       id: this.cardId,
       expectedRevision: this.currentRevision,
       targetBoardId: this.targetBoardId,
       frame: this.targetFrame,
     });
-    this.currentRevision += 1;
+    this.currentRevision = receipt.revision;
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
-    // The move bumped the card's revision by one; move it back to the source
-    // board at its original frame.
-    await gateway.moveCardToBoard({
+    // The move bumped the card's revision; move it back to the source board at
+    // its original frame using the revision the backend just returned.
+    const receipt = await gateway.moveCardToBoard({
       id: this.cardId,
       expectedRevision: this.currentRevision,
       targetBoardId: this.sourceBoardId,
       frame: this.sourceFrame,
     });
-    this.currentRevision += 1;
+    this.currentRevision = receipt.revision;
   }
 
   mergeWith(): WorkspaceCommand<unknown> | null {

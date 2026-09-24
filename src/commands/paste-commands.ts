@@ -127,7 +127,6 @@ export class PasteCardsCommand implements WorkspaceCommand<PasteCardsResult> {
           frame: spec.frame,
           zIndex: spec.zIndex,
           documentJson: spec.documentJson,
-          plainText: spec.plainText,
         });
         if (spec.colorToken !== "default") {
           await gateway.setNoteColor({ id: spec.id, colorToken: spec.colorToken });
@@ -140,7 +139,6 @@ export class PasteCardsCommand implements WorkspaceCommand<PasteCardsResult> {
           zIndex: spec.zIndex,
           assetId: spec.assetId,
           captionJson: spec.captionJson,
-          captionPlainText: spec.captionPlainText,
         });
       } else if (spec.kind === "shortcut") {
         const created = await gateway.createBoardShortcut({

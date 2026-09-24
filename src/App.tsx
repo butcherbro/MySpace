@@ -302,7 +302,6 @@ function App() {
             frame: card.frame,
             zIndex: card.zIndex,
             documentJson: card.documentJson,
-            plainText,
           }),
         );
         dispatch({ type: "cardAdded", card });
@@ -337,12 +336,12 @@ function App() {
       };
       void gateway
         .placeUnsortedCard({ id: cardId, expectedRevision: card.revision, frame })
-        .then(() => {
+        .then((receipt) => {
           dispatch({
             type: "unsortedCardPlaced",
             id: cardId,
             frame,
-            revision: card.revision + 1,
+            revision: receipt.revision,
           });
         })
         .catch((e) => {
@@ -400,12 +399,12 @@ function App() {
         };
         void gateway
           .placeUnsortedCard({ id, expectedRevision: card.revision, frame })
-          .then(() => {
+          .then((receipt) => {
             dispatch({
               type: "unsortedCardPlaced",
               id,
               frame,
-              revision: card.revision + 1,
+              revision: receipt.revision,
             });
           })
           .catch((err) => {
@@ -851,28 +850,27 @@ function App() {
           throw new Error("Note content is not a valid document");
         }
 
-        const plainText = documentToPlainText(document);
-        await gateway.updateNote({
+        const receipt = await gateway.updateNote({
           id,
           expectedRevision: note.revision,
           documentJson: document,
-          plainText,
         });
         // Keep the ref authoritative *inside this microtask*: the note's own
         // auto-grow (NoteCard) debounces a resize write off the same keystroke
         // and can land right behind this one in the queue, before React's
         // effect has re-synced `cardsRef` from state (see the embed-metadata
         // note above for the same pattern).
-        const nextRevision = note.revision + 1;
         cardsRef.current = cardsRef.current.map((c) =>
-          c.id === id ? { ...c, revision: nextRevision, documentJson: document, plainText } : c,
+          c.id === id
+            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText }
+            : c,
         );
         dispatch({
           type: "cardContentUpdated",
           id,
-          revision: nextRevision,
+          revision: receipt.revision,
           documentJson: document,
-          plainText,
+          plainText: receipt.plainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -902,32 +900,30 @@ function App() {
             displayUrl: displayUrl(classification.url),
             title: classification.url,
             descriptionJson: plainTextToDocument(""),
-            descriptionPlainText: "",
           });
           cardsRef.current = cardsRef.current.map((c) => (c.id === id ? embed : c));
           dispatch({ type: "cardReplaced", id, card: embed });
           return;
         }
 
-        const plainText = documentToPlainText(document);
-        await gateway.updateNote({
+        const receipt = await gateway.updateNote({
           id,
           expectedRevision: note.revision,
           documentJson: document,
-          plainText,
         });
         // Same ref-staleness guard as handleUpdateNote above: a pending
         // auto-grow resize can be queued right behind this finalize.
-        const nextRevision = note.revision + 1;
         cardsRef.current = cardsRef.current.map((c) =>
-          c.id === id ? { ...c, revision: nextRevision, documentJson: document, plainText } : c,
+          c.id === id
+            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText }
+            : c,
         );
         dispatch({
           type: "cardContentUpdated",
           id,
-          revision: nextRevision,
+          revision: receipt.revision,
           documentJson: document,
-          plainText,
+          plainText: receipt.plainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -947,19 +943,17 @@ function App() {
         if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
           throw new Error("Image caption is not a valid document");
         }
-        const captionPlainText = documentToPlainText(document);
-        await gateway.updateImageCaption({
+        const receipt = await gateway.updateImageCaption({
           id,
           expectedRevision: image.revision,
           captionJson: document,
-          captionPlainText,
         });
         dispatch({
           type: "imageCaptionUpdated",
           id,
-          revision: image.revision + 1,
+          revision: receipt.revision,
           captionJson: document,
-          captionPlainText,
+          captionPlainText: receipt.plainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -979,19 +973,17 @@ function App() {
         if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
           throw new Error("Link description is not a valid document");
         }
-        const descriptionPlainText = documentToPlainText(document);
-        await gateway.updateEmbedDescription({
+        const receipt = await gateway.updateEmbedDescription({
           id,
           expectedRevision: embed.revision,
           descriptionJson: document,
-          descriptionPlainText,
         });
         dispatch({
           type: "embedDescriptionUpdated",
           id,
-          revision: embed.revision + 1,
+          revision: receipt.revision,
           descriptionJson: document,
-          descriptionPlainText,
+          descriptionPlainText: receipt.plainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -1038,15 +1030,18 @@ function App() {
           if (moves.length === 0) return;
 
           // One gesture = one undo entry via the dispatcher.
-          await dispatcher.execute(
+          const receipt = await dispatcher.execute(
             new MoveCardsCommand(idGenerator.nextId(), moves),
           );
+          const revisionById = new Map(receipt.cards.map((c) => [c.id, c.revision]));
 
           for (const item of moves) {
+            const revision = revisionById.get(item.id);
+            if (revision === undefined) continue; // unreachable: one receipt per requested card
             dispatch({
               type: "cardMoved",
               id: item.id,
-              revision: item.revision + 1,
+              revision,
               frame: item.after,
             });
           }
@@ -1117,7 +1112,10 @@ function App() {
           // panel; otherwise the card simply left this board (it will appear in
           // the target board's Unsorted when that board is opened).
           if (receipt.targetBoardId === boardRef.current?.id) {
-            dispatch({ type: "cardMovedToUnsorted", id: cardId });
+            const moved = receipt.cards.find((c) => c.id === cardId);
+            if (moved) {
+              dispatch({ type: "cardMovedToUnsorted", id: cardId, revision: moved.afterRevision });
+            }
           } else {
             dispatch({ type: "cardsRemoved", ids: [cardId] });
           }
@@ -1168,7 +1166,7 @@ function App() {
             if (receipt.cards.length > 0) {
               if (receipt.targetBoardId === currentBoardId) {
                 for (const card of receipt.cards) {
-                  dispatch({ type: "cardMovedToUnsorted", id: card.id });
+                  dispatch({ type: "cardMovedToUnsorted", id: card.id, revision: card.afterRevision });
                 }
               } else {
                 dispatch({ type: "cardsRemoved", ids: receipt.cards.map((card) => card.id) });
@@ -1342,7 +1340,7 @@ function App() {
           const current = cardsRef.current.find((c) => c.id === id);
           if (!current) return;
           const frame = { ...current.frame, width, height };
-          await gateway.moveCard({
+          const receipt = await gateway.moveCard({
             id,
             expectedRevision: current.revision,
             frame,
@@ -1351,11 +1349,10 @@ function App() {
           // auto-grow can queue a resize right behind a content autosave for
           // the same keystroke, and the two must not read the same stale
           // revision (tasks/lessons.md 2026-09-08).
-          const nextRevision = current.revision + 1;
           cardsRef.current = cardsRef.current.map((c) =>
-            c.id === id ? { ...c, revision: nextRevision, frame } : c,
+            c.id === id ? { ...c, revision: receipt.revision, frame } : c,
           );
-          dispatch({ type: "cardMoved", id, revision: nextRevision, frame });
+          dispatch({ type: "cardMoved", id, revision: receipt.revision, frame });
         })
         .catch((e) => {
           dispatch({ type: "failed", message: errorMessage(e) });

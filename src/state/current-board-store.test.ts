@@ -92,6 +92,14 @@ describe("current board reducer", () => {
     expect(state.cards).toEqual([{ ...unsorted, frame, revision: 2 }]);
   });
 
+  it("moves a card to Unsorted using the revision carried by the action", () => {
+    let state = reducer(initialState, { type: "cardAdded", card: note("a") });
+    state = reducer(state, { type: "cardMovedToUnsorted", id: "a", revision: 5 });
+    expect(state.cards).toEqual([]);
+    expect(state.unsortedCards).toHaveLength(1);
+    expect(state.unsortedCards[0].revision).toBe(5);
+  });
+
   it("moves a card and bumps its revision", () => {
     let state = reducer(initialState, { type: "cardAdded", card: note("a") });
     state = reducer(state, {

@@ -29,6 +29,7 @@ use crate::domain::asset_service::{self, StagedAsset};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{ApplyEmbedMetadataInput, EmbedCardDto};
 use crate::domain::mutation::Mutation;
+use crate::domain::plain_text::plain_text_to_document as plain_text_document;
 use crate::repositories::workspace_repository;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
@@ -437,7 +438,6 @@ pub fn plan_embed_enrichment(
             title: embed.title.clone(),
             provider: None,
             description_json: plain_text_document(&embed.description_plain_text),
-            description_plain_text: embed.description_plain_text.clone(),
             description_origin: embed.description_origin.clone(),
             preview_asset_id: None,
             favicon_asset_id: None,
@@ -512,7 +512,6 @@ pub fn plan_embed_enrichment(
         title: metadata.title.unwrap_or(embed.title),
         provider: metadata.provider,
         description_json: plain_text_document(&description),
-        description_plain_text: description,
         description_origin,
         preview_asset_id,
         favicon_asset_id,
@@ -995,19 +994,5 @@ fn display_url(source: &str) -> Option<String> {
         Some(host.to_string())
     } else {
         Some(format!("{host}{path}"))
-    }
-}
-
-fn plain_text_document(text: &str) -> Value {
-    if text.is_empty() {
-        serde_json::json!({"type":"doc","content":[{"type":"paragraph"}]})
-    } else {
-        serde_json::json!({
-            "type": "doc",
-            "content": [{
-                "type": "paragraph",
-                "content": [{ "type": "text", "text": text }]
-            }]
-        })
     }
 }

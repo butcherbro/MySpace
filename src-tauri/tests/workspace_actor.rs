@@ -36,8 +36,7 @@ fn note(board_id: &str, n: usize) -> Mutation {
             height: 80.0,
         },
         z_index: n as i64,
-        document_json: serde_json::json!({ "type": "doc" }),
-        plain_text: format!("note {n}"),
+        document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": format!("note {n}")}]}]}),
     })
 }
 
@@ -48,7 +47,7 @@ fn writes_are_applied_and_visible_to_pooled_readers() {
     for n in 0..5 {
         ws.apply_blocking(note(&home, n))
             .unwrap()
-            .into_unit()
+            .into_card_receipt()
             .unwrap();
     }
     let count: i64 = ws
@@ -93,7 +92,7 @@ fn concurrent_callers_share_one_writer_and_never_see_database_locked() {
                 for n in 0..5 {
                     ws.apply_blocking(note(&home, w * 10 + n))
                         .unwrap_or_else(|e| panic!("worker {w} write {n} failed: {e}"))
-                        .into_unit()
+                        .into_card_receipt()
                         .unwrap();
                 }
             })
@@ -166,7 +165,7 @@ fn outcome_mismatch_is_an_error_not_a_panic() {
     let ws = temp_workspace("outcome");
     let home = home_id(&ws);
     let outcome = ws.apply_blocking(note(&home, 0)).unwrap();
-    assert!(matches!(outcome, MutationOutcome::Unit));
+    assert!(matches!(outcome, MutationOutcome::CardReceipt(_)));
     let err = ws
         .apply_blocking(note(&home, 1))
         .unwrap()
@@ -182,7 +181,11 @@ async fn async_api_round_trips() {
         .read(|conn| workspace_repository::load_home_board(conn).map(|b| b.id))
         .await
         .unwrap();
-    ws.apply(note(&home, 0)).await.unwrap().into_unit().unwrap();
+    ws.apply(note(&home, 0))
+        .await
+        .unwrap()
+        .into_card_receipt()
+        .unwrap();
     let version: i64 = ws
         .inspect_writer(|conn| {
             conn.query_row("PRAGMA data_version", [], |r| r.get(0))

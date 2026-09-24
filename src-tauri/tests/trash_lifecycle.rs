@@ -200,7 +200,6 @@ fn trash_selection_atomically_trashes_leaf_and_board() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -257,7 +256,6 @@ fn trash_selection_rolls_back_on_bad_item() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -299,8 +297,7 @@ fn note_input(board_id: &str, id: &str, plain_text: &str) -> CreateNoteInput {
             height: 80.0,
         },
         z_index: 0,
-        document_json: serde_json::json!({ "type": "doc" }),
-        plain_text: plain_text.to_string(),
+        document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": plain_text}]}]}),
     }
 }
 
@@ -318,7 +315,6 @@ fn link_card(conn: &mut rusqlite::Connection, board_id: &str, id: &str, favicon:
             display_url: "example.com".to_string(),
             title: "An article worth keeping".to_string(),
             description_json: serde_json::json!({ "type": "doc" }),
-            description_plain_text: String::new(),
         },
     )
     .unwrap();
@@ -507,8 +503,7 @@ fn list_trash_reports_an_image_card_with_its_asset() {
             },
             z_index: 0,
             asset_id: "img-1".to_string(),
-            caption_json: serde_json::json!({ "type": "doc" }),
-            caption_plain_text: "Screenshot of dashboard".to_string(),
+            caption_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Screenshot of dashboard"}]}]}),
         },
     )
     .unwrap();

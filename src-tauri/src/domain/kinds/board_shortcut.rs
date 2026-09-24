@@ -10,7 +10,9 @@ use super::{
     asset_at, asset_columns, card_frame, load_board_rows, load_one_row, DetailTable, AFTER_CARD,
     CARD_COLUMNS,
 };
-use crate::domain::card_kind::{CardKind, CardKindHandler, CopyContext, SearchHit};
+use crate::domain::card_kind::{
+    CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
+};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{BoardShortcutDto, BoardShortcutTarget, CardDto};
 
@@ -103,7 +105,7 @@ impl CardKindHandler for BoardShortcutHandler {
         &self,
         _conn: &Connection,
         _query: &str,
-        _limit: usize,
+        _candidates: &[SearchCandidate],
     ) -> Result<Vec<SearchHit>, WorkspaceError> {
         Ok(Vec::new())
     }

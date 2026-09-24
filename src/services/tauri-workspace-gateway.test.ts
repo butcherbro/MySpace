@@ -28,8 +28,8 @@ describe("TauriWorkspaceGateway", () => {
     expect(invokeMock).toHaveBeenCalledWith("load_board_snapshot", { boardId: "home" });
   });
 
-  it("calls create_note with a wrapped input payload", async () => {
-    invokeMock.mockResolvedValue(undefined);
+  it("calls create_note with a wrapped input payload and returns the receipt", async () => {
+    invokeMock.mockResolvedValue({ id: "note-1", revision: 1 });
     const gw = new TauriWorkspaceGateway();
     const input = {
       id: "note-1",
@@ -37,23 +37,23 @@ describe("TauriWorkspaceGateway", () => {
       frame: { x: 0, y: 0, width: 200, height: 80 },
       zIndex: 0,
       documentJson: { type: "doc" },
-      plainText: "hi",
     };
-    await gw.createNote(input);
+    const result = await gw.createNote(input);
     expect(invokeMock).toHaveBeenCalledWith("create_note", { input });
+    expect(result).toEqual({ id: "note-1", revision: 1 });
   });
 
-  it("calls update_note with a wrapped input payload", async () => {
-    invokeMock.mockResolvedValue(undefined);
+  it("calls update_note with a wrapped input payload and returns the text receipt", async () => {
+    invokeMock.mockResolvedValue({ id: "note-1", revision: 2, plainText: "updated" });
     const gw = new TauriWorkspaceGateway();
     const input = {
       id: "note-1",
       expectedRevision: 1,
       documentJson: { type: "doc" },
-      plainText: "updated",
     };
-    await gw.updateNote(input);
+    const result = await gw.updateNote(input);
     expect(invokeMock).toHaveBeenCalledWith("update_note", { input });
+    expect(result).toEqual({ id: "note-1", revision: 2, plainText: "updated" });
   });
 
   it("calls duplicate_board with a wrapped input payload and returns the receipt", async () => {
@@ -92,20 +92,21 @@ describe("TauriWorkspaceGateway", () => {
     expect(result).toEqual(receipt);
   });
 
-  it("calls move_card with a wrapped input payload", async () => {
-    invokeMock.mockResolvedValue(undefined);
+  it("calls move_card with a wrapped input payload and returns the card receipt", async () => {
+    invokeMock.mockResolvedValue({ id: "note-1", revision: 3 });
     const gw = new TauriWorkspaceGateway();
     const input = {
       id: "note-1",
       expectedRevision: 2,
       frame: { x: 100, y: 200, width: 240, height: 120 },
     };
-    await gw.moveCard(input);
+    const result = await gw.moveCard(input);
     expect(invokeMock).toHaveBeenCalledWith("move_card", { input });
+    expect(result).toEqual({ id: "note-1", revision: 3 });
   });
 
-  it("calls save_viewport with a wrapped input payload", async () => {
-    invokeMock.mockResolvedValue(undefined);
+  it("calls save_viewport with a wrapped input payload and returns the viewport receipt", async () => {
+    invokeMock.mockResolvedValue({ revision: 2 });
     const gw = new TauriWorkspaceGateway();
     const input = {
       boardId: "home",
@@ -114,12 +115,18 @@ describe("TauriWorkspaceGateway", () => {
       y: 0,
       zoom: 1.5,
     };
-    await gw.saveViewport(input);
+    const result = await gw.saveViewport(input);
     expect(invokeMock).toHaveBeenCalledWith("save_viewport", { input });
+    expect(result).toEqual({ revision: 2 });
   });
 
-  it("calls move_cards with a wrapped batch payload", async () => {
-    invokeMock.mockResolvedValue(undefined);
+  it("calls move_cards with a wrapped batch payload and returns the cards receipt", async () => {
+    invokeMock.mockResolvedValue({
+      cards: [
+        { id: "a", revision: 2 },
+        { id: "b", revision: 2 },
+      ],
+    });
     const gw = new TauriWorkspaceGateway();
     const input = {
       cards: [
@@ -127,8 +134,9 @@ describe("TauriWorkspaceGateway", () => {
         { id: "b", expectedRevision: 1, frame: { x: 10, y: 10, width: 200, height: 80 } },
       ],
     };
-    await gw.moveCards(input);
+    const result = await gw.moveCards(input);
     expect(invokeMock).toHaveBeenCalledWith("move_cards", { input });
+    expect(result.cards).toHaveLength(2);
   });
 
   it("adds the embed discriminator to a converted note response", async () => {
@@ -160,7 +168,6 @@ describe("TauriWorkspaceGateway", () => {
       displayUrl: "example.com",
       title: "https://example.com",
       descriptionJson: { type: "doc", content: [{ type: "paragraph" }] },
-      descriptionPlainText: "",
     });
 
     expect(result.kind).toBe("embed");
@@ -195,6 +202,57 @@ describe("TauriWorkspaceGateway", () => {
     });
     expect(result.kind).toBe("embed");
     expect(result.title).toBe("Example Domain");
+  });
+
+  it("calls update_image_caption with a wrapped input payload and returns the text receipt", async () => {
+    invokeMock.mockResolvedValue({ id: "image-1", revision: 2, plainText: "a photo" });
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      id: "image-1",
+      expectedRevision: 1,
+      captionJson: { type: "doc" },
+    };
+    const result = await gw.updateImageCaption(input);
+    expect(invokeMock).toHaveBeenCalledWith("update_image_caption", { input });
+    expect(result).toEqual({ id: "image-1", revision: 2, plainText: "a photo" });
+  });
+
+  it("calls update_embed_description with a wrapped input payload and returns the text receipt", async () => {
+    invokeMock.mockResolvedValue({ id: "embed-1", revision: 3, plainText: "a description" });
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      id: "embed-1",
+      expectedRevision: 2,
+      descriptionJson: { type: "doc" },
+    };
+    const result = await gw.updateEmbedDescription(input);
+    expect(invokeMock).toHaveBeenCalledWith("update_embed_description", { input });
+    expect(result).toEqual({ id: "embed-1", revision: 3, plainText: "a description" });
+  });
+
+  it("calls place_unsorted_card with a wrapped input payload and returns the card receipt", async () => {
+    invokeMock.mockResolvedValue({ id: "note-1", revision: 4 });
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      id: "note-1",
+      expectedRevision: 3,
+      frame: { x: 40, y: 40, width: 240, height: 120 },
+    };
+    const result = await gw.placeUnsortedCard(input);
+    expect(invokeMock).toHaveBeenCalledWith("place_unsorted_card", { input });
+    expect(result).toEqual({ id: "note-1", revision: 4 });
+  });
+
+  it("calls move_cards_to_board_unsorted with a wrapped input payload and returns the cards receipt", async () => {
+    invokeMock.mockResolvedValue({ cards: [{ id: "note-1", revision: 2 }] });
+    const gw = new TauriWorkspaceGateway();
+    const input = {
+      targetBoardId: "board-b",
+      cards: [{ id: "note-1", expectedRevision: 1 }],
+    };
+    const result = await gw.moveCardsToBoardUnsorted(input);
+    expect(invokeMock).toHaveBeenCalledWith("move_cards_to_board_unsorted", { input });
+    expect(result).toEqual({ cards: [{ id: "note-1", revision: 2 }] });
   });
 
   it("calls list_trash with no arguments", async () => {

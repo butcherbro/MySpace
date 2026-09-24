@@ -96,7 +96,6 @@ fn write_waits_for_another_connections_write_lock_instead_of_failing() {
             frame: frame(),
             z_index: 0,
             document_json: serde_json::json!({"type": "doc", "content": []}),
-            plain_text: String::new(),
         },
     );
     let waited = started.elapsed();

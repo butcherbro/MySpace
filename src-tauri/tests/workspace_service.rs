@@ -188,11 +188,10 @@ fn read_card_resolves_card_address_back_to_content() {
             height: 80.0,
         },
         z_index: 0,
-        document_json: serde_json::json!({"type": "doc", "content": []}),
-        plain_text: "hello".to_string(),
+        document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}]}),
     }))
     .unwrap()
-    .into_unit()
+    .into_card_receipt()
     .unwrap();
 
     // Resolve via a full myspace://card/<id> address.

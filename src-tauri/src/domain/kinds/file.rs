@@ -1,15 +1,20 @@
 //! `file` cards: a text-like file copied into the managed asset store, with a
 //! bounded inline preview and an optional generated thumbnail (`file_cards`).
 
+use std::collections::HashMap;
+
 use rusqlite::{Connection, Row, Transaction};
 
 use super::{
     asset_at, asset_columns, card_frame, load_board_rows, load_one_row, required_asset_at,
     DetailTable, AFTER_CARD, ASSET_WIDTH, CARD_COLUMNS,
 };
-use crate::domain::card_kind::{CardKind, CardKindHandler, CopyContext, SearchHit};
+use crate::domain::card_kind::{
+    CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
+};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CardDto, FileCardDto};
+use crate::repositories::search::{bound_text, query_by_ids, search_excerpt};
 
 pub struct FileHandler;
 
@@ -84,14 +89,47 @@ impl CardKindHandler for FileHandler {
         DETAIL.delete(tx, ids)
     }
 
-    /// File cards are not searchable in V1 (docs/specs/search.md).
+    /// File cards match by file name (title level) and preview text.
     fn search_rows(
         &self,
-        _conn: &Connection,
-        _query: &str,
-        _limit: usize,
+        conn: &Connection,
+        query: &str,
+        candidates: &[SearchCandidate],
     ) -> Result<Vec<SearchHit>, WorkspaceError> {
-        Ok(Vec::new())
+        let title_hits: HashMap<&str, bool> = candidates
+            .iter()
+            .map(|c| (c.entity_id.as_str(), c.title_hit))
+            .collect();
+        let ids: Vec<&str> = title_hits.keys().copied().collect();
+        query_by_ids(
+            conn,
+            &format!(
+                "SELECT c.id, c.board_id, a.file_name, f.preview_text, c.created_at, {preview}
+                 FROM cards c
+                 JOIN file_cards f ON f.card_id = c.id
+                 JOIN assets a ON a.id = f.asset_id
+                 LEFT JOIN assets pa ON pa.id = f.preview_asset_id
+                 WHERE c.id",
+                preview = asset_columns("pa"),
+            ),
+            &ids,
+            |row| {
+                let id: String = row.get(0)?;
+                let file_name: String = row.get(2)?;
+                let preview_text: String = row.get(3)?;
+                let name_match = title_hits.get(id.as_str()).copied().unwrap_or(false);
+                Ok(SearchHit {
+                    entity_id: id,
+                    kind: "file",
+                    title: bound_text(&file_name),
+                    excerpt: (!name_match).then(|| search_excerpt(&preview_text, query)),
+                    board_id: row.get(1)?,
+                    rank: if name_match { 0 } else { 1 },
+                    thumbnail_asset: asset_at(row, 5)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
     }
 
     fn asset_refs(&self) -> &'static [(&'static str, &'static str)] {

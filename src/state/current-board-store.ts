@@ -42,7 +42,7 @@ export type CurrentBoardAction =
   | { type: "embedDescriptionUpdated"; id: string; revision: number; descriptionJson: unknown; descriptionPlainText: string }
   | { type: "cardReplaced"; id: string; card: CardDto }
   | { type: "unsortedCardPlaced"; id: string; revision: number; frame: CardDto["frame"] }
-  | { type: "cardMovedToUnsorted"; id: string }
+  | { type: "cardMovedToUnsorted"; id: string; revision: number }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "noteColorChanged"; id: string; colorToken: string }
   | { type: "cardsRemoved"; ids: string[] }
@@ -199,9 +199,9 @@ export function reducer(
     case "cardMovedToUnsorted": {
       const card = state.cards.find((c) => c.id === action.id);
       if (!card) return state;
-      // The backend bumped the card's revision on the move; reflect it so a
-      // later Place uses the current revision.
-      const moved = { ...card, revision: card.revision + 1 };
+      // The backend bumped the card's revision on the move; the receipt
+      // carries the authoritative value so a later Place uses it.
+      const moved = { ...card, revision: action.revision };
       return {
         ...state,
         cards: state.cards.filter((c) => c.id !== action.id),

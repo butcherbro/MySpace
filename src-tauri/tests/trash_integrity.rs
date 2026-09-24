@@ -45,8 +45,7 @@ fn note_input(board_id: &str, id: &str, plain_text: &str) -> CreateNoteInput {
             height: 80.0,
         },
         z_index: 0,
-        document_json: serde_json::json!({ "type": "doc" }),
-        plain_text: plain_text.to_string(),
+        document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": plain_text}]}]}),
     }
 }
 

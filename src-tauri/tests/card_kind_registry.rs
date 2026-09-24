@@ -115,8 +115,7 @@ fn one_card_of_each_kind(conn: &mut Connection) -> Vec<(CardKind, String)> {
             board_id: home.clone(),
             frame: frame(),
             z_index: 1,
-            document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph"}]}),
-            plain_text: "hello".into(),
+            document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}]}),
         },
     )
     .unwrap();
@@ -147,8 +146,7 @@ fn one_card_of_each_kind(conn: &mut Connection) -> Vec<(CardKind, String)> {
             frame: frame(),
             z_index: 2,
             asset_id: "a-image".into(),
-            caption_json: serde_json::json!({"type": "doc"}),
-            caption_plain_text: "caption".into(),
+            caption_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "caption"}]}]}),
         },
     )
     .unwrap();
@@ -383,17 +381,19 @@ fn every_frame_writer_validates() {
     };
     let is_constraint =
         |r: Result<(), WorkspaceError>| matches!(r, Err(WorkspaceError::ConstraintViolation(_)));
-    assert!(is_constraint(repo::create_note(
-        &mut conn,
-        &CreateNoteInput {
-            id: "n".into(),
-            board_id: home.clone(),
-            frame: bad,
-            z_index: 0,
-            document_json: serde_json::json!({}),
-            plain_text: String::new(),
-        },
-    )));
+    assert!(is_constraint(
+        repo::create_note(
+            &mut conn,
+            &CreateNoteInput {
+                id: "n".into(),
+                board_id: home.clone(),
+                frame: bad,
+                z_index: 0,
+                document_json: serde_json::json!({}),
+            },
+        )
+        .map(|_| ())
+    ));
     assert!(is_constraint(board_service::create_child_board(
         &mut conn,
         &CreateChildBoardInput {

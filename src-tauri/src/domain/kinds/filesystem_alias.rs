@@ -2,13 +2,17 @@
 //! scoped bookmark (`filesystem_aliases`). The projection never exposes the
 //! locator bytes; the journal payload carries them as `{"$blob": hex}`.
 
+use std::collections::HashMap;
+
 use rusqlite::{Connection, Row, Transaction};
 
 use super::{card_frame, load_board_rows, load_one_row, DetailTable, AFTER_CARD};
-use crate::domain::card_kind::{CardKind, CardKindHandler, CopyContext, SearchHit};
+use crate::domain::card_kind::{
+    CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
+};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CardDto, FilesystemAliasDto};
-use crate::repositories::search::{bound_text, contains_query, rank_and_truncate};
+use crate::repositories::search::{bound_text, query_by_ids};
 
 pub struct FilesystemAliasHandler;
 
@@ -73,46 +77,38 @@ impl CardKindHandler for FilesystemAliasHandler {
     fn search_rows(
         &self,
         conn: &Connection,
-        query: &str,
-        limit: usize,
+        _query: &str,
+        candidates: &[SearchCandidate],
     ) -> Result<Vec<SearchHit>, WorkspaceError> {
-        let q = query.to_lowercase();
-        let mut stmt = conn.prepare(
+        let title_hits: HashMap<&str, bool> = candidates
+            .iter()
+            .map(|c| (c.entity_id.as_str(), c.title_hit))
+            .collect();
+        let ids: Vec<&str> = title_hits.keys().copied().collect();
+        query_by_ids(
+            conn,
             "SELECT c.id, c.board_id, a.display_name, a.path_hint, c.created_at
              FROM cards c
              JOIN filesystem_aliases a ON a.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-            ))
-        })?;
-        let mut hits = Vec::new();
-        for row in rows {
-            let (id, board_id, display_name, path_hint, created_at) = row?;
-            let name_match = contains_query(&display_name, &q);
-            let path_match = contains_query(&path_hint, &q);
-            if name_match || path_match {
-                hits.push(SearchHit {
+             WHERE c.id",
+            &ids,
+            |row| {
+                let id: String = row.get(0)?;
+                let display_name: String = row.get(2)?;
+                let path_hint: String = row.get(3)?;
+                let name_match = title_hits.get(id.as_str()).copied().unwrap_or(false);
+                Ok(SearchHit {
                     entity_id: id,
                     kind: "folder",
                     title: bound_text(&display_name),
                     excerpt: (!name_match).then(|| bound_text(&path_hint)),
-                    board_id,
+                    board_id: row.get(1)?,
                     rank: if name_match { 0 } else { 1 },
                     thumbnail_asset: None,
-                    created_at,
-                });
-            }
-        }
-        rank_and_truncate(&mut hits, limit);
-        Ok(hits)
+                    created_at: row.get(4)?,
+                })
+            },
+        )
     }
 
     fn asset_refs(&self) -> &'static [(&'static str, &'static str)] {

@@ -177,6 +177,12 @@ Owner: architect (trait + registry), agents (one per kind). Estimate: 3–4 days
 
 ## P1.4 — FTS5 search
 
+**Status: done 2026-09-24.** Trigger-maintained `search_index` (+
+`search_index_keys` for O(1) row lookup), word-prefix MATCH with quoted
+tokens, 200 candidates, existing ranking/excerpts kept. Deviations: no bm25
+ordering (too slow when everything matches); substring fallback only for ≤3
+character queries; file cards searchable.
+
 Steps: migration 0022 creates `search_index(entity_id UNINDEXED, kind
 UNINDEXED, board_id UNINDEXED, text)` as an FTS5 table with `unicode61`
 tokenizer; the writer updates it inside each mutation that changes
@@ -196,6 +202,11 @@ Owner: agent. Estimate: 1–2 days (after P1.1 and P1.3).
 ---
 
 ## P1.5 — Mutations return receipts; `plain_text` computed on the backend
+
+**Status: done 2026-09-24.** Receipts in `models.rs`, revisions read back in
+the write transaction, `domain/plain_text.rs` pinned by
+`tests/fixtures/plain_text_cases.json` (mirrors the TS test), derived-text
+fields removed from six input structs, frontend consumes receipts.
 
 Steps: every `Mutation` returns `Receipt { revision(s), updated DTO where
 cheap }`; frontend commands and the reducer stop computing `revision + 1`

@@ -9,10 +9,10 @@ use tauri::State;
 use crate::app::Workspace;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    CardDto, ConvertNoteToEmbedInput, CreateBoardShortcutInput, CreateImageCardInput,
-    CreateNoteInput, EmbedCardDto, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
-    PlaceUnsortedCardInput, SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
-    UpdateImageCaptionInput, UpdateNoteInput,
+    CardDto, CardReceipt, CardsReceipt, ConvertNoteToEmbedInput, CreateBoardShortcutInput,
+    CreateImageCardInput, CreateNoteInput, EmbedCardDto, MoveCardToBoardInput, MoveCardsInput,
+    MoveCardsToUnsortedInput, PlaceUnsortedCardInput, SetNoteColorInput, TextReceipt,
+    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
 };
 use crate::domain::mutation::Mutation;
 use crate::repositories::workspace_repository;
@@ -23,10 +23,12 @@ use crate::telemetry::instrument_async;
 pub async fn create_note(
     ws: State<'_, Workspace>,
     input: CreateNoteInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("create_note", async move {
-        ws.apply(Mutation::CreateNote(input)).await?.into_unit()
+        ws.apply(Mutation::CreateNote(input))
+            .await?
+            .into_card_receipt()
     })
     .await
 }
@@ -67,10 +69,12 @@ pub async fn create_board_shortcut(
 pub async fn update_note(
     ws: State<'_, Workspace>,
     input: UpdateNoteInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<TextReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("update_note", async move {
-        ws.apply(Mutation::UpdateNote(input)).await?.into_unit()
+        ws.apply(Mutation::UpdateNote(input))
+            .await?
+            .into_text_receipt()
     })
     .await
 }
@@ -93,12 +97,12 @@ pub async fn set_note_color(
 pub async fn update_image_caption(
     ws: State<'_, Workspace>,
     input: UpdateImageCaptionInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<TextReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("update_image_caption", async move {
         ws.apply(Mutation::UpdateImageCaption(input))
             .await?
-            .into_unit()
+            .into_text_receipt()
     })
     .await
 }
@@ -108,10 +112,12 @@ pub async fn update_image_caption(
 pub async fn move_card(
     ws: State<'_, Workspace>,
     input: UpdateCardFrameInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("move_card", async move {
-        ws.apply(Mutation::MoveCard(input)).await?.into_unit()
+        ws.apply(Mutation::MoveCard(input))
+            .await?
+            .into_card_receipt()
     })
     .await
 }
@@ -121,10 +127,12 @@ pub async fn move_card(
 pub async fn move_cards(
     ws: State<'_, Workspace>,
     input: MoveCardsInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardsReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("move_cards", async move {
-        ws.apply(Mutation::MoveCards(input)).await?.into_unit()
+        ws.apply(Mutation::MoveCards(input))
+            .await?
+            .into_cards_receipt()
     })
     .await
 }
@@ -134,12 +142,12 @@ pub async fn move_cards(
 pub async fn move_card_to_board(
     ws: State<'_, Workspace>,
     input: MoveCardToBoardInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("move_card_to_board", async move {
         ws.apply(Mutation::MoveCardToBoard(input))
             .await?
-            .into_unit()
+            .into_card_receipt()
     })
     .await
 }
@@ -149,12 +157,12 @@ pub async fn move_card_to_board(
 pub async fn move_cards_to_board_unsorted(
     ws: State<'_, Workspace>,
     input: MoveCardsToUnsortedInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardsReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("move_cards_to_board_unsorted", async move {
         ws.apply(Mutation::MoveCardsToBoardUnsorted(input))
             .await?
-            .into_unit()
+            .into_cards_receipt()
     })
     .await
 }
@@ -164,12 +172,12 @@ pub async fn move_cards_to_board_unsorted(
 pub async fn place_unsorted_card(
     ws: State<'_, Workspace>,
     input: PlaceUnsortedCardInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<CardReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("place_unsorted_card", async move {
         ws.apply(Mutation::PlaceUnsortedCard(input))
             .await?
-            .into_unit()
+            .into_card_receipt()
     })
     .await
 }
@@ -210,12 +218,12 @@ pub async fn convert_note_to_embed(
 pub async fn update_embed_description(
     ws: State<'_, Workspace>,
     input: UpdateEmbedDescriptionInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<TextReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("update_embed_description", async move {
         ws.apply(Mutation::UpdateEmbedDescription(input))
             .await?
-            .into_unit()
+            .into_text_receipt()
     })
     .await
 }

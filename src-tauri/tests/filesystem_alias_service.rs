@@ -192,7 +192,6 @@ fn create_filesystem_alias_rejects_conflicting_card_kind() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".into(),
         },
     )
     .unwrap();

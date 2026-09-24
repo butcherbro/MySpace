@@ -16,6 +16,8 @@ import type {
   CreateFileCardInput,
   CreateFolderAliasInput,
   CreateImageCardInput,
+  CardReceipt,
+  CardsReceipt,
   CreateNoteInput,
   EmbedCardDto,
   EmptyTrashResult,
@@ -38,11 +40,13 @@ import type {
   SearchResultDto,
   SetBoardCoverInput,
   SetNoteColorInput,
+  TextReceipt,
   TrashSelectionInput,
   TrashSummaryDto,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
+  ViewportReceipt,
   WorkspaceGateway,
 } from "./workspace-gateway";
 
@@ -68,32 +72,32 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<number>("get_data_version", {});
   }
 
-  createNote(input: CreateNoteInput): Promise<void> {
-    return invoke<void>("create_note", { input });
+  createNote(input: CreateNoteInput): Promise<CardReceipt> {
+    return invoke<CardReceipt>("create_note", { input });
   }
 
-  updateNote(input: UpdateNoteInput): Promise<void> {
-    return invoke<void>("update_note", { input });
+  updateNote(input: UpdateNoteInput): Promise<TextReceipt> {
+    return invoke<TextReceipt>("update_note", { input });
   }
 
-  moveCard(input: MoveCardInput): Promise<void> {
-    return invoke<void>("move_card", { input });
+  moveCard(input: MoveCardInput): Promise<CardReceipt> {
+    return invoke<CardReceipt>("move_card", { input });
   }
 
-  moveCards(input: MoveCardsInput): Promise<void> {
-    return invoke<void>("move_cards", { input });
+  moveCards(input: MoveCardsInput): Promise<CardsReceipt> {
+    return invoke<CardsReceipt>("move_cards", { input });
   }
 
-  moveCardToBoard(input: MoveCardToBoardInput): Promise<void> {
-    return invoke<void>("move_card_to_board", { input });
+  moveCardToBoard(input: MoveCardToBoardInput): Promise<CardReceipt> {
+    return invoke<CardReceipt>("move_card_to_board", { input });
   }
 
   moveBoard(input: MoveBoardInput): Promise<void> {
     return invoke<void>("move_board", { input });
   }
 
-  saveViewport(input: SaveViewportInput): Promise<void> {
-    return invoke<void>("save_viewport", { input });
+  saveViewport(input: SaveViewportInput): Promise<ViewportReceipt> {
+    return invoke<ViewportReceipt>("save_viewport", { input });
   }
 
   createChildBoard(input: CreateChildBoardInput): Promise<void> {
@@ -170,8 +174,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<void>("reveal_file_card", { cardId });
   }
 
-  updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
-    return invoke<void>("update_image_caption", { input });
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<TextReceipt> {
+    return invoke<TextReceipt>("update_image_caption", { input });
   }
 
   async convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto> {
@@ -186,8 +190,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return { ...embed, kind: "embed" };
   }
 
-  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void> {
-    return invoke<void>("update_embed_description", { input });
+  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<TextReceipt> {
+    return invoke<TextReceipt>("update_embed_description", { input });
   }
 
   trashSelection(input: TrashSelectionInput): Promise<string> {
@@ -242,8 +246,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<void>("set_note_color", { input });
   }
 
-  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void> {
-    return invoke<void>("move_cards_to_board_unsorted", { input });
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<CardsReceipt> {
+    return invoke<CardsReceipt>("move_cards_to_board_unsorted", { input });
   }
   moveSelectionToBoard(
     input: import("./workspace-gateway").MoveSelectionToBoardInput,
@@ -261,8 +265,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
   }
 
 
-  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
-    return invoke<void>("place_unsorted_card", { input });
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<CardReceipt> {
+    return invoke<CardReceipt>("place_unsorted_card", { input });
   }
 
   listBackups(): Promise<BackupSummary[]> {

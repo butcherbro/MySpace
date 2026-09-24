@@ -7,6 +7,7 @@ use rusqlite::{params, Connection};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AssetDto, BoardSnapshot, BoardSummary, Breadcrumb, UpdateViewportInput, Viewport,
+    ViewportReceipt,
 };
 
 use super::super::db;
@@ -17,7 +18,7 @@ use super::immediate_tx;
 pub fn update_viewport(
     conn: &mut Connection,
     input: &UpdateViewportInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<ViewportReceipt, WorkspaceError> {
     let now = db::migrations::now_millis();
 
     // One IMMEDIATE transaction so the stale-revision diagnosis below reads the
@@ -57,8 +58,13 @@ pub fn update_viewport(
         });
     }
 
+    let revision: i64 = tx.query_row(
+        "SELECT revision FROM board_view_states WHERE board_id = ?1",
+        [input.board_id.as_str()],
+        |r| r.get(0),
+    )?;
     tx.commit()?;
-    Ok(())
+    Ok(ViewportReceipt { revision })
 }
 
 /// Loads the complete, self-contained projection of a board.

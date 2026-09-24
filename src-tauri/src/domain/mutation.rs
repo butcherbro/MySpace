@@ -24,14 +24,15 @@ use crate::app::WorkspacePaths;
 use crate::domain::asset_service::{self, StagedAsset};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    AddQuickBoardInput, AssetDto, CardDto, ConvertNoteToEmbedInput, CreateBoardShortcutInput,
-    CreateChildBoardInput, CreateFileCardInput, CreateFilesystemAliasInput, CreateImageCardInput,
-    CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, DuplicateBoardInput,
-    DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult, MoveBoardInput, MoveCardToBoardInput,
-    MoveCardsInput, MoveCardsToUnsortedInput, MoveSelectionToBoardInput,
-    MoveSelectionToBoardReceipt, PlaceUnsortedCardInput, ReorderQuickBoardsInput,
-    SetNoteColorInput, TrashSelectionInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
-    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput,
+    AddQuickBoardInput, AssetDto, CardDto, CardReceipt, CardsReceipt, ConvertNoteToEmbedInput,
+    CreateBoardShortcutInput, CreateChildBoardInput, CreateFileCardInput,
+    CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult,
+    CreateNoteInput, DuplicateBoardInput, DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult,
+    MoveBoardInput, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
+    MoveSelectionToBoardInput, MoveSelectionToBoardReceipt, PlaceUnsortedCardInput,
+    ReorderQuickBoardsInput, SetNoteColorInput, TextReceipt, TrashSelectionInput,
+    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
+    UpdateViewportInput, ViewportReceipt,
 };
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::workspace_repository as repo;
@@ -159,6 +160,12 @@ pub enum MutationOutcome {
     DuplicateBoardReceipt(DuplicateBoardReceipt),
     EmptyTrash(EmptyTrashResult),
     LinkBatch(CreateLinkBatchResult),
+    /// Card-level writes (P1.5): the revision read back in the transaction.
+    CardReceipt(CardReceipt),
+    /// Text writes: revision plus the backend-derived plain text.
+    TextReceipt(TextReceipt),
+    CardsReceipt(CardsReceipt),
+    ViewportReceipt(ViewportReceipt),
 }
 
 fn unexpected(what: &str) -> WorkspaceError {
@@ -222,6 +229,30 @@ impl MutationOutcome {
             _ => Err(unexpected("link-batch result")),
         }
     }
+    pub fn into_card_receipt(self) -> Result<CardReceipt, WorkspaceError> {
+        match self {
+            Self::CardReceipt(r) => Ok(r),
+            _ => Err(unexpected("card receipt")),
+        }
+    }
+    pub fn into_text_receipt(self) -> Result<TextReceipt, WorkspaceError> {
+        match self {
+            Self::TextReceipt(r) => Ok(r),
+            _ => Err(unexpected("text receipt")),
+        }
+    }
+    pub fn into_cards_receipt(self) -> Result<CardsReceipt, WorkspaceError> {
+        match self {
+            Self::CardsReceipt(r) => Ok(r),
+            _ => Err(unexpected("cards receipt")),
+        }
+    }
+    pub fn into_viewport_receipt(self) -> Result<ViewportReceipt, WorkspaceError> {
+        match self {
+            Self::ViewportReceipt(r) => Ok(r),
+            _ => Err(unexpected("viewport receipt")),
+        }
+    }
 }
 
 impl Mutation {
@@ -281,32 +312,32 @@ impl Mutation {
     ) -> Result<MutationOutcome, WorkspaceError> {
         use MutationOutcome as Out;
         match self {
-            Self::CreateNote(input) => repo::create_note(conn, input).map(|_| Out::Unit),
+            Self::CreateNote(input) => repo::create_note(conn, input).map(Out::CardReceipt),
             Self::CreateImageCard(input) => repo::create_image_card(conn, input).map(|_| Out::Unit),
             Self::CreateBoardShortcut(input) => {
                 repo::create_board_shortcut(conn, input).map(Out::Card)
             }
-            Self::UpdateNote(input) => repo::update_note(conn, input).map(|_| Out::Unit),
+            Self::UpdateNote(input) => repo::update_note(conn, input).map(Out::TextReceipt),
             Self::SetNoteColor(input) => repo::set_note_color(conn, input).map(|_| Out::Unit),
             Self::UpdateImageCaption(input) => {
-                repo::update_image_caption(conn, input).map(|_| Out::Unit)
+                repo::update_image_caption(conn, input).map(Out::TextReceipt)
             }
-            Self::MoveCard(input) => repo::update_card_frame(conn, input).map(|_| Out::Unit),
-            Self::MoveCards(input) => repo::move_cards(conn, input).map(|_| Out::Unit),
+            Self::MoveCard(input) => repo::update_card_frame(conn, input).map(Out::CardReceipt),
+            Self::MoveCards(input) => repo::move_cards(conn, input).map(Out::CardsReceipt),
             Self::MoveCardToBoard(input) => {
-                repo::move_card_to_board(conn, input).map(|_| Out::Unit)
+                repo::move_card_to_board(conn, input).map(Out::CardReceipt)
             }
             Self::MoveCardsToBoardUnsorted(input) => {
-                repo::move_cards_to_board_unsorted(conn, input).map(|_| Out::Unit)
+                repo::move_cards_to_board_unsorted(conn, input).map(Out::CardsReceipt)
             }
             Self::PlaceUnsortedCard(input) => {
-                repo::place_unsorted_card(conn, input).map(|_| Out::Unit)
+                repo::place_unsorted_card(conn, input).map(Out::CardReceipt)
             }
             Self::ConvertNoteToEmbed(input) => {
                 repo::convert_note_to_embed(conn, input).map(|c| Out::Embed(Box::new(c)))
             }
             Self::UpdateEmbedDescription(input) => {
-                repo::update_embed_description(conn, input).map(|_| Out::Unit)
+                repo::update_embed_description(conn, input).map(Out::TextReceipt)
             }
             Self::MoveSelectionToBoard(input) => {
                 move_selection::move_selection_to_board(conn, input).map(Out::MoveSelectionReceipt)
@@ -315,7 +346,9 @@ impl Mutation {
                 move_selection::undo_move_selection(conn, receipt).map(|_| Out::Unit)
             }
 
-            Self::SaveViewport(input) => repo::update_viewport(conn, input).map(|_| Out::Unit),
+            Self::SaveViewport(input) => {
+                repo::update_viewport(conn, input).map(Out::ViewportReceipt)
+            }
             Self::CreateChildBoard(input) => {
                 board_service::create_child_board(conn, input).map(|_| Out::Unit)
             }

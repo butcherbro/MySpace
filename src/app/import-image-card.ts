@@ -28,6 +28,5 @@ export function buildCreateImageCardInput(params: ImageCardInputParams): CreateI
     zIndex: params.zIndex,
     assetId: params.asset.id,
     captionJson: params.captionJson,
-    captionPlainText: "",
   };
 }

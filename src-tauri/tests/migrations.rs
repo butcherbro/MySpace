@@ -606,3 +606,86 @@ fn migration_0020_adds_asset_sha256_and_its_partial_index() {
         .unwrap();
     assert_eq!(recorded, 1);
 }
+
+#[test]
+fn migration_0022_creates_search_index_and_backfills_existing_rows() {
+    assert!(
+        migrations::MIGRATIONS
+            .iter()
+            .any(|m| m.version == 22 && m.name == "search_index"),
+        "migration 0022 is registered"
+    );
+
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 22) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(migration.sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at)
+             VALUES ('home', 'ws', NULL, 'Home', 'default', NULL, 1, 0, 0);
+         INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at)
+             VALUES ('n1', 'home', 'note', 0, 0, 200, 80, 0, 0),
+                    ('n2', 'home', 'note', 0, 0, 200, 80, 0, 0),
+                    ('e1', 'home', 'embed', 0, 0, 200, 80, 0, 0),
+                    ('fa1', 'home', 'filesystem_alias', 0, 0, 200, 80, 0, 0);
+         UPDATE cards SET deleted_at = 5 WHERE id = 'n2';
+         INSERT INTO note_cards (card_id, document_json, plain_text) VALUES ('n1', '{}', 'Legacy galaxy note'), ('n2', '{}', 'Trashed galaxy');
+         INSERT INTO embed_cards (card_id, source_url, display_url, title, description_plain_text)
+             VALUES ('e1', 'https://example.com/a', 'example.com/a', 'Galaxy link', 'about stars');
+         INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name)
+             VALUES ('fa1', 'folder', x'00', '/Volumes/Galaxy', 'Footage');",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let indexed: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT entity_id, kind FROM search_index ORDER BY entity_id")
+            .unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(
+        indexed,
+        vec![
+            ("e1".to_string(), "embed".to_string()),
+            ("fa1".to_string(), "filesystem_alias".to_string()),
+            ("home".to_string(), "board".to_string()),
+            ("n1".to_string(), "note".to_string()),
+            ("n2".to_string(), "note".to_string()),
+        ],
+        "every pre-existing searchable row is indexed, trashed ones included"
+    );
+
+    let matched: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM search_index WHERE search_index MATCH '\"galax\"*'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(matched, 4, "n1, n2, e1 (title) and fa1 (path hint)");
+
+    // Search itself excludes the trashed note at query time.
+    let ids: Vec<String> =
+        myspace_lib::repositories::workspace_repository::search_workspace(&conn, "galaxy")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.entity_id)
+            .collect();
+    assert_eq!(ids.len(), 3);
+    assert!(!ids.contains(&"n2".to_string()));
+}

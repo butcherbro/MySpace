@@ -1,16 +1,20 @@
 //! `embed` (Link) cards: a URL with optional fetched/custom preview and
 //! favicon assets and a versioned rich-text description (`embed_cards`).
 
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension, Row, Transaction};
 
 use super::{
     asset_at, asset_columns, card_frame, json_at, load_board_rows, load_one_row, DetailTable,
     AFTER_CARD, ASSET_WIDTH, CARD_COLUMNS,
 };
-use crate::domain::card_kind::{CardKind, CardKindHandler, CopyContext, SearchHit};
+use crate::domain::card_kind::{
+    CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
+};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CardDto, EmbedCardDto};
-use crate::repositories::search::{contains_query, rank_and_truncate, search_excerpt};
+use crate::repositories::search::{query_by_ids, search_excerpt};
 
 pub struct EmbedHandler;
 
@@ -132,72 +136,55 @@ impl CardKindHandler for EmbedHandler {
         &self,
         conn: &Connection,
         query: &str,
-        limit: usize,
+        candidates: &[SearchCandidate],
     ) -> Result<Vec<SearchHit>, WorkspaceError> {
-        let q = query.to_lowercase();
-        let preview = 7;
+        let title_hits: HashMap<&str, bool> = candidates
+            .iter()
+            .map(|c| (c.entity_id.as_str(), c.title_hit))
+            .collect();
+        let ids: Vec<&str> = title_hits.keys().copied().collect();
+        let preview = 6;
         let favicon = preview + ASSET_WIDTH;
-        let mut stmt = conn.prepare(&format!(
-            "SELECT c.id, c.board_id, e.title, e.source_url, e.display_url, e.description_plain_text,
-                    c.created_at, {preview_cols}, {favicon_cols}
-             FROM cards c
-             JOIN embed_cards e ON e.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             LEFT JOIN assets pa ON pa.id = e.asset_id
-             LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
-             WHERE c.deleted_at IS NULL",
-            preview_cols = asset_columns("pa"),
-            favicon_cols = asset_columns("fa"),
-        ))?;
-        let rows = stmt.query_map([], |row| {
-            let thumb = asset_at(row, preview)?.or(asset_at(row, favicon)?);
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, i64>(6)?,
-                thumb,
-            ))
-        })?;
-        let mut hits = Vec::new();
-        for r in rows {
-            let (id, board_id, title_raw, source_url, display_url, description, created_at, thumb) =
-                r?;
-            let title = title_raw
-                .filter(|t| !t.trim().is_empty())
-                .unwrap_or_else(|| source_url.clone());
-
-            let title_match = contains_query(&title, &q);
-            let source_match = contains_query(&source_url, &q);
-            let display_match = contains_query(&display_url, &q);
-            let desc_match = contains_query(&description, &q);
-
-            if !(title_match || source_match || display_match || desc_match) {
-                continue;
-            }
-
-            let (rank, excerpt) = if title_match || source_match || display_match {
-                (0, None)
-            } else {
-                (2, Some(search_excerpt(&description, query)))
-            };
-
-            hits.push(SearchHit {
-                entity_id: id,
-                kind: "link",
-                title,
-                excerpt,
-                board_id,
-                rank,
-                thumbnail_asset: thumb,
-                created_at,
-            });
-        }
-        rank_and_truncate(&mut hits, limit);
-        Ok(hits)
+        query_by_ids(
+            conn,
+            &format!(
+                "SELECT c.id, c.board_id, e.title, e.source_url, e.description_plain_text,
+                        c.created_at, {preview_cols}, {favicon_cols}
+                 FROM cards c
+                 JOIN embed_cards e ON e.card_id = c.id
+                 LEFT JOIN assets pa ON pa.id = e.asset_id
+                 LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
+                 WHERE c.id",
+                preview_cols = asset_columns("pa"),
+                favicon_cols = asset_columns("fa"),
+            ),
+            &ids,
+            |row| {
+                let id: String = row.get(0)?;
+                let title_raw: Option<String> = row.get(2)?;
+                let source_url: String = row.get(3)?;
+                let description: String = row.get(4)?;
+                let title = title_raw
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or(source_url);
+                // Title, source URL and display URL are the title-level text.
+                let (rank, excerpt) = if title_hits.get(id.as_str()).copied().unwrap_or(false) {
+                    (0, None)
+                } else {
+                    (2, Some(search_excerpt(&description, query)))
+                };
+                Ok(SearchHit {
+                    entity_id: id,
+                    kind: "link",
+                    title,
+                    excerpt,
+                    board_id: row.get(1)?,
+                    rank,
+                    thumbnail_asset: asset_at(row, preview)?.or(asset_at(row, favicon)?),
+                    created_at: row.get(5)?,
+                })
+            },
+        )
     }
 
     fn asset_refs(&self) -> &'static [(&'static str, &'static str)] {

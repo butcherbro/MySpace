@@ -58,8 +58,7 @@ impl TestWorkspace {
                     height: 180.0,
                 },
                 z_index: 1,
-                document_json: serde_json::json!({"type":"doc"}),
-                plain_text: url.to_string(),
+                document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": url.to_string()}]}]}),
             }))
             .unwrap();
         let embed = self
@@ -71,7 +70,6 @@ impl TestWorkspace {
                 display_url: url.to_string(),
                 title: url.to_string(),
                 description_json: serde_json::json!({"type":"doc","content":[{"type":"paragraph"}]}),
-                description_plain_text: String::new(),
             }))
             .unwrap()
             .into_embed()
@@ -344,8 +342,7 @@ fn a_stale_apply_discards_staged_files_and_records_no_rows() {
         UpdateEmbedDescriptionInput {
             id: "link-card".to_string(),
             expected_revision: revision,
-            description_json: serde_json::json!({"type":"doc"}),
-            description_plain_text: "edited".to_string(),
+            description_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "edited"}]}]}),
         },
     ))
     .unwrap();
@@ -369,7 +366,6 @@ fn enrich_preserves_a_user_authored_description() {
             id: "link-card".to_string(),
             expected_revision: revision,
             description_json: serde_json::json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"мой комментарий"}]}]}),
-            description_plain_text: "мой комментарий".to_string(),
         }))
         .unwrap();
 

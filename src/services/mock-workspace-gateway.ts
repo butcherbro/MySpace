@@ -7,6 +7,8 @@ import type {
   BoardSnapshot,
   BoardSummary,
   CardDto,
+  CardReceipt,
+  CardsReceipt,
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateBoardShortcutInput,
@@ -38,15 +40,18 @@ import type {
   SearchResultDto,
   SetBoardCoverInput,
   SetNoteColorInput,
+  TextReceipt,
   TrashEntryDto,
   TrashSelectionInput,
   TrashSummaryDto,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
+  ViewportReceipt,
   WorkspaceGateway,
 } from "./workspace-gateway";
 import { denseBoardSnapshot } from "../test/dense-board-fixture";
+import { documentToPlainText } from "../editor/document-codec";
 
 /**
  * In-memory gateway for browser-mode tests and fixtures. It keeps a single
@@ -160,7 +165,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     });
   }
 
-  createNote(input: CreateNoteInput): Promise<void> {
+  createNote(input: CreateNoteInput): Promise<CardReceipt> {
+    const plainText = documentToPlainText(input.documentJson);
     const card = {
       kind: "note" as const,
       id: input.id,
@@ -169,14 +175,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: input.zIndex,
       revision: 1,
       documentJson: input.documentJson,
-      plainText: input.plainText,
+      plainText,
       colorToken: "default",
     };
     this.snapshot.cards.push(card);
-    return Promise.resolve();
+    return Promise.resolve({ id: card.id, revision: card.revision });
   }
 
-  updateNote(input: UpdateNoteInput): Promise<void> {
+  updateNote(input: UpdateNoteInput): Promise<TextReceipt> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "note" && c.id === input.id,
     );
@@ -188,11 +194,11 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     card.documentJson = input.documentJson;
-    card.plainText = input.plainText;
-    return Promise.resolve();
+    card.plainText = documentToPlainText(input.documentJson);
+    return Promise.resolve({ id: card.id, revision: card.revision, plainText: card.plainText });
   }
 
-  moveCard(input: MoveCardInput): Promise<void> {
+  moveCard(input: MoveCardInput): Promise<CardReceipt> {
     const card = this.snapshot.cards.find((c) => c.id === input.id);
     if (!card) {
       return Promise.reject(new Error(`card not found: ${input.id}`));
@@ -202,10 +208,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     card.frame = { ...input.frame };
-    return Promise.resolve();
+    return Promise.resolve({ id: card.id, revision: card.revision });
   }
 
-  moveCards(input: MoveCardsInput): Promise<void> {
+  moveCards(input: MoveCardsInput): Promise<CardsReceipt> {
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id);
       if (!card) {
@@ -215,15 +221,17 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(new Error(`stale revision for ${item.id}`));
       }
     }
+    const receipts: CardReceipt[] = [];
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id)!;
       card.revision += 1;
       card.frame = { ...item.frame };
+      receipts.push({ id: card.id, revision: card.revision });
     }
-    return Promise.resolve();
+    return Promise.resolve({ cards: receipts });
   }
 
-  moveCardToBoard(input: MoveCardToBoardInput): Promise<void> {
+  moveCardToBoard(input: MoveCardToBoardInput): Promise<CardReceipt> {
     const card = this.snapshot.cards.find((c) => c.id === input.id);
     if (!card) {
       return Promise.reject(new Error(`card not found: ${input.id}`));
@@ -236,7 +244,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     card.frame = input.frame
       ? { ...card.frame, x: input.frame.x, y: input.frame.y }
       : { ...card.frame, x: 40, y: 40 };
-    return Promise.resolve();
+    return Promise.resolve({ id: card.id, revision: card.revision });
   }
 
   moveBoard(input: MoveBoardInput): Promise<void> {
@@ -275,7 +283,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve();
   }
 
-  saveViewport(input: SaveViewportInput): Promise<void> {
+  saveViewport(input: SaveViewportInput): Promise<ViewportReceipt> {
     if (this.snapshot.viewport.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for viewport`));
     }
@@ -285,7 +293,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zoom: input.zoom,
       revision: this.snapshot.viewport.revision + 1,
     };
-    return Promise.resolve();
+    return Promise.resolve({ revision: this.snapshot.viewport.revision });
   }
 
   createChildBoard(input: CreateChildBoardInput): Promise<void> {
@@ -507,7 +515,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         sha256: null,
       },
       captionJson: input.captionJson,
-      captionPlainText: input.captionPlainText,
+      captionPlainText: documentToPlainText(input.captionJson),
     };
     this.snapshot.cards.push(card);
     return Promise.resolve();
@@ -675,7 +683,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return card ? Promise.resolve() : Promise.reject(new Error(`file card not found: ${cardId}`));
   }
 
-  updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<TextReceipt> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "image" && c.id === input.id,
     );
@@ -687,11 +695,11 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     card.captionJson = input.captionJson;
-    card.captionPlainText = input.captionPlainText;
-    return Promise.resolve();
+    card.captionPlainText = documentToPlainText(input.captionJson);
+    return Promise.resolve({ id: card.id, revision: card.revision, plainText: card.captionPlainText });
   }
 
-  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void> {
+  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<TextReceipt> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "embed" && c.id === input.id,
     );
@@ -703,8 +711,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     card.descriptionJson = input.descriptionJson;
-    card.descriptionPlainText = input.descriptionPlainText;
-    return Promise.resolve();
+    card.descriptionPlainText = documentToPlainText(input.descriptionJson);
+    return Promise.resolve({ id: card.id, revision: card.revision, plainText: card.descriptionPlainText });
   }
 
   convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto> {
@@ -721,6 +729,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (note.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for ${input.id}`));
     }
+    const descriptionPlainText = documentToPlainText(input.descriptionJson);
     const embed: EmbedCardDto = {
       kind: "embed",
       id: input.id,
@@ -734,8 +743,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       title: input.title,
       provider: null,
       descriptionJson: input.descriptionJson,
-      descriptionPlainText: input.descriptionPlainText,
-      descriptionOrigin: input.descriptionPlainText ? "user" : null,
+      descriptionPlainText,
+      descriptionOrigin: descriptionPlainText ? "user" : null,
       faviconAsset: null,
       previewAsset: null,
       previewOrigin: null,
@@ -1137,7 +1146,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve();
   }
 
-  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void> {
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<CardsReceipt> {
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id);
       if (!card) return Promise.reject(new Error(`card not found: ${item.id}`));
@@ -1145,14 +1154,16 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(new Error(`stale revision for ${item.id}`));
       }
     }
+    const receipts: CardReceipt[] = [];
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id)!;
       card.revision += 1;
       card.boardId = input.targetBoardId;
       // Unsorted cards are hidden from the canvas; the rail shows them.
       (card as { unsorted?: boolean }).unsorted = true;
+      receipts.push({ id: card.id, revision: card.revision });
     }
-    return Promise.resolve();
+    return Promise.resolve({ cards: receipts });
   }
   // Atomic mixed-selection move (ADR-0007). The backend performs this in one
   // transaction; the mock validates every member before mutating anything, so the
@@ -1303,7 +1314,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
 
-  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<CardReceipt> {
     const card = this.snapshot.cards.find((c) => c.id === input.id);
     if (!card) return Promise.reject(new Error(`card not found: ${input.id}`));
     if (card.revision !== input.expectedRevision) {
@@ -1312,7 +1323,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     card.revision += 1;
     (card as { unsorted?: boolean }).unsorted = false;
     card.frame = { ...input.frame };
-    return Promise.resolve();
+    return Promise.resolve({ id: card.id, revision: card.revision });
   }
 
   listBackups(): Promise<BackupSummary[]> {
