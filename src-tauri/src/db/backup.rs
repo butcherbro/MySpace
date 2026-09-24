@@ -95,8 +95,9 @@ fn backup_database(src: &Connection, dest: &Path) -> Result<(), rusqlite::Error>
     Ok(())
 }
 
-/// Copies an individual file, returning an error on failure (unlike the previous
-/// best-effort sweep) so a snapshot with missing assets is not published as valid.
+/// Copies an individual file, returning an error on failure. Callers treat a
+/// `NotFound` source as a non-fatal missing asset and anything else as a real
+/// I/O error.
 fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
@@ -106,13 +107,16 @@ fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 /// Copies every asset referenced by the live DB into `assets/` under `dest`.
-/// Returns the number of assets copied. Missing asset files are recorded as an
-/// error so the snapshot is not published as valid.
+/// Returns the number of assets copied and the relative paths of any asset
+/// files that were missing on disk. A missing file is recorded as a warning,
+/// not a hard failure, so the loss of one asset does not block the whole
+/// snapshot (including the DB, which is what matters most for recovery).
+/// Real I/O errors (e.g. permission denied) still fail the snapshot.
 fn copy_referenced_assets(
     conn: &Connection,
     assets_dir: &Path,
     dest: &Path,
-) -> Result<i64, String> {
+) -> Result<(i64, Vec<String>), String> {
     let paths: Vec<String> = {
         let mut stmt = conn
             .prepare("SELECT file_path FROM assets")
@@ -125,15 +129,18 @@ fn copy_referenced_assets(
     };
 
     let mut count: i64 = 0;
+    let mut missing: Vec<String> = Vec::new();
     for rel in paths {
         let src = assets_dir.join(&rel);
-        if !src.exists() {
-            return Err(format!("asset missing: {rel}"));
+        match copy_file(&src, &dest.join("assets").join(&rel)) {
+            Ok(()) => count += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(rel);
+            }
+            Err(e) => return Err(e.to_string()),
         }
-        copy_file(&src, &dest.join("assets").join(&rel)).map_err(|e| e.to_string())?;
-        count += 1;
     }
-    Ok(count)
+    Ok((count, missing))
 }
 
 /// Returns the current schema version (max applied migration).
@@ -205,47 +212,65 @@ fn within_rate_limit(backup_root: &Path) -> bool {
     now_secs().saturating_sub(ts) < RATE_LIMIT_SECONDS
 }
 
-/// Creates one validated, atomic snapshot into `backup_root` and returns the
-/// final snapshot directory path on success. Staging, validation, asset copy, and
-/// manifest write all fail the snapshot (no partial success).
+/// The outcome of a successfully published snapshot.
+pub struct SnapshotReport {
+    /// The final snapshot directory.
+    pub dir: PathBuf,
+    /// Relative paths of referenced asset files that were missing on disk.
+    /// Non-fatal: the snapshot is still published with `"validation": "ok"`.
+    pub missing_assets: Vec<String>,
+}
+
+/// Creates one validated, atomic snapshot into `backup_root` and returns a
+/// report of the final snapshot directory (and any missing assets) on success.
+/// Staging, validation (integrity/foreign-key checks) and manifest write all
+/// fail the snapshot (no partial success); a missing asset file does not.
 fn create_snapshot(
     db_path: &Path,
     assets_dir: &Path,
     backup_root: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<SnapshotReport, String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let staging = backup_root.join(format!(".staging-{}", uuid::Uuid::now_v7()));
     fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
 
-    let result = (|| -> Result<(), String> {
+    let result = (|| -> Result<Vec<String>, String> {
         let dest_db = staging.join("workspace.sqlite3");
         backup_database(&conn, &dest_db).map_err(|e| e.to_string())?;
 
         let snap = Connection::open(&dest_db).map_err(|e| e.to_string())?;
         validate_snapshot(&snap)?;
-        let asset_count = copy_referenced_assets(&snap, assets_dir, &staging)?;
+        let (asset_count, missing_assets) = copy_referenced_assets(&snap, assets_dir, &staging)?;
 
         let manifest = serde_json::json!({
             "timestamp_secs": now_secs(),
             "schema_version": schema_version(&conn),
             "asset_count": asset_count,
+            "missing_assets": missing_assets,
+            "missing_asset_count": missing_assets.len(),
             "validation": "ok",
         });
         let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
         fs::write(staging.join("manifest.json"), manifest_bytes).map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(missing_assets)
     })();
 
-    if let Err(e) = result {
-        let _ = fs::remove_dir_all(&staging);
-        return Err(e);
-    }
+    let missing_assets = match result {
+        Ok(missing) => missing,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+    };
 
     let final_dir = backup_root.join(snapshot_dir_name());
     fs::rename(&staging, &final_dir).map_err(|e| e.to_string())?;
     prune_old_backups(backup_root);
-    Ok(final_dir)
+    Ok(SnapshotReport {
+        dir: final_dir,
+        missing_assets,
+    })
 }
 
 /// Performs a full, validated, atomic startup snapshot. Best-effort: never panics
@@ -258,17 +283,25 @@ pub fn snapshot_on_startup(db_path: &Path, assets_dir: &Path, backup_root: &Path
     if within_rate_limit(backup_root) {
         return;
     }
-    let _ = create_snapshot(db_path, assets_dir, backup_root);
+    if let Ok(report) = create_snapshot(db_path, assets_dir, backup_root) {
+        if !report.missing_assets.is_empty() {
+            eprintln!(
+                "backup: {} referenced asset file(s) missing",
+                report.missing_assets.len()
+            );
+        }
+    }
 }
 
 /// Creates a synchronous, validated snapshot for a destructive operation,
-/// bypassing the startup rate limit. Returns the snapshot directory, or an error
-/// which the caller must treat as a hard stop before mutating data.
+/// bypassing the startup rate limit. Returns a report of the snapshot directory
+/// (and any missing assets), or an error which the caller must treat as a hard
+/// stop before mutating data.
 pub fn snapshot_before_destructive_operation(
     db_path: &Path,
     assets_dir: &Path,
     backup_root: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<SnapshotReport, String> {
     create_snapshot(db_path, assets_dir, backup_root)
 }
 

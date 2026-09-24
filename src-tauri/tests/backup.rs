@@ -59,6 +59,8 @@ fn snapshot_is_a_consistent_standalone_database() {
     let manifest_json: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
     assert_eq!(manifest_json["validation"], "ok");
+    assert_eq!(manifest_json["missing_asset_count"], 0);
+    assert_eq!(manifest_json["missing_assets"], serde_json::json!([]));
 
     // Open the snapshot and verify it is valid and contains the row.
     let snap = rusqlite::Connection::open(&snapshot_db).unwrap();
@@ -73,6 +75,77 @@ fn snapshot_is_a_consistent_standalone_database() {
         })
         .unwrap();
     assert_eq!(title, "Home");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn snapshot_still_publishes_when_one_asset_file_is_missing() {
+    // A missing referenced asset file must not block the whole snapshot (the
+    // DB is still consistent and is what matters most for recovery); it is
+    // recorded as a warning in the manifest instead.
+    let root = temp_dir("missing-asset");
+    let db_path = root.join("workspace.sqlite3");
+    let assets = root.join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+
+    {
+        let mut conn = open_in_memory().unwrap();
+        migrations::run_migrations(&mut conn).unwrap();
+
+        // Two referenced assets: one present on disk, one missing.
+        conn.execute(
+            "INSERT INTO assets (id, file_path, mime_type, file_name, size_bytes, created_at)
+             VALUES ('a-present', 'present.png', 'image/png', 'present.png', 3, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assets (id, file_path, mime_type, file_name, size_bytes, created_at)
+             VALUES ('a-missing', 'missing.png', 'image/png', 'missing.png', 3, 0)",
+            [],
+        )
+        .unwrap();
+
+        let mut file_conn = rusqlite::Connection::open(&db_path).unwrap();
+        {
+            let bk = rusqlite::backup::Backup::new(&conn, &mut file_conn).unwrap();
+            bk.run_to_completion(100, std::time::Duration::from_millis(10), None)
+                .unwrap();
+        }
+    }
+
+    // Only the present asset actually exists on disk.
+    std::fs::write(assets.join("present.png"), b"abc").unwrap();
+
+    let backup_root = root.join("backups");
+    backup::snapshot_on_startup(&db_path, &assets, &backup_root);
+
+    let entries: Vec<_> = std::fs::read_dir(&backup_root)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "a missing asset file must not block publishing the snapshot"
+    );
+
+    let snapshot_dir = backup_root.join(entries[0].file_name());
+    let manifest_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(snapshot_dir.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest_json["validation"], "ok");
+    assert_eq!(manifest_json["missing_asset_count"], 1);
+    assert_eq!(
+        manifest_json["missing_assets"],
+        serde_json::json!(["missing.png"])
+    );
+
+    // The present asset was still copied into the snapshot.
+    assert!(snapshot_dir.join("assets").join("present.png").exists());
+    assert!(!snapshot_dir.join("assets").join("missing.png").exists());
 
     std::fs::remove_dir_all(&root).ok();
 }
