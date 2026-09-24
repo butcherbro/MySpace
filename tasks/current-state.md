@@ -7,6 +7,17 @@
 > Nothing here is a claim without a run behind it. When status changes, the
 > evidence in the report is refreshed in the same commit.
 
+## 2026-09-24 update (read this first)
+
+The stabilization branch is merged into `main`; the status below the next
+heading describes 2026-09-13 and is kept for history. Current work is on
+`claude/awesome-goodall-4tfsko`: the architecture audit
+(`docs/audits/2026-09-24-architecture-audit.md`) and its P0 fixes are done with
+every gate green (cargo fmt / clippy `-D warnings` / test, vitest 451, e2e 57).
+Next is P1 per `docs/plans/2026-09-24-p1-scalability-and-sync-readiness.md`,
+shaped for device sync (ADR-0011, accepted). Backlog status lives in
+`tasks/todo.md` → «Архитектурный аудит 2026-09-24».
+
 ## Where V1 stands
 
 The stabilization plan `docs/plans/2026-09-11-v1-stabilization-and-debt-paydown.md`

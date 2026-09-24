@@ -1,6 +1,6 @@
 # ADR-0011: Device sync — direction and what the data layer must prepare now
 
-- **Status:** Proposed (direction only; no sync code in this ADR)
+- **Status:** Accepted 2026-09-24 (direction; implementation plan in `docs/plans/2026-09-24-p1-scalability-and-sync-readiness.md`)
 - **Date:** 2026-09-24
 - **Context:** the user wants the same workspace on a second Mac (same Wi-Fi,
   over the internet, or through a web surface later). Not a priority today, but
