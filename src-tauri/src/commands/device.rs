@@ -25,13 +25,21 @@ pub async fn get_device_identity(
 #[tauri::command]
 pub async fn rename_device(
     ws: State<'_, Workspace>,
+    lan: State<'_, crate::commands::sync::LanState>,
     name: String,
 ) -> Result<DeviceIdentity, WorkspaceError> {
     let ws = ws.inner().clone();
+    let lan = lan.lan.clone();
     instrument_async("rename_device", async move {
-        ws.apply(Mutation::RenameDevice { name })
+        let identity = ws
+            .apply(Mutation::RenameDevice { name })
             .await?
-            .into_device()
+            .into_device()?;
+        // Re-advertise the new name on the LAN (S3).
+        if let Some(lan) = lan {
+            lan.device_renamed().await;
+        }
+        Ok(identity)
     })
     .await
 }

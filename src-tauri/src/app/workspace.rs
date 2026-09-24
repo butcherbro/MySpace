@@ -39,7 +39,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Notify};
 
 use crate::db;
 use crate::domain::errors::WorkspaceError;
@@ -149,6 +149,10 @@ struct Inner {
     writer: Mutex<mpsc::Sender<WriterJob>>,
     readers: ReadPool,
     paths: WorkspacePaths,
+    /// Signalled after every committed journaled mutation (S3: the LAN sync
+    /// loop pulls and pokes its peers). Replays and local-only writes do not
+    /// signal it.
+    local_writes: Arc<Notify>,
 }
 
 /// Cheap-to-clone handle to the process's single workspace. Managed by Tauri as
@@ -192,9 +196,11 @@ impl Workspace {
 
         let (tx, rx) = mpsc::channel::<WriterJob>();
         let writer_paths = paths.clone();
+        let local_writes = Arc::new(Notify::new());
+        let writer_notify = local_writes.clone();
         thread::Builder::new()
             .name("myspace-writer".into())
-            .spawn(move || writer_loop(writer_conn, rx, writer_paths))
+            .spawn(move || writer_loop(writer_conn, rx, writer_paths, writer_notify))
             .map_err(|e| WorkspaceError::Database(format!("cannot start writer thread: {e}")))?;
 
         Ok(Self {
@@ -205,12 +211,18 @@ impl Workspace {
                     available: Condvar::new(),
                 },
                 paths,
+                local_writes,
             }),
         })
     }
 
     pub fn paths(&self) -> &WorkspacePaths {
         &self.inner.paths
+    }
+
+    /// Notified after each committed journaled write of this process.
+    pub fn local_writes(&self) -> Arc<Notify> {
+        self.inner.local_writes.clone()
     }
 
     // ---- writes -----------------------------------------------------------
@@ -325,7 +337,12 @@ fn open_reader(db_path: &Path) -> Result<Connection, WorkspaceError> {
     Ok(db::open_readonly_checked(db_path)?)
 }
 
-fn writer_loop(mut conn: Connection, rx: mpsc::Receiver<WriterJob>, paths: WorkspacePaths) {
+fn writer_loop(
+    mut conn: Connection,
+    rx: mpsc::Receiver<WriterJob>,
+    paths: WorkspacePaths,
+    local_writes: Arc<Notify>,
+) {
     while let Ok(job) = rx.recv() {
         match job {
             WriterJob::Inspect { job } => job(&conn),
@@ -335,6 +352,9 @@ fn writer_loop(mut conn: Connection, rx: mpsc::Receiver<WriterJob>, paths: Works
                 enqueued,
             } => {
                 let outcome = run_mutation(&mut conn, &mutation, &paths, enqueued);
+                if outcome.is_ok() && mutation.is_journaled() {
+                    local_writes.notify_one();
+                }
                 if reply.send(outcome).is_err() {
                     // Detached job or the caller went away: nothing to deliver.
                 }

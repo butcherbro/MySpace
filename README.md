@@ -74,6 +74,61 @@ folder in and open it, open/reveal a File Card, "Copy File Path" and "Copy
 Image" then paste into Explorer/a chat app, paste `C:\…` and a quoted
 path onto the canvas, check that images and `.md`/`.html` previews load.
 
+## Sync (LAN)
+
+Two computers on the same network (the Mac and the Windows PC on one Wi-Fi)
+keep one workspace in step, peer to peer, with no server (ADR-0011 S3). Both
+apps must be running; each pulls what it lacks from the other, so an edit on
+one shows up on the other within about a second (a few seconds at most).
+
+**Pairing (once per pair of computers):**
+
+1. On computer A: Trash → **Devices…** (or the sync pill right of the search
+   box) → **Pair a device**. A 6-digit code appears, valid for 5 minutes.
+2. On computer B: open **Devices…**; A is listed under *On this network*.
+   Click **Pair…**, type A's code, **Pair**.
+3. Both now list each other under *Paired devices* and sync right away. A
+   green dot means the last contact worked; *Last sync* and the last error
+   are shown per device; **Sync now** runs a pass immediately; **Unpair**
+   stops trusting the other device (its requests are refused from then on).
+
+If B does not see A (mDNS blocked, guest Wi-Fi with client isolation, a VPN),
+type A's address under **Add by address**: A's Devices dialog shows it as
+`ip:port` (the port is chosen at random each time the app starts; a paired
+device's address is remembered and refreshed on each contact).
+
+**Windows firewall:** the first time MySpace starts on Windows, Windows asks
+whether to allow it on networks. Allow **Private networks** (the home Wi-Fi
+must be set to *Private* in Windows settings; on a *Public* network Windows
+blocks incoming connections and mDNS, and the Mac will not reach the PC).
+macOS may ask "Allow incoming network connections?" once; answer Allow.
+
+**What is synced:** boards, all card kinds, notes, captions, trash and
+restore, Empty Trash (a purge is final everywhere), board covers, Quick
+Boards, and the asset files (images, file cards, previews, favicons; fetched
+by SHA-256 and verified). **What is not:** device-local state (ADR-0011,
+ADR-0012 `LOCAL_ONLY_TABLES`): the viewport of each board, folder shortcut
+locators (a shortcut made on the Mac shows as "On <Mac>" on the PC until you
+point it at a folder there), device names (each device learns the other's
+name when they talk), and the pairing itself.
+
+**Security model.** Each device has its own self-signed TLS certificate
+(stored in its database, `local_meta`); its SHA-256 fingerprint is the
+device's identity. All traffic is TLS 1.3 with client certificates both ways;
+a request is served only if the client certificate's fingerprint is a paired
+device's. Pairing exchanges fingerprints under HMAC proofs keyed by the
+6-digit code (5 attempts per code, then it is void). Someone else on the same
+Wi-Fi can see that MySpace runs here (device name, id and fingerprint are
+advertised by mDNS) and can try to pair while a code is shown (5 guesses out
+of a million); they cannot read or change the workspace without being paired.
+A code is only as secret as the screen it is shown on, and an attacker who can
+actively intercept traffic *during* the pairing minute could brute-force the
+code offline from the proof and pair in the middle (a PAKE would close this;
+see `tasks/todo.md`). After pairing, fingerprints are pinned: interception is
+detected. The private key lives in the workspace database, so a backup of the
+database contains it; a database copied to another machine gets a new device
+id and a new certificate.
+
 ## Quality gates
 
 ```bash

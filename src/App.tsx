@@ -38,6 +38,9 @@ import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
 import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
 import { RestoreDialog } from "./backup/restore-dialog";
+import { DevicesDialog } from "./sync/DevicesDialog";
+import { SyncStatusPill } from "./sync/SyncStatusPill";
+import { useSyncAppliedReload } from "./sync/use-sync-state";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
 import { SearchBar } from "./search/SearchBar";
 import { useSearchController } from "./search/use-search-controller";
@@ -269,6 +272,7 @@ function App() {
   const trashOpen = trash.open;
   const closeTrashDrawer = trash.closeDrawer;
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [devicesDialogOpen, setDevicesDialogOpen] = useState(false);
   useEffect(() => {
     loadQuickBoards();
   }, [loadQuickBoards]);
@@ -2105,6 +2109,16 @@ function App() {
     };
   }, [gateway, openBoardId, navigateTo, refreshTrash]);
 
+  // LAN sync (ADR-0011 S3): a replay commits on the app's own writer, so the
+  // poll above never sees it; `sync-applied` names the boards it changed and
+  // the open one reloads through the same same-board merge.
+  useSyncAppliedReload(
+    gateway,
+    openBoardId,
+    (boardId) => void navigateTo(boardId),
+    () => void refreshTrash(),
+  );
+
   const handleRenameBoard = useCallback(
     (boardId: string, title: string) => {
       const card = state.cards.find(
@@ -2309,6 +2323,7 @@ function App() {
               loading={search.loading}
               onSelect={(result) => void search.onSelect(result)}
             />
+            <SyncStatusPill gateway={gateway} onOpen={() => setDevicesDialogOpen(true)} />
             <UndoRedoControls
               dispatcher={dispatcher}
               onUndo={handleWorkspaceUndo}
@@ -2490,7 +2505,16 @@ function App() {
             onRestore={(batchId) => void trash.restoreBatch(batchId)}
             onEmptyTrash={trash.requestEmpty}
             onRestoreFromBackup={() => setRestoreDialogOpen(true)}
+            onOpenDevices={() => setDevicesDialogOpen(true)}
           />
+        )}
+        {devicesDialogOpen && (
+          <>
+            <div className="devices-dialog-backdrop" onClick={() => setDevicesDialogOpen(false)} />
+            <div className="devices-dialog-overlay">
+              <DevicesDialog gateway={gateway} onClose={() => setDevicesDialogOpen(false)} />
+            </div>
+          </>
         )}
         {restoreDialogOpen && (
           <>

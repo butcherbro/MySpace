@@ -656,6 +656,74 @@ export interface WorkspaceGateway {
    * not found, or it failed validation) and nothing changed.
    */
   requestRestore(dirName: string): Promise<never>;
+
+  // ---- device sync over the LAN (ADR-0011 S3) -------------------------
+  /** Paired peers, discovery status, this device's port and addresses. */
+  getSyncState(): Promise<SyncState>;
+  syncListPeers(): Promise<SyncPeerState[]>;
+  /** Devices mDNS currently sees (never this one). */
+  syncListDiscovered(): Promise<DiscoveredDevice[]>;
+  /** Shows a 6-digit code on this device, valid 5 minutes. */
+  syncBeginPairing(): Promise<PairingCode>;
+  syncCancelPairing(): Promise<void>;
+  /** Pairs with a discovered device or a `host:port`, using the code the
+   *  OTHER device shows. */
+  syncPairWith(input: PairWithInput): Promise<SyncPeerState>;
+  syncUnpair(deviceId: string): Promise<void>;
+  /** One pass over every paired peer; resolves with the state after it. */
+  syncNow(): Promise<SyncState>;
+  /** `sync-state` event. Resolves with the unsubscribe function. */
+  onSyncState(handler: (state: SyncState) => void): Promise<() => void>;
+  /** `sync-applied` event: local board ids whose content changed. */
+  onSyncApplied(handler: (boardIds: string[]) => void): Promise<() => void>;
+}
+
+/** One paired device (ADR-0011 S3). Times are unix milliseconds. */
+export interface SyncPeerState {
+  deviceId: string;
+  name: string;
+  /** The last contact attempt succeeded. */
+  online: boolean;
+  /** mDNS currently sees it. */
+  discovered: boolean;
+  lastSyncAt: number | null;
+  lastError: string | null;
+  lastAddress: string | null;
+}
+
+/** Payload of the `sync-state` event and `getSyncState`. */
+export interface SyncState {
+  peers: SyncPeerState[];
+  /** mDNS discovery is running. */
+  discovering: boolean;
+  /** Why discovery is not running, when it is not. */
+  discoveryError: string | null;
+  /** A user-visible sync pass is running. */
+  syncing: boolean;
+  /** This device's sync port and `ip:port` addresses, for "Add by address". */
+  port: number;
+  addresses: string[];
+}
+
+/** A device found on the local network. */
+export interface DiscoveredDevice {
+  deviceId: string;
+  name: string;
+  addresses: string[];
+  fingerprint: string;
+  paired: boolean;
+}
+
+export interface PairingCode {
+  code: string;
+  /** Unix milliseconds. */
+  expiresAt: number;
+}
+
+export interface PairWithInput {
+  deviceId?: string;
+  address?: string;
+  code: string;
 }
 
 /** Why the app started in recovery mode (P1.7). No paths, no content. */

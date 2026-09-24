@@ -16,6 +16,9 @@ pub enum WorkspaceError {
     RootBoardProtected,
     /// An unexpected database failure.
     Database(String),
+    /// A device-sync transport failure (peer unreachable, refused pairing,
+    /// TLS or protocol error). User-facing message.
+    Sync(String),
 }
 
 impl std::fmt::Display for WorkspaceError {
@@ -28,6 +31,7 @@ impl std::fmt::Display for WorkspaceError {
             WorkspaceError::ConstraintViolation(m) => write!(f, "constraint violation: {m}"),
             WorkspaceError::RootBoardProtected => write!(f, "root board is protected"),
             WorkspaceError::Database(m) => write!(f, "database error: {m}"),
+            WorkspaceError::Sync(m) => write!(f, "sync: {m}"),
         }
     }
 }

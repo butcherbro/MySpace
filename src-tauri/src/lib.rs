@@ -147,11 +147,40 @@ pub fn run() {
                 Ok(workspace) => workspace,
                 Err(failure) => {
                     app.manage(app::StartupState(Some(failure)));
+                    app.manage(commands::sync::LanState {
+                        lan: None,
+                        error: Some("the workspace is not open".into()),
+                    });
                     return Ok(());
                 }
             };
             app.manage(app::StartupState(None));
             app.manage(workspace.clone());
+
+            // LAN sync (ADR-0011 S3): server on a random port, mDNS, pull
+            // loop. A failure never blocks the app: it runs without sync and
+            // the Devices dialog shows why.
+            let events = std::sync::Arc::new(commands::sync::TauriSyncEvents(
+                app.handle().clone(),
+            ));
+            let lan_workspace = workspace.clone();
+            let lan = tauri::async_runtime::block_on(async move {
+                sync::lan::LanSync::start(lan_workspace, sync::lan::LanConfig::default(), events)
+                    .await
+            });
+            app.manage(match lan {
+                Ok(lan) => commands::sync::LanState {
+                    lan: Some(lan),
+                    error: None,
+                },
+                Err(error) => {
+                    tracing::error!(%error, error_code = "sync_start_failed", "sync: LAN service did not start");
+                    commands::sync::LanState {
+                        lan: None,
+                        error: Some(error.to_string()),
+                    }
+                }
+            });
 
             // Startup maintenance runs after the window is up, on the writer
             // thread (so it can never race a user write) and the backup
@@ -235,6 +264,14 @@ pub fn run() {
             commands::sync::sync_export_changes,
             commands::sync::sync_apply_changes,
             commands::sync::sync_status,
+            commands::sync::get_sync_state,
+            commands::sync::sync_list_peers,
+            commands::sync::sync_list_discovered,
+            commands::sync::sync_begin_pairing,
+            commands::sync::sync_cancel_pairing,
+            commands::sync::sync_pair_with,
+            commands::sync::sync_unpair,
+            commands::sync::sync_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

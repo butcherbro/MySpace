@@ -182,6 +182,12 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../../migrations/0025_change_journal.sql"),
         after: None,
     },
+    Migration {
+        version: 26,
+        name: "sync_peers",
+        sql: include_str!("../../migrations/0026_sync_peers.sql"),
+        after: None,
+    },
 ];
 
 /// The result of comparing the database's applied migrations against what

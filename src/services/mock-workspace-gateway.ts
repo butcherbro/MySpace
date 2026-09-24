@@ -53,6 +53,13 @@ import type {
   ViewportReceipt,
   WorkspaceGateway,
 } from "./workspace-gateway";
+import type {
+  DiscoveredDevice,
+  PairingCode,
+  PairWithInput,
+  SyncPeerState,
+  SyncState,
+} from "./workspace-gateway";
 import { denseBoardSnapshot } from "../test/dense-board-fixture";
 import { documentToPlainText } from "../editor/document-codec";
 import { fileNameFromPath } from "./platform-path";
@@ -1496,6 +1503,113 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve() as unknown as Promise<never>;
   }
 
+  // ---- device sync (ADR-0011 S3) ----------------------------------------
+  // In-memory: `?fixture=sync-peers` shows two devices "on the network";
+  // pairing succeeds with the code `123456`; `syncNow` stamps lastSyncAt.
+
+  private syncPeers: SyncPeerState[] = [];
+  private syncStateListeners = new Set<(state: SyncState) => void>();
+  private syncAppliedListeners = new Set<(boardIds: string[]) => void>();
+
+  private syncState(): SyncState {
+    return {
+      peers: this.syncPeers.map((p) => ({ ...p })),
+      discovering: true,
+      discoveryError: null,
+      syncing: false,
+      port: 52_000,
+      addresses: ["192.168.1.20:52000"],
+    };
+  }
+
+  private emitSyncState(): void {
+    const state = this.syncState();
+    for (const listener of this.syncStateListeners) listener(state);
+  }
+
+  private mockDiscovered(): DiscoveredDevice[] {
+    if (fixtureParam() !== "sync-peers") return [];
+    return MOCK_DISCOVERED.map((d) => ({
+      ...d,
+      paired: this.syncPeers.some((p) => p.deviceId === d.deviceId),
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  getSyncState(): Promise<SyncState> {
+    return Promise.resolve(this.syncState());
+  }
+
+  syncListPeers(): Promise<SyncPeerState[]> {
+    return Promise.resolve(this.syncState().peers);
+  }
+
+  syncListDiscovered(): Promise<DiscoveredDevice[]> {
+    return Promise.resolve(this.mockDiscovered());
+  }
+
+  syncBeginPairing(): Promise<PairingCode> {
+    return Promise.resolve({ code: MOCK_PAIRING_CODE, expiresAt: Date.now() + 5 * 60 * 1000 });
+  }
+
+  syncCancelPairing(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  syncPairWith(input: PairWithInput): Promise<SyncPeerState> {
+    if (input.code.replace(/\s|-/g, "") !== MOCK_PAIRING_CODE) {
+      return Promise.reject({ code: "sync", message: "wrong code" });
+    }
+    const found = input.deviceId ? MOCK_DISCOVERED.find((d) => d.deviceId === input.deviceId) : undefined;
+    if (!found && !input.address) {
+      return Promise.reject({ code: "sync", message: "that device is no longer visible on the network" });
+    }
+    const peer: SyncPeerState = {
+      deviceId: found?.deviceId ?? `address-${input.address}`,
+      name: found?.name ?? input.address ?? "Device",
+      online: true,
+      discovered: Boolean(found),
+      lastSyncAt: null,
+      lastError: null,
+      lastAddress: found?.addresses[0] ?? input.address ?? null,
+    };
+    this.syncPeers = [...this.syncPeers.filter((p) => p.deviceId !== peer.deviceId), peer];
+    this.emitSyncState();
+    return Promise.resolve({ ...peer });
+  }
+
+  syncUnpair(deviceId: string): Promise<void> {
+    this.syncPeers = this.syncPeers.filter((p) => p.deviceId !== deviceId);
+    this.emitSyncState();
+    return Promise.resolve();
+  }
+
+  syncNow(): Promise<SyncState> {
+    const previous = Math.max(0, ...this.syncPeers.map((p) => p.lastSyncAt ?? 0));
+    const now = Math.max(Date.now(), previous + 1000);
+    this.syncPeers = this.syncPeers.map((p) => ({ ...p, lastSyncAt: now, lastError: null, online: true }));
+    this.emitSyncState();
+    return Promise.resolve(this.syncState());
+  }
+
+  onSyncState(handler: (state: SyncState) => void): Promise<() => void> {
+    this.syncStateListeners.add(handler);
+    return Promise.resolve(() => {
+      this.syncStateListeners.delete(handler);
+    });
+  }
+
+  onSyncApplied(handler: (boardIds: string[]) => void): Promise<() => void> {
+    this.syncAppliedListeners.add(handler);
+    return Promise.resolve(() => {
+      this.syncAppliedListeners.delete(handler);
+    });
+  }
+
+  /** Test hook: simulates the backend's `sync-applied` event. */
+  emitSyncApplied(boardIds: string[]): void {
+    for (const listener of this.syncAppliedListeners) listener([...boardIds]);
+  }
+
   private buildBreadcrumbs(boardId: string) {
     const crumbs: Array<{ id: string; title: string }> = [];
     let current = this.boards.get(boardId) ?? null;
@@ -1517,6 +1631,27 @@ function fixtureParam(): string | null {
   if (typeof window === "undefined") return null;
   return new URLSearchParams(window.location.search).get("fixture");
 }
+
+/** The code that pairs in the mock (ADR-0011 S3). */
+export const MOCK_PAIRING_CODE = "123456";
+
+/** Devices "on the network" under `?fixture=sync-peers`. */
+const MOCK_DISCOVERED: DiscoveredDevice[] = [
+  {
+    deviceId: "mock-windows-pc",
+    name: "Windows PC",
+    addresses: ["192.168.1.21:52001"],
+    fingerprint: "a".repeat(64),
+    paired: false,
+  },
+  {
+    deviceId: "mock-studio-mac",
+    name: "Studio Mac",
+    addresses: ["192.168.1.22:52002"],
+    fingerprint: "b".repeat(64),
+    paired: false,
+  },
+];
 
 /** The mock installation's device id (ADR-0012). */
 const MOCK_DEVICE_ID = "mock-device";

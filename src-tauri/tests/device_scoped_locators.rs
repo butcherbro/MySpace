@@ -12,6 +12,7 @@ use myspace_lib::domain::models::{
 use myspace_lib::domain::mutation::{Mutation, LOCAL_ONLY_TABLES};
 use myspace_lib::domain::trash_service;
 use myspace_lib::repositories::{devices, workspace_repository as repo};
+use myspace_lib::sync::peers::PeerWrite;
 use rusqlite::Connection;
 
 fn root_board_id(conn: &Connection) -> String {
@@ -403,6 +404,24 @@ fn local_only_mutations_write_only_local_only_tables() {
         Mutation::RenameDevice {
             name: "Renamed".into(),
         },
+        Mutation::SyncPeers(PeerWrite::EnsureTransportIdentity),
+        Mutation::SyncPeers(PeerWrite::Upsert {
+            device_id: "peer".into(),
+            name: "Peer".into(),
+            fingerprint: "ab".repeat(32),
+            address: Some("10.0.0.2:5000".into()),
+        }),
+        Mutation::SyncPeers(PeerWrite::RecordContact {
+            device_id: "peer".into(),
+            name: Some("Peer 2".into()),
+            address: None,
+            reached: true,
+            synced: true,
+            error: None,
+        }),
+        Mutation::SyncPeers(PeerWrite::Remove {
+            device_id: "peer".into(),
+        }),
         Mutation::SaveViewport(UpdateViewportInput {
             board_id: home.clone(),
             expected_revision: viewport_revision,

@@ -399,6 +399,7 @@ pub fn gc_failure_summary(err: &WorkspaceError) -> &'static str {
         WorkspaceError::NotFound(_) => "not found",
         WorkspaceError::StaleRevision { .. } => "stale revision",
         WorkspaceError::RootBoardProtected => "root board protected",
+        WorkspaceError::Sync(_) => "sync failure",
     }
 }
 

@@ -152,3 +152,55 @@ order. The originating command is kept as the row's `op`
   yet).
 - **Open for S3:** the transport (relay vs LAN vs shared folder); cursor
   semantics require per-origin prefix delivery; journal compaction.
+
+**S3 implemented 2026-09-24: LAN transport**, symmetric peers, pull-based,
+no server. Migration **0026** (`sync_peers`, local-only), module
+`src-tauri/src/sync/{tls,pairing,peers,server,peer_client,discovery,lan}.rs`,
+tests `src-tauri/tests/sync_lan.rs`, UI `src/sync/` (Devices dialog, top-bar
+pill), README "Sync (LAN)".
+
+- **Identity:** per device a self-signed ECDSA P-256 certificate (`rcgen`),
+  minted on first start of the service and stored in `local_meta`
+  (`sync_tls_cert_pem`, `sync_tls_key_pem`, `sync_tls_device_id`; a new
+  `device_id` after a machine change mints a new certificate). The SHA-256 of
+  the DER is the transport identity; peers are pinned by it, no CA.
+- **Wire:** HTTPS, TLS 1.3 only, mutual TLS (hyper 1 + tokio-rustls server,
+  reqwest client with a pinning `ServerCertVerifier`), JSON. Server binds
+  `0.0.0.0:0`. The handshake requires a client certificate and checks its
+  signature; authorization is per request: `X-MySpace-Device` must name a
+  `sync_peers` row whose fingerprint equals the presented certificate's
+  (403 otherwise), because `/pair` has to accept a device that is not paired
+  yet. Endpoints: `GET /v1/info`, `GET /v1/cursors`, `POST /v1/changes`
+  (`{cursors, limit}` → `{rows, next}`, `journal::changes_since`, per-origin
+  HLC order), `GET /v1/blobs/{sha256}`; plus `POST /v1/poke` (no body: "pull
+  from me now", so a write propagates in ~0.5 s instead of on the peer's
+  5-second tick) and `GET`/`POST /pair`. A relay later reuses the same four
+  data endpoints; the poke becomes its notification channel.
+- **Pairing:** A shows a 6-digit code (5 min, 5 attempts). B, having seen A's
+  certificate on the TLS channel (`GET /pair`), sends `{deviceId, name,
+  fingerprint, proof = HMAC-SHA256(code, fp_B ‖ fp_A), port}`; A checks the
+  fingerprint against the presented client certificate and the proof, stores
+  B, burns the code and answers with `HMAC(code, fp_A ‖ fp_B)`, which B
+  verifies before storing A. Deviation: the messages also carry the server
+  port so each side can reach the other without mDNS. Known weakness: the
+  proof lets an active man-in-the-middle during the pairing minute brute-force
+  the 6-digit code offline; a PAKE (SPAKE2/CPace) would close it.
+- **Discovery:** `mdns-sd`, `_myspace-sync._tcp.local.` with TXT `device_id`,
+  `name`, `fp`; re-advertised on rename. Failure → state "discovery
+  unavailable", pairing by `host:port` still works; each peer's last working
+  address is stored (`sync_peers.last_address`, an extra column).
+- **Loop:** one tokio task, one pass at a time. Pass = for each paired peer
+  with an address (mDNS or last known; backoff up to 60 s after failures
+  unless forced): `/v1/info` identity check → pull pages until `next` is empty
+  → apply each page through the funnel (`Mutation::ApplySyncChanges`) →
+  fetch `missing_blobs` from that peer (streamed, SHA-256 verified, placed
+  atomically under every asset row's file name) → `sync_peers.last_sync_at`
+  or `last_error`. Triggers: start, 5 s tick, 500 ms after a local journaled
+  write (`Workspace::local_writes`, a `tokio::sync::Notify` signalled by the
+  writer thread after a journaled commit; the pass also pokes the peers), a
+  peer's poke, pairing, `sync_now`. Replays do not signal, so no ping-pong.
+- **Events:** `sync-applied` (touched board ids, plus boards showing a blob
+  that just arrived) → the open board reloads through the same path as the
+  external-change poll; `sync-state` `{peers: [{deviceId, name, online,
+  discovered, lastSyncAt, lastError, lastAddress}], discovering,
+  discoveryError, syncing, port, addresses}`.

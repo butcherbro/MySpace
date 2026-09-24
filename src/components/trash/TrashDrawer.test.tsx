@@ -135,4 +135,23 @@ describe("TrashDrawer", () => {
     await user.click(screen.getByRole("button", { name: "Restore" }));
     expect(onRestore).toHaveBeenCalledWith("batch-1");
   });
+
+  it("offers Devices… next to Backups… when wired", async () => {
+    const user = userEvent.setup();
+    const onOpenDevices = vi.fn();
+    render(
+      <TrashDrawer
+        summary={summary}
+        loading={false}
+        error={null}
+        restoringBatchId={null}
+        onClose={vi.fn()}
+        onRestore={vi.fn()}
+        onRestoreFromBackup={vi.fn()}
+        onOpenDevices={onOpenDevices}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Devices…" }));
+    expect(onOpenDevices).toHaveBeenCalled();
+  });
 });

@@ -49,6 +49,7 @@ use crate::domain::models::{
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::devices;
 use crate::repositories::workspace_repository as repo;
+use crate::sync::peers::{PeerOutcome, PeerWrite};
 use crate::sync::{ApplyReport, ChangeRow};
 
 /// Tables that hold device-local state and are never synced: not journaled,
@@ -64,6 +65,8 @@ use crate::sync::{ApplyReport, ChangeRow};
 ///   `local_meta` identity), not through journaled rows, so a rename is a
 ///   local write on every device and no two devices ever fight over a row.
 ///
+/// - `sync_peers` (0026): the LAN peers this device paired with and pins by
+///   certificate fingerprint (S3). Trust is per device.
 /// - `entity_clocks`, `purged`, `pending_changes`, `sync_cursors`: the sync
 ///   engine's own bookkeeping (migration 0025): what this replica applied,
 ///   tombstoned, parked and holds. Each replica derives its own.
@@ -81,6 +84,7 @@ pub const LOCAL_ONLY_TABLES: &[&str] = &[
     "purged",
     "pending_changes",
     "sync_cursors",
+    "sync_peers",
 ];
 
 /// What a mutation primarily acts on ([`Mutation::target`]); recorded as the
@@ -159,6 +163,7 @@ pub const OP_NAMES: &[&str] = &[
     "maintenance.collect_orphaned_assets",
     "maintenance.hash_assets",
     "sync.apply_changes",
+    "sync.peers",
 ];
 
 /// One write, as data. See the module docs.
@@ -284,6 +289,9 @@ pub enum Mutation {
     /// Replays a peer's journal rows (`sync::replay::apply_remote`). Not
     /// journaled itself: the rows are stored verbatim with their origin.
     ApplySyncChanges(Vec<ChangeRow>),
+    /// LAN transport bookkeeping (S3): this device's TLS identity and the
+    /// paired peers. LOCAL-ONLY (`local_meta`, `sync_peers`, `known_devices`).
+    SyncPeers(PeerWrite),
 }
 
 /// Payload of [`Mutation::CommitFileCard`].
@@ -317,6 +325,7 @@ pub enum MutationOutcome {
     ViewportReceipt(ViewportReceipt),
     Device(DeviceIdentity),
     SyncReport(ApplyReport),
+    SyncPeers(PeerOutcome),
 }
 
 fn unexpected(what: &str) -> WorkspaceError {
@@ -416,6 +425,12 @@ impl MutationOutcome {
             _ => Err(unexpected("sync report")),
         }
     }
+    pub fn into_peer_outcome(self) -> Result<PeerOutcome, WorkspaceError> {
+        match self {
+            Self::SyncPeers(r) => Ok(r),
+            _ => Err(unexpected("sync peer outcome")),
+        }
+    }
 }
 
 impl Mutation {
@@ -458,6 +473,7 @@ impl Mutation {
             Self::CommitFileCard(_) => "card.create_file",
             Self::SetFilesystemAliasLocalTarget { .. } => "card.set_alias_local_target",
             Self::RenameDevice { .. } => "device.rename",
+            Self::SyncPeers(_) => "sync.peers",
             Self::CreateLinkBatch(_) => "link_batch.create",
             Self::TrashLinkBatch { .. } => "link_batch.trash",
             Self::ApplyEmbedMetadata(_) => "card.apply_embed_metadata",
@@ -514,6 +530,7 @@ impl Mutation {
             Self::CommitFileCard(job) => (K::Card, &job.input.id),
             Self::SetFilesystemAliasLocalTarget { card_id, .. } => (K::Card, card_id),
             Self::RenameDevice { .. } => (K::Device, ""),
+            Self::SyncPeers(write) => (K::Device, write.device_id()),
             Self::CreateLinkBatch(i) => (K::Board, &i.board_id),
             Self::TrashLinkBatch { agent_batch_id } => (K::LinkBatch, agent_batch_id),
             Self::ApplyEmbedMetadata(plan) => (K::Card, &plan.update.id),
@@ -569,7 +586,8 @@ impl Mutation {
         match self {
             Self::SaveViewport(_)
             | Self::SetFilesystemAliasLocalTarget { .. }
-            | Self::RenameDevice { .. } => true,
+            | Self::RenameDevice { .. }
+            | Self::SyncPeers(_) => true,
             Self::CreateNote(_)
             | Self::CreateImageCard(_)
             | Self::CreateBoardShortcut(_)
@@ -715,6 +733,7 @@ impl Mutation {
                 repo::load_card(conn, card_id).map(Out::Card)
             }
             Self::RenameDevice { name } => devices::rename_device(conn, name).map(Out::Device),
+            Self::SyncPeers(write) => crate::sync::peers::apply(conn, write).map(Out::SyncPeers),
             Self::RefreshFilesystemAliasLocator {
                 card_id,
                 locator_blob,
@@ -848,7 +867,8 @@ card.apply_embed_metadata
 maintenance.collapse_favicons
 maintenance.collect_orphaned_assets
 maintenance.hash_assets
-sync.apply_changes"
+sync.apply_changes
+sync.peers"
         );
     }
 

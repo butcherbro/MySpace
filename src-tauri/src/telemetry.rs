@@ -99,6 +99,7 @@ impl ErrorCode for WorkspaceError {
             WorkspaceError::ConstraintViolation(_) => "constraint_violation",
             WorkspaceError::RootBoardProtected => "root_board_protected",
             WorkspaceError::Database(_) => "database",
+            WorkspaceError::Sync(_) => "sync",
         }
     }
 }

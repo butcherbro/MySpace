@@ -506,15 +506,40 @@ P2 / platform:
       (star and mesh). Commands `sync_export_changes`, `sync_apply_changes`,
       `sync_status`; event `sync-applied` with the touched board ids.
       Tests: `src-tauri/tests/sync_replay.rs`.
-- [ ] **S3 — transport.** Open question: relay server vs LAN (mDNS + HTTP) vs
-      a shared folder (iCloud Drive / Dropbox) holding per-device journal files
-      and blobs. The engine is transport-agnostic; whichever is chosen must
-      deliver per-origin prefixes (cursor semantics) and fetch blobs by
-      `sha256` (`sync_status.missingBlobs`), and the handshake must carry each
-      peer's `{deviceId, deviceName}` into `known_devices`.
-- [ ] Frontend: listen to `sync-applied` and reload touched boards (the P1.6
-      poll ignores own-process commits, and replay commits on the app's own
-      writer); render image/file cards whose blob is missing as "waiting for
-      file" instead of a broken image.
+- [x] **S3 — LAN transport** (ADR-0011 status): self-signed certs pinned by
+      fingerprint, mutual TLS 1.3, pairing with a 6-digit code + HMAC proofs,
+      mDNS discovery (`mdns-sd`) with pairing by `host:port` as fallback,
+      pull loop (start, 5 s tick, 500 ms after a local write + poke, sync now),
+      blobs by `sha256`. Migration 0026 `sync_peers`. Commands `get_sync_state`,
+      `sync_list_peers`, `sync_list_discovered`, `sync_begin_pairing`,
+      `sync_cancel_pairing`, `sync_pair_with`, `sync_unpair`, `sync_now`;
+      events `sync-state`, `sync-applied`. UI: Devices dialog (Trash drawer
+      "Devices…", top-bar pill). Tests: `src-tauri/tests/sync_lan.rs`,
+      `src/sync/*.test.tsx`, `tests/e2e/sync-devices.spec.ts`.
+- [x] Frontend: `sync-applied` reloads the open board (and the trash).
+- [ ] **Human check on the desk (Mac + Windows):** pair both ways, Windows
+      firewall prompt (Private network), edit on one → appears on the other
+      within ~1 s, image/file card blobs arrive, unplug Wi-Fi on one → error
+      shown, reconnect → catches up, rename a device → the other shows the new
+      name after the next contact.
+- [ ] Pairing is not resistant to an active man-in-the-middle during the
+      pairing minute (the 6-digit code can be brute-forced offline from the
+      HMAC proof). Replace the HMAC exchange with a PAKE (SPAKE2 / CPace) before
+      the relay, or show a short fingerprint on both screens to compare.
+- [ ] Private key is stored in the workspace database (`local_meta`), hence
+      in backups. Consider the OS keychain / DPAPI.
+- [ ] Blobs are served from memory (the whole file is read); stream from disk
+      for large file cards. The client streams to disk already.
+- [ ] The mDNS advert shows the device name to the whole network; offer an
+      option to hide it.
+- [ ] IPv6 link-local addresses are skipped (no scope id in the advert); a
+      network with IPv6 only needs "Add by address" with a global address.
+- [ ] A device whose IP changes and that mDNS cannot see is unreachable until
+      re-added by address (the port is random per start); consider a fixed
+      preferred port.
+- [ ] Render image/file cards whose blob is missing as "waiting for file"
+      instead of a broken image (the board reloads when the blob arrives).
+- [ ] The MCP server does not signal `local_writes` (other process): its
+      writes reach peers on the next 5 s tick, not at once.
 - [ ] Journal compaction (all peers' cursors past a row → it can be folded
       into a snapshot) and a policy for devices that stay offline for months.

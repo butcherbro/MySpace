@@ -14,6 +14,8 @@ interface TrashDrawerProps {
   onEmptyTrash?: () => void;
   /** Open the "Backups…" (restore from snapshot) dialog. */
   onRestoreFromBackup?: () => void;
+  /** Open the "Devices…" (LAN sync, ADR-0011 S3) dialog. */
+  onOpenDevices?: () => void;
 }
 
 function formatDeletedAt(millis: number): string {
@@ -44,6 +46,7 @@ export function TrashDrawer({
   onRestore,
   onEmptyTrash = () => {},
   onRestoreFromBackup,
+  onOpenDevices,
 }: TrashDrawerProps) {
   const empty = !loading && !error && summary && summary.batches.length === 0;
   const populated = !loading && !error && summary && summary.batches.length > 0;
@@ -143,6 +146,16 @@ export function TrashDrawer({
             onClick={onRestoreFromBackup}
           >
             Backups…
+          </button>
+        )}
+        {onOpenDevices && (
+          <button
+            type="button"
+            className="trash-drawer__restore-from-backup trash-drawer__devices"
+            data-testid="trash-drawer-devices"
+            onClick={onOpenDevices}
+          >
+            Devices…
           </button>
         )}
         <button

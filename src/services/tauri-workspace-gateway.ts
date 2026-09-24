@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
+  DiscoveredDevice,
+  PairingCode,
+  PairWithInput,
+  SyncPeerState,
+  SyncState,
   AddQuickBoardInput,
   AssetDto,
   BackupSummary,
@@ -298,5 +304,45 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   requestRestore(dirName: string): Promise<never> {
     return invoke<never>("request_restore", { snapshot: dirName });
+  }
+
+  getSyncState(): Promise<SyncState> {
+    return invoke<SyncState>("get_sync_state", {});
+  }
+
+  syncListPeers(): Promise<SyncPeerState[]> {
+    return invoke<SyncPeerState[]>("sync_list_peers", {});
+  }
+
+  syncListDiscovered(): Promise<DiscoveredDevice[]> {
+    return invoke<DiscoveredDevice[]>("sync_list_discovered", {});
+  }
+
+  syncBeginPairing(): Promise<PairingCode> {
+    return invoke<PairingCode>("sync_begin_pairing", {});
+  }
+
+  syncCancelPairing(): Promise<void> {
+    return invoke<void>("sync_cancel_pairing", {});
+  }
+
+  syncPairWith(input: PairWithInput): Promise<SyncPeerState> {
+    return invoke<SyncPeerState>("sync_pair_with", { input });
+  }
+
+  syncUnpair(deviceId: string): Promise<void> {
+    return invoke<void>("sync_unpair", { deviceId });
+  }
+
+  syncNow(): Promise<SyncState> {
+    return invoke<SyncState>("sync_now", {});
+  }
+
+  onSyncState(handler: (state: SyncState) => void): Promise<() => void> {
+    return listen<SyncState>("sync-state", (event) => handler(event.payload));
+  }
+
+  onSyncApplied(handler: (boardIds: string[]) => void): Promise<() => void> {
+    return listen<string[]>("sync-applied", (event) => handler(event.payload));
   }
 }

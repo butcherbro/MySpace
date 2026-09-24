@@ -1,7 +1,8 @@
-//! Device sync, S1 + S2 of ADR-0011: a transport-agnostic change journal and
-//! the engine that replays a peer's journal. No network code lives here; a
-//! transport (S3: LAN, relay or shared folder) only moves [`ChangeRow`]s and
-//! asset blobs between [`journal::changes_since`] on one device and
+//! Device sync, ADR-0011: S1 + S2 are a transport-agnostic change journal and
+//! the engine that replays a peer's journal; S3 is the LAN transport
+//! ([`lan`], [`server`], [`peer_client`], [`discovery`], [`pairing`],
+//! [`tls`], [`peers`]), which only moves [`ChangeRow`]s and asset blobs
+//! between [`journal::changes_since`] on one device and
 //! [`replay::apply_remote`] on another.
 //!
 //! ```text
@@ -24,12 +25,19 @@
 //! data). The originating command is kept as the row's `op`
 //! ([`crate::domain::mutation::Mutation::op_name`]).
 
+pub mod discovery;
 pub mod funnel;
 pub mod hlc;
 pub mod image;
 pub mod journal;
+pub mod lan;
+pub mod pairing;
+pub mod peer_client;
+pub mod peers;
 pub mod replay;
+pub mod server;
 pub mod snapshot;
+pub mod tls;
 pub mod tracking;
 
 use rusqlite::{Connection, OptionalExtension};
