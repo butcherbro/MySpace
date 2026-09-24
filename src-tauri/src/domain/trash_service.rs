@@ -7,7 +7,9 @@
 
 use rusqlite::{params, Connection, Transaction};
 
+use crate::domain::card_kind::{registry, sql_in_list, CardKind};
 use crate::domain::errors::WorkspaceError;
+use crate::domain::kinds::{asset_at, asset_columns};
 use crate::domain::models::{
     AssetDto, EmptyTrashResult, TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto,
 };
@@ -21,8 +23,11 @@ pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, Worksp
     let now = db::migrations::now_millis();
     let batch_id = uuid::Uuid::now_v7().to_string();
     let changed = conn.execute(
-        "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-         WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut') AND deleted_at IS NULL",
+        &format!(
+            "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
+             WHERE id = ?3 AND kind IN {} AND deleted_at IS NULL",
+            sql_in_list(CardKind::LEAF)
+        ),
         params![now, batch_id, card_id],
     )?;
     if changed == 0 {
@@ -234,8 +239,11 @@ pub fn trash_selection(
             _ => {
                 // leaf card: note / image / embed / filesystem alias
                 let changed = tx.execute(
-                    "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-                     WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut') AND deleted_at IS NULL",
+                    &format!(
+                        "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
+                         WHERE id = ?3 AND kind IN {} AND deleted_at IS NULL",
+                        sql_in_list(CardKind::LEAF)
+                    ),
                     params![now, batch_id, item.id],
                 )?;
                 if changed == 0 {
@@ -348,35 +356,16 @@ pub fn empty_trash(
         |r| r.get(0),
     )?;
 
-    // Detail rows for trashed cards, leaves -> roots.
-    tx.execute(
-        "DELETE FROM note_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM image_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM embed_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM file_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM filesystem_aliases WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM board_shortcut_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM board_portal_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
+    // Detail rows for trashed cards: every registered kind deletes its own
+    // (foreign keys are deferred, so the order does not matter).
+    let trashed_card_ids: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id FROM cards WHERE deleted_at IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for handler in registry() {
+        handler.delete_details(&tx, &trashed_card_ids)?;
+    }
     // Board-referencing rows for trashed boards.
     tx.execute(
         "DELETE FROM board_view_states WHERE board_id IN (SELECT id FROM boards WHERE deleted_at IS NOT NULL)",
@@ -427,29 +416,25 @@ struct TrashedCard {
 
 /// Projects an optional asset from the joined columns, keyed off the owning
 /// card's asset id. No asset when that id is NULL — a Link Card enriched before
-/// any favicon was fetched, for instance.
-#[allow(clippy::too_many_arguments)]
+/// any favicon was fetched, for instance. The asset's other columns are
+/// aliased `{prefix}_file_name`, `{prefix}_mime_type`, … `{prefix}_sha256`.
 fn asset_from_row(
     row: &rusqlite::Row<'_>,
     id_column: &str,
-    file_name_column: &str,
-    mime_type_column: &str,
-    width_column: &str,
-    height_column: &str,
-    size_bytes_column: &str,
-    file_path_column: &str,
+    prefix: &str,
 ) -> rusqlite::Result<Option<AssetDto>> {
     let Some(id) = row.get::<_, Option<String>>(id_column)? else {
         return Ok(None);
     };
     Ok(Some(AssetDto {
         id,
-        file_name: row.get(file_name_column)?,
-        mime_type: row.get(mime_type_column)?,
-        width: row.get(width_column)?,
-        height: row.get(height_column)?,
-        size_bytes: row.get(size_bytes_column)?,
-        file_path: row.get(file_path_column)?,
+        file_name: row.get(format!("{prefix}_file_name").as_str())?,
+        mime_type: row.get(format!("{prefix}_mime_type").as_str())?,
+        width: row.get(format!("{prefix}_width").as_str())?,
+        height: row.get(format!("{prefix}_height").as_str())?,
+        size_bytes: row.get(format!("{prefix}_size_bytes").as_str())?,
+        file_path: row.get(format!("{prefix}_file_path").as_str())?,
+        sha256: row.get(format!("{prefix}_sha256").as_str())?,
     }))
 }
 
@@ -464,28 +449,16 @@ fn bound_excerpt(text: &str) -> String {
 pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> {
     let mut boards = Vec::<TrashedBoard>::new();
     {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT b.id, b.parent_board_id, b.title, b.trash_batch_id, b.deleted_at,
-                    b.color_token, b.symbol,
-                    ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                    b.color_token, b.symbol, {cover}
              FROM boards b
              LEFT JOIN assets ca ON ca.id = b.cover_asset_id
              WHERE b.deleted_at IS NOT NULL",
-        )?;
+            cover = asset_columns("ca")
+        ))?;
         let rows = stmt.query_map([], |row| {
-            let cover_asset = if row.get::<_, Option<String>>(7)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(7)?,
-                    file_name: row.get(8)?,
-                    mime_type: row.get(9)?,
-                    width: row.get(10)?,
-                    height: row.get(11)?,
-                    size_bytes: row.get(12)?,
-                    file_path: row.get(13)?,
-                })
-            } else {
-                None
-            };
+            let cover_asset = asset_at(row, 7)?;
             Ok(TrashedBoard {
                 id: row.get(0)?,
                 parent_board_id: row.get(1)?,
@@ -518,14 +491,17 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     ia.file_name AS image_file_name, ia.mime_type AS image_mime_type,
                     ia.width AS image_width, ia.height AS image_height,
                     ia.size_bytes AS image_size_bytes, ia.file_path AS image_file_path,
+                    ia.sha256 AS image_sha256,
                     e.title AS embed_title, e.source_url AS embed_source_url,
                     e.asset_id AS embed_asset_id, e.favicon_asset_id AS embed_favicon_asset_id,
                     pa.file_name AS preview_file_name, pa.mime_type AS preview_mime_type,
                     pa.width AS preview_width, pa.height AS preview_height,
                     pa.size_bytes AS preview_size_bytes, pa.file_path AS preview_file_path,
+                    pa.sha256 AS preview_sha256,
                     fa.file_name AS favicon_file_name, fa.mime_type AS favicon_mime_type,
                     fa.width AS favicon_width, fa.height AS favicon_height,
                     fa.size_bytes AS favicon_size_bytes, fa.file_path AS favicon_file_path,
+                    fa.sha256 AS favicon_sha256,
                     fsa.display_name AS alias_display_name,
                     filea.file_name AS file_asset_file_name,
                     fpa.file_name AS file_preview_file_name,
@@ -533,6 +509,7 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     fpa.width AS file_preview_width, fpa.height AS file_preview_height,
                     fpa.size_bytes AS file_preview_size_bytes,
                     fpa.file_path AS file_preview_file_path,
+                    fpa.sha256 AS file_preview_sha256,
                     fcard.preview_asset_id AS file_preview_asset_id,
                     shortcut_board.title AS shortcut_target_title
              FROM cards c
@@ -588,52 +565,16 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
             };
 
             let thumbnail_asset = match kind.as_str() {
-                "image" => asset_from_row(
-                    row,
-                    "image_asset_id",
-                    "image_file_name",
-                    "image_mime_type",
-                    "image_width",
-                    "image_height",
-                    "image_size_bytes",
-                    "image_file_path",
-                )?,
+                "image" => asset_from_row(row, "image_asset_id", "image")?,
                 "embed" => {
                     // Prefer the preview image, then the favicon.
-                    let preview = asset_from_row(
-                        row,
-                        "embed_asset_id",
-                        "preview_file_name",
-                        "preview_mime_type",
-                        "preview_width",
-                        "preview_height",
-                        "preview_size_bytes",
-                        "preview_file_path",
-                    )?;
-                    let favicon = asset_from_row(
-                        row,
-                        "embed_favicon_asset_id",
-                        "favicon_file_name",
-                        "favicon_mime_type",
-                        "favicon_width",
-                        "favicon_height",
-                        "favicon_size_bytes",
-                        "favicon_file_path",
-                    )?;
+                    let preview = asset_from_row(row, "embed_asset_id", "preview")?;
+                    let favicon = asset_from_row(row, "embed_favicon_asset_id", "favicon")?;
                     preview.or(favicon)
                 }
                 // A File Card's own asset is the document, not an image: only the
                 // generated thumbnail may be shown as one.
-                "file" => asset_from_row(
-                    row,
-                    "file_preview_asset_id",
-                    "file_preview_file_name",
-                    "file_preview_mime_type",
-                    "file_preview_width",
-                    "file_preview_height",
-                    "file_preview_size_bytes",
-                    "file_preview_file_path",
-                )?,
+                "file" => asset_from_row(row, "file_preview_asset_id", "file_preview")?,
                 _ => None,
             };
 

@@ -1,6 +1,7 @@
 //! Tauri command wrappers around workspace repositories.
 
 pub mod assets;
+pub mod backup;
 pub mod boards;
 pub mod cards;
 pub mod clipboard;

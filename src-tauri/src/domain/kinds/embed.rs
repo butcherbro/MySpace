@@ -1,0 +1,222 @@
+//! `embed` (Link) cards: a URL with optional fetched/custom preview and
+//! favicon assets and a versioned rich-text description (`embed_cards`).
+
+use rusqlite::{Connection, OptionalExtension, Row, Transaction};
+
+use super::{
+    asset_at, asset_columns, card_frame, json_at, load_board_rows, load_one_row, DetailTable,
+    AFTER_CARD, ASSET_WIDTH, CARD_COLUMNS,
+};
+use crate::domain::card_kind::{CardKind, CardKindHandler, CopyContext, SearchHit};
+use crate::domain::errors::WorkspaceError;
+use crate::domain::models::{CardDto, EmbedCardDto};
+use crate::repositories::search::{contains_query, rank_and_truncate, search_excerpt};
+
+pub struct EmbedHandler;
+
+const DETAIL: DetailTable = DetailTable {
+    table: "embed_cards",
+    columns: &[
+        "source_url",
+        "display_url",
+        "site_name",
+        "title",
+        "provider",
+        "description_json",
+        "description_plain_text",
+        "description_origin",
+        "asset_id",
+        "favicon_asset_id",
+        "preview_origin",
+        "metadata_status",
+        "metadata_error",
+    ],
+};
+
+/// Index of the preview asset block; the favicon block follows it.
+const PREVIEW: usize = AFTER_CARD + 11;
+const FAVICON: usize = PREVIEW + ASSET_WIDTH;
+
+fn select_from() -> String {
+    format!(
+        "SELECT {CARD_COLUMNS},
+                e.source_url, e.display_url, e.site_name, e.title, e.provider,
+                e.description_json, e.description_plain_text, e.description_origin,
+                e.preview_origin, e.metadata_status, e.metadata_error,
+                {preview}, {favicon}
+         FROM cards c
+         JOIN embed_cards e ON e.card_id = c.id
+         LEFT JOIN assets pa ON pa.id = e.asset_id
+         LEFT JOIN assets fa ON fa.id = e.favicon_asset_id",
+        preview = asset_columns("pa"),
+        favicon = asset_columns("fa"),
+    )
+}
+
+fn map_embed(row: &Row<'_>) -> rusqlite::Result<EmbedCardDto> {
+    let e = AFTER_CARD;
+    Ok(EmbedCardDto {
+        id: row.get(0)?,
+        board_id: row.get(1)?,
+        frame: card_frame(row)?,
+        z_index: row.get(6)?,
+        revision: row.get(7)?,
+        source_url: row.get(e)?,
+        display_url: row.get(e + 1)?,
+        site_name: row.get(e + 2)?,
+        title: row.get::<_, Option<String>>(e + 3)?.unwrap_or_default(),
+        provider: row.get(e + 4)?,
+        description_json: json_at(row, e + 5)?,
+        description_plain_text: row.get(e + 6)?,
+        description_origin: row.get(e + 7)?,
+        preview_origin: row.get(e + 8)?,
+        metadata_status: row.get(e + 9)?,
+        metadata_error: row.get(e + 10)?,
+        preview_asset: asset_at(row, PREVIEW)?,
+        favicon_asset: asset_at(row, FAVICON)?,
+    })
+}
+
+fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
+    Ok(CardDto::Embed(Box::new(map_embed(row)?)))
+}
+
+/// One live embed card as its own DTO (used by the convert/enrich paths that
+/// return the authoritative embed projection).
+pub fn load_embed(conn: &Connection, id: &str) -> Result<Option<EmbedCardDto>, WorkspaceError> {
+    conn.query_row(
+        &format!("{} WHERE c.id = ?1 AND c.deleted_at IS NULL", select_from()),
+        [id],
+        map_embed,
+    )
+    .optional()
+    .map_err(WorkspaceError::from)
+}
+
+impl CardKindHandler for EmbedHandler {
+    fn kind(&self) -> CardKind {
+        CardKind::Embed
+    }
+
+    fn load_many(
+        &self,
+        conn: &Connection,
+        board_id: &str,
+        unsorted: bool,
+    ) -> Result<Vec<CardDto>, WorkspaceError> {
+        load_board_rows(conn, &select_from(), board_id, unsorted, map_row)
+    }
+
+    fn load_one(&self, conn: &Connection, id: &str) -> Result<Option<CardDto>, WorkspaceError> {
+        load_one_row(conn, &select_from(), id, map_row)
+    }
+
+    /// The copy shares the original's preview/favicon asset rows.
+    fn copy_detail(
+        &self,
+        tx: &Transaction,
+        from_id: &str,
+        to_id: &str,
+        _ctx: &CopyContext,
+    ) -> Result<(), WorkspaceError> {
+        DETAIL.copy(tx, from_id, to_id)
+    }
+
+    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+        DETAIL.delete(tx, ids)
+    }
+
+    /// Link cards match on title/URL (rank 0) or description (rank 2, with an
+    /// excerpt); reported to the UI as kind `link`.
+    fn search_rows(
+        &self,
+        conn: &Connection,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, WorkspaceError> {
+        let q = query.to_lowercase();
+        let preview = 7;
+        let favicon = preview + ASSET_WIDTH;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.id, c.board_id, e.title, e.source_url, e.display_url, e.description_plain_text,
+                    c.created_at, {preview_cols}, {favicon_cols}
+             FROM cards c
+             JOIN embed_cards e ON e.card_id = c.id
+             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
+             LEFT JOIN assets pa ON pa.id = e.asset_id
+             LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
+             WHERE c.deleted_at IS NULL",
+            preview_cols = asset_columns("pa"),
+            favicon_cols = asset_columns("fa"),
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            let thumb = asset_at(row, preview)?.or(asset_at(row, favicon)?);
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
+                thumb,
+            ))
+        })?;
+        let mut hits = Vec::new();
+        for r in rows {
+            let (id, board_id, title_raw, source_url, display_url, description, created_at, thumb) =
+                r?;
+            let title = title_raw
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| source_url.clone());
+
+            let title_match = contains_query(&title, &q);
+            let source_match = contains_query(&source_url, &q);
+            let display_match = contains_query(&display_url, &q);
+            let desc_match = contains_query(&description, &q);
+
+            if !(title_match || source_match || display_match || desc_match) {
+                continue;
+            }
+
+            let (rank, excerpt) = if title_match || source_match || display_match {
+                (0, None)
+            } else {
+                (2, Some(search_excerpt(&description, query)))
+            };
+
+            hits.push(SearchHit {
+                entity_id: id,
+                kind: "link",
+                title,
+                excerpt,
+                board_id,
+                rank,
+                thumbnail_asset: thumb,
+                created_at,
+            });
+        }
+        rank_and_truncate(&mut hits, limit);
+        Ok(hits)
+    }
+
+    fn asset_refs(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("embed_cards", "asset_id"),
+            ("embed_cards", "favicon_asset_id"),
+        ]
+    }
+
+    fn to_payload(&self, conn: &Connection, id: &str) -> Result<serde_json::Value, WorkspaceError> {
+        DETAIL.to_payload(conn, id)
+    }
+
+    fn from_payload(
+        &self,
+        tx: &Transaction,
+        id: &str,
+        payload: &serde_json::Value,
+    ) -> Result<(), WorkspaceError> {
+        DETAIL.write_payload(tx, id, payload)
+    }
+}

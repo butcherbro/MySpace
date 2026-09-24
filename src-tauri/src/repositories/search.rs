@@ -1,9 +1,12 @@
-//! Workspace search: the read model behind the top-bar search field. Split out
-//! of `workspace_repository` without changing any SQL or ranking rule.
+//! Workspace search: the read model behind the top-bar search field. Boards
+//! are matched here; every card kind contributes its own hits through
+//! `CardKindHandler::search_rows` (P1.3). Ranking rules are unchanged.
 
 use rusqlite::Connection;
 
+use crate::domain::card_kind::{registry, SearchHit};
 use crate::domain::errors::WorkspaceError;
+use crate::domain::kinds::{asset_at, asset_columns};
 use crate::domain::models::{AssetDto, SearchResultDto};
 
 use super::boards::{load_board_summary, load_breadcrumbs};
@@ -14,14 +17,14 @@ const SEARCH_EXCERPT_LIMIT: usize = 120;
 /// Maximum search results returned by the V1 read model.
 const SEARCH_RESULT_LIMIT: usize = 50;
 
-fn bound_text(text: &str) -> String {
+pub(crate) fn bound_text(text: &str) -> String {
     text.trim().chars().take(SEARCH_EXCERPT_LIMIT).collect()
 }
 
 /// Returns a bounded context snippet centered on the first case-insensitive
 /// match of `query`, with ellipses where text is trimmed. Falls back to the
 /// start of the text when there is no match.
-fn search_excerpt(text: &str, query: &str) -> String {
+pub(crate) fn search_excerpt(text: &str, query: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let query_folded: Vec<char> = query.to_lowercase().chars().collect();
     let Some(match_range) = folded_match_range(&chars, &query_folded) else {
@@ -80,20 +83,21 @@ fn folded_match_range(chars: &[char], needle_folded: &[char]) -> Option<std::ops
 /// Unicode-aware case-insensitive substring test. SQLite's `LIKE` is only
 /// case-insensitive for ASCII, so Cyrillic (and other non-ASCII) must be matched
 /// in Rust via `to_lowercase`.
-fn contains_query(haystack: &str, query_lower: &str) -> bool {
+pub(crate) fn contains_query(haystack: &str, query_lower: &str) -> bool {
     haystack.to_lowercase().contains(query_lower)
 }
 
-/// A search hit plus the rank used to order results deterministically.
-struct SearchHit {
-    entity_id: String,
-    kind: &'static str,
-    title: String,
-    excerpt: Option<String>,
-    board_id: String,
-    rank: i64,
-    thumbnail_asset: Option<AssetDto>,
-    created_at: i64,
+/// Deterministic result order — rank first, then case-folded title, then
+/// entity id — truncated to `limit`. Every kind's `search_rows` and the final
+/// merge use it, so truncating per kind first never changes the merged result.
+pub(crate) fn rank_and_truncate(hits: &mut Vec<SearchHit>, limit: usize) {
+    hits.sort_by(|a, b| {
+        a.rank
+            .cmp(&b.rank)
+            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            .then_with(|| a.entity_id.cmp(&b.entity_id))
+    });
+    hits.truncate(limit);
 }
 
 /// Searches the workspace (Board titles, Note plain text, Link Card title/URL/
@@ -113,27 +117,15 @@ pub fn search_workspace(
 
     // Boards by title (rank 0).
     {
-        let mut stmt = conn.prepare(
-            "SELECT b.id, b.title, b.created_at,
-                    ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+        let mut stmt = conn.prepare(&format!(
+            "SELECT b.id, b.title, b.created_at, {cover}
              FROM boards b
              LEFT JOIN assets ca ON ca.id = b.cover_asset_id
              WHERE b.deleted_at IS NULL",
-        )?;
+            cover = asset_columns("ca")
+        ))?;
         let rows = stmt.query_map([], |row| {
-            let cover = if row.get::<_, Option<String>>(3)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(3)?,
-                    file_name: row.get(4)?,
-                    mime_type: row.get(5)?,
-                    width: row.get(6)?,
-                    height: row.get(7)?,
-                    size_bytes: row.get(8)?,
-                    file_path: row.get(9)?,
-                })
-            } else {
-                None
-            };
+            let cover = asset_at(row, 3)?;
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -158,224 +150,12 @@ pub fn search_workspace(
         }
     }
 
-    // Notes by plain text (rank 1).
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, n.plain_text, c.created_at
-             FROM cards c
-             JOIN note_cards n ON n.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        })?;
-        for r in rows {
-            let (id, board_id, plain_text, created_at) = r?;
-            if contains_query(&plain_text, &q) {
-                hits.push(SearchHit {
-                    entity_id: id,
-                    kind: "note",
-                    title: search_excerpt(&plain_text, query),
-                    excerpt: None,
-                    board_id,
-                    rank: 1,
-                    thumbnail_asset: None,
-                    created_at,
-                });
-            }
-        }
+    // Cards: every registered kind contributes its own hits.
+    for handler in registry() {
+        hits.extend(handler.search_rows(conn, query, SEARCH_RESULT_LIMIT)?);
     }
 
-    // Image cards by caption or file name (rank 1).
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, i.caption_plain_text, c.created_at,
-                    a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path
-             FROM cards c
-             JOIN image_cards i ON i.card_id = c.id
-             JOIN assets a ON a.id = i.asset_id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let thumb = AssetDto {
-                id: row.get(4)?,
-                file_name: row.get(5)?,
-                mime_type: row.get(6)?,
-                width: row.get(7)?,
-                height: row.get(8)?,
-                size_bytes: row.get(9)?,
-                file_path: row.get(10)?,
-            };
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                thumb,
-            ))
-        })?;
-        for r in rows {
-            let (id, board_id, caption, created_at, thumb) = r?;
-            let file_name = thumb.file_name.clone();
-            if contains_query(&caption, &q) || contains_query(&file_name, &q) {
-                let title = if caption.trim().is_empty() {
-                    file_name
-                } else {
-                    caption
-                };
-                hits.push(SearchHit {
-                    entity_id: id,
-                    kind: "image",
-                    title: search_excerpt(&title, query),
-                    excerpt: None,
-                    board_id,
-                    rank: 1,
-                    thumbnail_asset: Some(thumb),
-                    created_at,
-                });
-            }
-        }
-    }
-
-    // Folder shortcuts by display name or the display-only path hint.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, a.display_name, a.path_hint, c.created_at
-             FROM cards c
-             JOIN filesystem_aliases a ON a.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-            ))
-        })?;
-        for row in rows {
-            let (id, board_id, display_name, path_hint, created_at) = row?;
-            let name_match = contains_query(&display_name, &q);
-            let path_match = contains_query(&path_hint, &q);
-            if name_match || path_match {
-                hits.push(SearchHit {
-                    entity_id: id,
-                    kind: "folder",
-                    title: bound_text(&display_name),
-                    excerpt: (!name_match).then(|| bound_text(&path_hint)),
-                    board_id,
-                    rank: if name_match { 0 } else { 1 },
-                    thumbnail_asset: None,
-                    created_at,
-                });
-            }
-        }
-    }
-
-    // Link Cards (embed) by title, URL, or description.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, e.title, e.source_url, e.display_url, e.description_plain_text,
-                    pa.id, pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
-                    fa.id, fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path,
-                    c.created_at
-             FROM cards c
-             JOIN embed_cards e ON e.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             LEFT JOIN assets pa ON pa.id = e.asset_id
-             LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let preview = if row.get::<_, Option<String>>(6)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(6)?,
-                    file_name: row.get(7)?,
-                    mime_type: row.get(8)?,
-                    width: row.get(9)?,
-                    height: row.get(10)?,
-                    size_bytes: row.get(11)?,
-                    file_path: row.get(12)?,
-                })
-            } else {
-                None
-            };
-            let favicon = if row.get::<_, Option<String>>(13)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(13)?,
-                    file_name: row.get(14)?,
-                    mime_type: row.get(15)?,
-                    width: row.get(16)?,
-                    height: row.get(17)?,
-                    size_bytes: row.get(18)?,
-                    file_path: row.get(19)?,
-                })
-            } else {
-                None
-            };
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                preview.or(favicon),
-                row.get::<_, i64>(20)?,
-            ))
-        })?;
-        for r in rows {
-            let (id, board_id, title_raw, source_url, display_url, description, thumb, created_at) =
-                r?;
-            let title = title_raw
-                .filter(|t| !t.trim().is_empty())
-                .unwrap_or_else(|| source_url.clone());
-
-            let title_match = contains_query(&title, &q);
-            let source_match = contains_query(&source_url, &q);
-            let display_match = contains_query(&display_url, &q);
-            let desc_match = contains_query(&description, &q);
-
-            if !(title_match || source_match || display_match || desc_match) {
-                continue;
-            }
-
-            let (rank, excerpt) = if title_match || source_match || display_match {
-                (0, None)
-            } else {
-                (2, Some(search_excerpt(&description, query)))
-            };
-
-            hits.push(SearchHit {
-                entity_id: id,
-                kind: "link",
-                title,
-                excerpt,
-                board_id,
-                rank,
-                thumbnail_asset: thumb,
-                created_at,
-            });
-        }
-    }
-
-    // Deterministic ordering: rank first, then title, then entity id.
-    hits.sort_by(|a, b| {
-        a.rank
-            .cmp(&b.rank)
-            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-            .then_with(|| a.entity_id.cmp(&b.entity_id))
-    });
-    hits.truncate(SEARCH_RESULT_LIMIT);
+    rank_and_truncate(&mut hits, SEARCH_RESULT_LIMIT);
 
     // Fetch each board's identity once, so results carry the same cover/icon/
     // acronym fallback as the rest of the UI (no duplicated identity logic).

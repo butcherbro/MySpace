@@ -69,8 +69,8 @@ pub fn load_board_snapshot(
     let board = load_board_summary(conn, board_id)?;
     let breadcrumbs = load_breadcrumbs(conn, board_id)?;
     let viewport = load_viewport(conn, board_id)?;
-    let cards = load_cards(conn, board_id, true, false)?;
-    let unsorted_cards = load_cards(conn, board_id, false, true)?;
+    let cards = load_cards(conn, board_id, false)?;
+    let unsorted_cards = load_cards(conn, board_id, true)?;
 
     Ok(BoardSnapshot {
         board,
@@ -89,7 +89,8 @@ pub fn load_home_board(conn: &Connection) -> Result<BoardSummary, WorkspaceError
         })?;
     conn.query_row(
         "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
-                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path,
+                ca.sha256
          FROM boards b
          LEFT JOIN assets ca ON ca.id = b.cover_asset_id
          WHERE b.id = ?1",
@@ -104,6 +105,7 @@ pub fn load_home_board(conn: &Connection) -> Result<BoardSummary, WorkspaceError
                     height: row.get(10)?,
                     size_bytes: row.get(11)?,
                     file_path: row.get(12)?,
+                    sha256: row.get(13)?,
                 })
             } else {
                 None
@@ -126,7 +128,8 @@ pub fn load_home_board(conn: &Connection) -> Result<BoardSummary, WorkspaceError
 pub fn list_boards(conn: &Connection) -> Result<Vec<BoardSummary>, WorkspaceError> {
     let mut stmt = conn.prepare(
         "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
-                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path,
+                ca.sha256
          FROM boards b
          LEFT JOIN assets ca ON ca.id = b.cover_asset_id
          WHERE b.deleted_at IS NULL
@@ -142,6 +145,7 @@ pub fn list_boards(conn: &Connection) -> Result<Vec<BoardSummary>, WorkspaceErro
                 height: row.get(10)?,
                 size_bytes: row.get(11)?,
                 file_path: row.get(12)?,
+                sha256: row.get(13)?,
             })
         } else {
             None
@@ -169,7 +173,8 @@ pub(super) fn load_board_summary(
 ) -> Result<BoardSummary, WorkspaceError> {
     conn.query_row(
         "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
-                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path,
+                ca.sha256
          FROM boards b
          LEFT JOIN assets ca ON ca.id = b.cover_asset_id
          WHERE b.id = ?1 AND b.deleted_at IS NULL",
@@ -184,6 +189,7 @@ pub(super) fn load_board_summary(
                     height: row.get(10)?,
                     size_bytes: row.get(11)?,
                     file_path: row.get(12)?,
+                    sha256: row.get(13)?,
                 })
             } else {
                 None

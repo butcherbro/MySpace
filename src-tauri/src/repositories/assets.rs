@@ -14,6 +14,7 @@ pub fn create_filesystem_alias(
     conn: &mut Connection,
     input: &CreateFilesystemAliasInput,
 ) -> Result<(), WorkspaceError> {
+    input.frame.validate()?;
     if input.target_kind != "folder" && input.target_kind != "file" {
         return Err(WorkspaceError::ConstraintViolation(
             "invalid alias target kind".into(),
@@ -53,6 +54,7 @@ pub fn insert_file_card_rows(
     preview_text: &str,
     preview_asset_id: Option<&str>,
 ) -> Result<(), WorkspaceError> {
+    input.frame.validate()?;
     let existing_kind: Option<String> = tx
         .query_row("SELECT kind FROM cards WHERE id = ?1", [&input.id], |r| {
             r.get(0)

@@ -250,8 +250,13 @@ fn enrich_embed_with_html_metadata_persists_ready_card_and_assets() {
         fs::read(t.asset_dir().join(preview.file_path)).unwrap(),
         b"image-bytes"
     );
-    // Both staged images got their rows, and the favicon is cached by its URL.
-    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 2);
+    // Preview and favicon have identical bytes in this stub, so hash dedup
+    // (P1.2) stores one asset for both; the favicon is cached by its URL.
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 1);
+    assert_eq!(
+        embed.favicon_asset.as_ref().map(|a| a.id.clone()),
+        Some(preview.id.clone())
+    );
     let cached: String = t
         .ws
         .read_blocking(|conn| {
@@ -324,7 +329,9 @@ fn a_stale_apply_discards_staged_files_and_records_no_rows() {
             plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "link-card", revision)
         })
         .unwrap();
-    assert_eq!(plan.staged_assets.len(), 2);
+    // The stub serves the same bytes for preview and favicon, so hash dedup
+    // (P1.2) stages them once.
+    assert_eq!(plan.staged_assets.len(), 1);
     assert!(plan.staged_assets.iter().all(|s| s.file_abs.exists()));
     let staged: Vec<PathBuf> = plan
         .staged_assets
@@ -641,4 +648,44 @@ fn collapse_favicon_duplicates_skips_assets_missing_from_disk() {
     assert_eq!(fixture.collapse(), 0, "nothing is merged without bytes");
     assert_eq!(fixture.favicon_of("a"), "f1");
     assert_eq!(fixture.favicon_of("b"), "f2");
+}
+
+#[test]
+fn enrich_reuses_an_existing_asset_with_the_same_bytes() {
+    // P1.2: with the URL-keyed favicon cache missing (e.g. a different favicon
+    // URL serving the same icon), the downloaded bytes are matched by hash and
+    // the existing asset is reused; nothing new is staged or left on disk.
+    let t = TestWorkspace::new("hash-dedup");
+    let first_rev = t.create_pending_embed("first", "https://example.com/page");
+    let second_rev = t.create_pending_embed("second", "https://example.com/page");
+    let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"same-bytes"));
+
+    let first = enrich_embed_blocking(&t.ws, &fetcher, "first", first_rev).unwrap();
+    let first_asset = first.preview_asset.expect("preview").id;
+    assert_eq!(t.asset_files(), 1);
+
+    // Drop the URL cache from a separate connection (pooled readers never write).
+    rusqlite::Connection::open(t.ws.paths().db_path())
+        .unwrap()
+        .execute("DELETE FROM favicon_cache", [])
+        .unwrap();
+    let plan =
+        t.ws.read_blocking(|conn| {
+            plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "second", second_rev)
+        })
+        .unwrap();
+    assert!(plan.staged_assets.is_empty(), "hash hit stages nothing");
+    assert_eq!(t.asset_files(), 1, "the fresh download was discarded");
+
+    let second =
+        t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))
+            .unwrap()
+            .into_embed()
+            .unwrap();
+    assert_eq!(
+        second.preview_asset.map(|a| a.id),
+        Some(first_asset.clone())
+    );
+    assert_eq!(second.favicon_asset.map(|a| a.id), Some(first_asset));
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 1);
 }

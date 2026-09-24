@@ -103,6 +103,18 @@ pub fn run() {
             let log_guard = telemetry::init(&data_dir);
             app.manage(telemetry::LogGuard(log_guard));
 
+            // A restore requested from the backup dialog (`request_restore`)
+            // runs here, before anything opens the database. A failure is
+            // logged and startup continues with the current database.
+            match db::backup::apply_pending_restore(&data_dir) {
+                Ok(Some(preserved)) => tracing::info!(
+                    preserved = %preserved.display(),
+                    "backup: restored from snapshot; prior state preserved"
+                ),
+                Ok(None) => {}
+                Err(error) => tracing::error!(%error, "backup: pending restore failed"),
+            }
+
             let paths = app::WorkspacePaths::new(data_dir);
             let db_path = paths.db_path();
             let assets_dir = paths.assets_dir();
@@ -141,6 +153,9 @@ pub fn run() {
                     // first, so the GC can then remove the orphaned copies.
                     workspace.apply_detached(domain::mutation::Mutation::CollapseFaviconDuplicates);
                     workspace.apply_detached(domain::mutation::Mutation::CollectOrphanedAssets);
+                    // Fill `assets.sha256` for rows imported before migration
+                    // 0020 (no-op once every readable file is hashed).
+                    workspace.apply_detached(domain::mutation::Mutation::HashExistingAssets);
                 })
                 .expect("failed to spawn startup maintenance thread");
             Ok(())
@@ -150,6 +165,8 @@ pub fn run() {
             commands::assets::resolve_asset_path,
             commands::assets::copy_image_cards,
             commands::assets::import_clipboard_image,
+            commands::backup::list_backups,
+            commands::backup::request_restore,
             commands::boards::load_board_snapshot,
             commands::boards::get_home_board,
             commands::boards::save_viewport,

@@ -119,6 +119,16 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "indexes",
         sql: include_str!("../../migrations/0019_indexes.sql"),
     },
+    Migration {
+        version: 20,
+        name: "asset_sha256",
+        sql: include_str!("../../migrations/0020_asset_sha256.sql"),
+    },
+    Migration {
+        version: 21,
+        name: "cards_drop_kind_check",
+        sql: include_str!("../../migrations/0021_cards_drop_kind_check.sql"),
+    },
 ];
 
 /// The result of comparing the database's applied migrations against what

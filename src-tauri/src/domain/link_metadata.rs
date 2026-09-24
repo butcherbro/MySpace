@@ -296,6 +296,11 @@ pub fn extract_html_metadata(base_url: &str, html: &str) -> Result<LinkMetadata,
 /// Collapses existing duplicate favicons onto one stored asset each, so the
 /// regular asset GC can delete the redundant copies. Runs once at startup.
 ///
+/// Retired by hash dedup (P1.2): enrichment now reuses any asset with the same
+/// SHA-256, so no new duplicates appear. Kept for one more release to clean up
+/// duplicates created before migration 0020; delete it (and
+/// `Mutation::CollapseFaviconDuplicates`) in the next release.
+///
 /// Identity is the stored bytes. The runtime cache keys favicons by their source
 /// URL, but a card's favicon URL was never recorded, so for an asset already on
 /// disk the bytes are the only identity that can be verified: two assets merge
@@ -717,8 +722,34 @@ fn stage_optional_image(
         &response.mime_type,
         &response.bytes,
     )?;
-    let asset_id = staged.asset.id.clone();
-    plan.staged_assets.push(staged);
+    // Dedup by hash (P1.2): the same bytes already staged by this plan (a page
+    // whose preview is its favicon) or already stored as an asset are reused,
+    // and the fresh copy is dropped. This retires the startup favicon
+    // collapse: duplicates are never created in the first place.
+    let reused = match staged.asset.sha256.as_deref() {
+        None => None,
+        Some(sha256) => match plan
+            .staged_assets
+            .iter()
+            .find(|other| other.asset.sha256.as_deref() == Some(sha256))
+        {
+            Some(other) => Some(other.asset.id.clone()),
+            None => asset_service::find_asset_by_sha256(conn, sha256)
+                .inspect_err(|_| asset_service::discard_staged(&staged))?
+                .map(|existing| existing.id),
+        },
+    };
+    let asset_id = match reused {
+        Some(existing_id) => {
+            asset_service::discard_staged(&staged);
+            existing_id
+        }
+        None => {
+            let id = staged.asset.id.clone();
+            plan.staged_assets.push(staged);
+            id
+        }
+    };
     if use_cache {
         plan.favicon_cache_entries.push(FaviconCacheEntry {
             source_url: url.to_string(),

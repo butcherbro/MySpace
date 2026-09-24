@@ -429,3 +429,180 @@ fn schema_status_reports_pending_before_migrating() {
         other => panic!("expected SchemaStatus::Pending, got {other:?}"),
     }
 }
+
+/// Migration 0021 is the last `cards` rebuild: the kind and frame-size CHECKs
+/// are gone (the guard is Rust: `CardKind`, `Frame::validate`), every other
+/// constraint and every index on `cards` survives, and existing rows carry over.
+#[test]
+fn migration_0021_drops_the_kind_check_and_keeps_every_cards_index() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    // Apply 1..=20 by hand-picking the runner's list, seed data, then run 21.
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 21) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(migration.sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws', 'Home', 'home', 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) VALUES ('home', 'ws', NULL, 'Home', 'default', NULL, 1, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at, deleted_at, trash_batch_id, unsorted)
+         VALUES ('old', 'home', 'note', 1.5, 2.5, 200, 80, 4, 9, 11, 12, 13, 'batch', 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO note_cards (card_id, document_json, plain_text) VALUES ('old', '{}', 'kept')",
+        [],
+    )
+    .unwrap();
+    // Before 0021 the CHECK still rejects an unknown kind.
+    assert!(conn
+        .execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at) VALUES ('pre', 'home', 'test_kind', 0, 0, 200, 80, 0, 0)",
+            [],
+        )
+        .is_err());
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let row: (String, f64, f64, i64, i64, Option<i64>, Option<String>, i64) = conn
+        .query_row(
+            "SELECT kind, x, y, z_index, revision, deleted_at, trash_batch_id, unsorted FROM cards WHERE id = 'old'",
+            [],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            "note".to_string(),
+            1.5,
+            2.5,
+            4,
+            9,
+            Some(13),
+            Some("batch".to_string()),
+            1
+        )
+    );
+
+    // The guard is Rust now: SQL accepts a new kind and any size.
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at) VALUES ('new', 'home', 'test_kind', 0, 0, 5, 5, 0, 0)",
+        [],
+    )
+    .unwrap();
+    // Other constraints survive: the board FK, NOT NULL and the unsorted CHECK.
+    assert!(conn
+        .execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at) VALUES ('fk', 'nowhere', 'note', 0, 0, 200, 80, 0, 0)",
+            [],
+        )
+        .is_err());
+    assert!(conn
+        .execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at, unsorted) VALUES ('u', 'home', 'note', 0, 0, 200, 80, 0, 0, 2)",
+            [],
+        )
+        .is_err());
+    assert!(conn
+        .execute(
+            "INSERT INTO cards (id, board_id, x, y, width, height, created_at, updated_at) VALUES ('k', 'home', 0, 0, 200, 80, 0, 0)",
+            [],
+        )
+        .is_err());
+
+    let mut stmt = conn.prepare("PRAGMA index_list(cards)").unwrap();
+    let mut indexes: Vec<(String, bool)> = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(1)?, r.get::<_, i64>(4)? == 1))
+        })
+        .unwrap()
+        .map(|r| r.unwrap())
+        .filter(|(name, _)| !name.starts_with("sqlite_autoindex"))
+        .collect();
+    indexes.sort();
+    assert_eq!(
+        indexes,
+        vec![
+            ("idx_cards_board_active".to_string(), false),
+            ("idx_cards_trash_batch".to_string(), false),
+            ("idx_cards_trashed".to_string(), true),
+        ],
+        "(name, partial) of every index on cards"
+    );
+
+    let violations = conn
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .query_map([], |_| Ok(()))
+        .unwrap()
+        .count();
+    assert_eq!(violations, 0);
+}
+
+#[test]
+fn migration_0020_adds_asset_sha256_and_its_partial_index() {
+    let conn = open_in_memory().unwrap();
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('assets')")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(
+        columns.iter().any(|c| c == "sha256"),
+        "assets.sha256 missing; got {columns:?}"
+    );
+
+    let index_sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_assets_sha256'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("idx_assets_sha256 exists");
+    assert!(
+        index_sql.contains("WHERE sha256 IS NOT NULL"),
+        "{index_sql}"
+    );
+
+    let recorded: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 20 AND name = 'asset_sha256'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(recorded, 1);
+}

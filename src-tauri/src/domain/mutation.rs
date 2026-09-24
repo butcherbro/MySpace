@@ -124,8 +124,16 @@ pub enum Mutation {
     ApplyEmbedMetadata(Box<link_metadata::EmbedEnrichmentPlan>),
 
     // ---- maintenance (startup, background) -------------------------------
+    /// Retired by hash dedup (P1.2): every import path, link enrichment
+    /// included, now reuses an existing asset with the same SHA-256, so new
+    /// favicon duplicates are no longer created. Kept for one more release to
+    /// collapse duplicates created before migration 0020; delete this variant
+    /// and `link_metadata::collapse_favicon_duplicates` in the next release.
     CollapseFaviconDuplicates,
     CollectOrphanedAssets,
+    /// Background backfill of `assets.sha256` for rows created before
+    /// migration 0020 (see `asset_service::hash_existing_assets`).
+    HashExistingAssets,
 }
 
 /// Payload of [`Mutation::CommitFileCard`].
@@ -259,6 +267,7 @@ impl Mutation {
             Self::ApplyEmbedMetadata(_) => "card.apply_embed_metadata",
             Self::CollapseFaviconDuplicates => "maintenance.collapse_favicons",
             Self::CollectOrphanedAssets => "maintenance.collect_orphaned_assets",
+            Self::HashExistingAssets => "maintenance.hash_assets",
         }
     }
 
@@ -401,6 +410,9 @@ impl Mutation {
             }
             Self::CollectOrphanedAssets => {
                 asset_service::collect_orphaned_assets(conn, &paths.assets_dir()).map(Out::Count)
+            }
+            Self::HashExistingAssets => {
+                asset_service::hash_existing_assets(conn, &paths.assets_dir()).map(Out::Count)
             }
         }
     }

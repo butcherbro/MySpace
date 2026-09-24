@@ -6,9 +6,11 @@
 //! outside the app (ADR / "copy-in" model). SQLite holds only metadata.
 
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
+use sha2::{Digest, Sha256};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{AssetDto, CreateFileCardInput, ImportAssetInput};
@@ -77,14 +79,7 @@ pub fn store_asset_bytes(
     fs::write(&dest, bytes)
         .map_err(|e| WorkspaceError::Database(format!("cannot store asset bytes: {e}")))?;
 
-    let now = db::migrations::now_millis();
-    conn.execute(
-        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6)",
-        params![id, relative, mime_type, file_name, bytes.len() as i64, now],
-    )?;
-
-    Ok(AssetDto {
+    let asset = AssetDto {
         id,
         file_name: file_name.to_string(),
         mime_type: mime_type.to_string(),
@@ -92,7 +87,10 @@ pub fn store_asset_bytes(
         height: None,
         size_bytes: bytes.len() as i64,
         file_path: relative,
-    })
+        sha256: Some(sha256_hex(bytes)),
+    };
+    insert_asset_row(conn, &asset)?;
+    Ok(asset)
 }
 
 /// Writes already-validated bytes into the asset directory as a staged asset
@@ -125,27 +123,160 @@ pub fn stage_asset_bytes(
             height: None,
             size_bytes: bytes.len() as i64,
             file_path: relative,
+            sha256: Some(sha256_hex(bytes)),
         },
         file_abs: dest,
     })
 }
 
+/// Lowercase hex SHA-256 of an in-memory buffer.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Lowercase hex SHA-256 of a file, streamed in fixed-size chunks so a large
+/// file is never read into memory at once.
+pub fn sha256_file(path: &Path) -> std::io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; HASH_CHUNK_BYTES];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Chunk size for streamed hashing and hashing copies.
+const HASH_CHUNK_BYTES: usize = 256 * 1024;
+
+/// Copies `source` to `dest` in one pass, hashing the bytes as they are
+/// written. Returns `(bytes_copied, sha256_hex)`.
+fn copy_and_hash(source: &Path, dest: &Path) -> std::io::Result<(u64, String)> {
+    let mut input = fs::File::open(source)?;
+    let mut output = fs::File::create(dest)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; HASH_CHUNK_BYTES];
+    let mut total = 0u64;
+    loop {
+        let read = match input.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        hasher.update(&buffer[..read]);
+        output.write_all(&buffer[..read])?;
+        total += read as u64;
+    }
+    output.sync_all()?;
+    Ok((total, format!("{:x}", hasher.finalize())))
+}
+
+/// Returns the asset whose stored file has this SHA-256, if any. Used by every
+/// import path to reuse an existing row instead of keeping a second copy of the
+/// same bytes. When several legacy rows share a hash, the oldest wins so the
+/// answer is stable.
+pub fn find_asset_by_sha256(
+    conn: &Connection,
+    sha256: &str,
+) -> Result<Option<AssetDto>, WorkspaceError> {
+    conn.query_row(
+        "SELECT id, file_name, mime_type, width, height, size_bytes, file_path, sha256
+         FROM assets WHERE sha256 = ?1
+         ORDER BY created_at, id LIMIT 1",
+        [sha256],
+        asset_from_row,
+    )
+    .optional()
+    .map_err(WorkspaceError::from)
+}
+
+/// Maps `id, file_name, mime_type, width, height, size_bytes, file_path,
+/// sha256` (in that order, from column 0) to an [`AssetDto`].
+fn asset_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetDto> {
+    Ok(AssetDto {
+        id: row.get(0)?,
+        file_name: row.get(1)?,
+        mime_type: row.get(2)?,
+        width: row.get(3)?,
+        height: row.get(4)?,
+        size_bytes: row.get(5)?,
+        file_path: row.get(6)?,
+        sha256: row.get(7)?,
+    })
+}
+
+/// Rows hashed per batch by [`hash_existing_assets`].
+pub const HASH_BACKFILL_BATCH: usize = 100;
+
+/// Background backfill for rows created before migration 0020: hashes every
+/// asset whose `sha256` is NULL, in batches of [`HASH_BACKFILL_BATCH`]. Files
+/// are hashed outside any transaction; each batch's UPDATEs then commit in one
+/// short IMMEDIATE transaction, so another process's writer is never locked
+/// out for the duration of the hashing. Unreadable or missing files (and unsafe
+/// names) are skipped and stay NULL. Returns the number of rows hashed.
+pub fn hash_existing_assets(
+    conn: &mut Connection,
+    asset_dir: &Path,
+) -> Result<i64, WorkspaceError> {
+    let mut hashed = 0i64;
+    // Keyset cursor: skipped rows stay NULL, so "WHERE sha256 IS NULL" alone
+    // would return them again forever.
+    let mut after = String::new();
+    loop {
+        let batch: Vec<(String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, file_path FROM assets
+                 WHERE sha256 IS NULL AND id > ?1
+                 ORDER BY id LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![after, HASH_BACKFILL_BATCH as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let Some((last_id, _)) = batch.last() else {
+            break;
+        };
+        after = last_id.clone();
+
+        let hashes: Vec<(String, String)> = batch
+            .iter()
+            .filter(|(_, file_path)| crate::is_safe_asset_name(file_path))
+            .filter_map(|(id, file_path)| {
+                sha256_file(&asset_dir.join(file_path))
+                    .ok()
+                    .map(|sha| (id.clone(), sha))
+            })
+            .collect();
+        if !hashes.is_empty() {
+            let tx = immediate_tx(conn)?;
+            for (id, sha) in &hashes {
+                hashed += tx.execute(
+                    "UPDATE assets SET sha256 = ?1 WHERE id = ?2 AND sha256 IS NULL",
+                    params![sha, id],
+                )? as i64;
+            }
+            tx.commit()?;
+        }
+        if batch.len() < HASH_BACKFILL_BATCH {
+            break;
+        }
+    }
+    Ok(hashed)
+}
+
 /// Loads an asset's metadata by id, if it exists.
 pub fn load_asset(conn: &Connection, id: &str) -> Result<Option<AssetDto>, WorkspaceError> {
     let mut stmt = conn.prepare(
-        "SELECT id, file_name, mime_type, width, height, size_bytes, file_path FROM assets WHERE id = ?1",
+        "SELECT id, file_name, mime_type, width, height, size_bytes, file_path, sha256
+         FROM assets WHERE id = ?1",
     )?;
-    let mut rows = stmt.query_map([id], |row| {
-        Ok(AssetDto {
-            id: row.get(0)?,
-            file_name: row.get(1)?,
-            mime_type: row.get(2)?,
-            width: row.get(3)?,
-            height: row.get(4)?,
-            size_bytes: row.get(5)?,
-            file_path: row.get(6)?,
-        })
-    })?;
+    let mut rows = stmt.query_map([id], asset_from_row)?;
 
     match rows.next() {
         Some(row) => row.map(Some).map_err(WorkspaceError::from),
@@ -171,33 +302,44 @@ fn extension_for_mime(mime_type: &str) -> &'static str {
     }
 }
 
+/// Asset owners that are not card kinds: a board's cover image.
+const NON_CARD_ASSET_REFS: &[(&str, &str)] = &[("boards", "cover_asset_id")];
+
+/// SQL predicate (over alias `a` for `assets`) that is true when no durable
+/// owner references the asset: every registered card kind's
+/// `CardKindHandler::asset_refs` (image, embed preview + favicon, file +
+/// thumbnail today) plus [`NON_CARD_ASSET_REFS`]. Shared by the GC scan and
+/// its in-transaction re-check. Table/column names are compile-time constants.
+fn orphan_predicate() -> String {
+    crate::domain::card_kind::registry()
+        .iter()
+        .flat_map(|handler| handler.asset_refs().iter())
+        .chain(NON_CARD_ASSET_REFS.iter())
+        .map(|(table, column)| {
+            format!("NOT EXISTS (SELECT 1 FROM {table} r WHERE r.{column} = a.id)")
+        })
+        .collect::<Vec<_>>()
+        .join("\n       AND ")
+}
+
 /// Mark-and-sweep collection of orphaned managed assets. An asset is orphaned
-/// only when no durable owner references it: `image_cards.asset_id`,
-/// `embed_cards.asset_id`, `embed_cards.favicon_asset_id`, `boards.cover_asset_id`,
-/// `file_cards.asset_id`, or `file_cards.preview_asset_id`. `favicon_cache` is an
+/// only when no durable owner references it (see [`orphan_predicate`]: each
+/// card kind declares the asset columns it owns, plus `boards.cover_asset_id`).
+/// `favicon_cache` is an
 /// acceleration index, not an owner: a cache-only asset may be collected, but its
 /// cache row is removed transactionally first. The metadata row is deleted inside
 /// a transaction before the physical file, so an unknown durable foreign key
 /// blocks collection before any bytes are removed. A missing physical file counts
 /// as success so an interrupted sweep converges on the next run.
 /// Returns the number of assets collected.
-/// SQL predicate (over alias `a` for `assets`) that is true when no durable
-/// owner references the asset. Shared by the GC scan and its in-transaction
-/// re-check.
-const ORPHAN_PREDICATE: &str = "NOT EXISTS (SELECT 1 FROM image_cards i WHERE i.asset_id = a.id)
-       AND NOT EXISTS (SELECT 1 FROM embed_cards e WHERE e.asset_id = a.id)
-       AND NOT EXISTS (SELECT 1 FROM embed_cards e WHERE e.favicon_asset_id = a.id)
-       AND NOT EXISTS (SELECT 1 FROM boards b WHERE b.cover_asset_id = a.id)
-       AND NOT EXISTS (SELECT 1 FROM file_cards f WHERE f.asset_id = a.id)
-       AND NOT EXISTS (SELECT 1 FROM file_cards f WHERE f.preview_asset_id = a.id)";
-
 pub fn collect_orphaned_assets(
     conn: &mut Connection,
     asset_dir: &Path,
 ) -> Result<i64, WorkspaceError> {
+    let predicate = orphan_predicate();
     let orphans: Vec<(String, String)> = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT a.id, a.file_path FROM assets a WHERE {ORPHAN_PREDICATE}"
+            "SELECT a.id, a.file_path FROM assets a WHERE {predicate}"
         ))?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -221,7 +363,7 @@ pub fn collect_orphaned_assets(
         // transaction and skip the asset if it is no longer an orphan.
         let tx = immediate_tx(conn)?;
         let still_orphan: i64 = tx.query_row(
-            &format!("SELECT COUNT(*) FROM assets a WHERE a.id = ?1 AND {ORPHAN_PREDICATE}"),
+            &format!("SELECT COUNT(*) FROM assets a WHERE a.id = ?1 AND {predicate}"),
             params![id],
             |r| r.get(0),
         )?;
@@ -301,10 +443,15 @@ fn stage_copy(
     let dest = asset_dir.join(&relative);
     fs::create_dir_all(asset_dir)
         .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
-    if let Err(e) = fs::copy(source, &dest) {
-        let _ = fs::remove_file(&dest);
-        return Err(WorkspaceError::Database(format!("cannot copy asset: {e}")));
-    }
+    // One streamed pass copies and hashes, so a large file is never held in
+    // memory and never read twice.
+    let (copied, sha256) = match copy_and_hash(source, &dest) {
+        Ok(result) => result,
+        Err(e) => {
+            let _ = fs::remove_file(&dest);
+            return Err(WorkspaceError::Database(format!("cannot copy asset: {e}")));
+        }
+    };
 
     Ok(StagedAsset {
         file_abs: dest,
@@ -314,8 +461,9 @@ fn stage_copy(
             mime_type: mime_type.to_string(),
             width: None,
             height: None,
-            size_bytes: meta.len() as i64,
+            size_bytes: copied as i64,
             file_path: relative,
+            sha256: Some(sha256),
         },
     })
 }
@@ -366,10 +514,12 @@ pub fn stage_file_card_asset(
 
 /// Inserts an asset metadata row. Runs on the caller's connection or transaction,
 /// so the caller owns the atomicity boundary.
+/// Persists `asset.sha256` (set by every `stage_*` function; `None` leaves the
+/// row to the backfill job).
 pub fn insert_asset_row(conn: &Connection, asset: &AssetDto) -> Result<(), WorkspaceError> {
     conn.execute(
-        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at, sha256)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             asset.id,
             asset.file_path,
@@ -378,7 +528,8 @@ pub fn insert_asset_row(conn: &Connection, asset: &AssetDto) -> Result<(), Works
             asset.width,
             asset.height,
             asset.size_bytes,
-            db::migrations::now_millis()
+            db::migrations::now_millis(),
+            asset.sha256
         ],
     )?;
     Ok(())
@@ -545,6 +696,7 @@ pub fn stage_thumbnail(
                 height: Some(256),
                 size_bytes: bytes.len() as i64,
                 file_path: relative,
+                sha256: Some(sha256_hex(&bytes)),
             },
         }))
     }

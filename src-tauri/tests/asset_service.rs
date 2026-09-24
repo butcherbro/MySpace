@@ -156,6 +156,7 @@ fn read_text_preview_reads_a_bounded_head_of_large_files() {
         height: None,
         size_bytes: contents.len() as i64,
         file_path: "big.log".to_string(),
+        sha256: None,
     };
 
     let limit = 8 * 1024;
@@ -378,4 +379,180 @@ fn count_cards(conn: &rusqlite::Connection, id: &str) -> i64 {
         r.get(0)
     })
     .unwrap()
+}
+
+// ---- P1.2: content hashes, dedup lookup, backfill ---------------------------
+
+fn sha_of(bytes: &[u8]) -> String {
+    asset_service::sha256_hex(bytes)
+}
+
+#[test]
+fn sha256_hex_matches_a_known_vector() {
+    assert_eq!(
+        sha_of(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+}
+
+#[test]
+fn every_stage_function_hashes_what_it_writes_and_the_row_keeps_it() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let tmp = std::env::temp_dir().join(format!("myspace-hash-{}", uuid::Uuid::now_v7()));
+    let asset_dir = tmp.join("assets");
+    fs::create_dir_all(&asset_dir).unwrap();
+
+    // A source larger than one hashing chunk, to exercise the streamed copy.
+    let big: Vec<u8> = (0..(600 * 1024)).map(|i| (i % 251) as u8).collect();
+    let source = tmp.join("big.png");
+    fs::write(&source, &big).unwrap();
+
+    let image = asset_service::stage_image_asset(
+        &asset_dir,
+        &uuid::Uuid::now_v7().to_string(),
+        "big.png",
+        "image/png",
+        &source.to_string_lossy(),
+    )
+    .unwrap();
+    assert_eq!(image.asset.sha256.as_deref(), Some(sha_of(&big).as_str()));
+    assert_eq!(image.asset.size_bytes, big.len() as i64);
+    assert_eq!(fs::read(&image.file_abs).unwrap(), big);
+
+    let file_card = asset_service::stage_file_card_asset(
+        &asset_dir,
+        &uuid::Uuid::now_v7().to_string(),
+        "big.png",
+        "image/png",
+        &source.to_string_lossy(),
+    )
+    .unwrap();
+    assert_eq!(file_card.asset.sha256, image.asset.sha256);
+
+    let bytes = asset_service::stage_asset_bytes(&asset_dir, "x.png", "image/png", b"xyz").unwrap();
+    assert_eq!(bytes.asset.sha256.as_deref(), Some(sha_of(b"xyz").as_str()));
+
+    // insert_asset_row persists the hash; load_asset and the hash lookup see it.
+    asset_service::insert_asset_row(&conn, &image.asset).unwrap();
+    let loaded = asset_service::load_asset(&conn, &image.asset.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.sha256, image.asset.sha256);
+    let found = asset_service::find_asset_by_sha256(&conn, &sha_of(&big))
+        .unwrap()
+        .expect("found by hash");
+    assert_eq!(found.id, image.asset.id);
+    assert!(asset_service::find_asset_by_sha256(&conn, &sha_of(b"nope"))
+        .unwrap()
+        .is_none());
+
+    // The direct-write helper hashes too.
+    let stored =
+        asset_service::store_asset_bytes(&mut conn, &asset_dir, "s.png", "image/png", b"stored")
+            .unwrap();
+    assert_eq!(
+        asset_service::load_asset(&conn, &stored.id)
+            .unwrap()
+            .unwrap()
+            .sha256
+            .as_deref(),
+        Some(sha_of(b"stored").as_str())
+    );
+
+    fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn asset_dto_without_sha256_still_deserialises() {
+    let json = serde_json::json!({
+        "id": "a", "fileName": "a.png", "mimeType": "image/png",
+        "width": null, "height": null, "sizeBytes": 1, "filePath": "a.png"
+    });
+    let asset: AssetDto = serde_json::from_value(json).unwrap();
+    assert_eq!(asset.sha256, None);
+    let back = serde_json::to_value(&asset).unwrap();
+    assert!(back.get("sha256").is_some(), "serialised as `sha256`");
+}
+
+#[test]
+fn hash_existing_assets_backfills_null_rows_through_the_writer() {
+    use myspace_lib::app::{Workspace, WorkspacePaths};
+    use myspace_lib::domain::mutation::Mutation;
+
+    let dir = std::env::temp_dir().join(format!("myspace-backfill-{}", uuid::Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let ws = Workspace::open(WorkspacePaths::new(&dir)).unwrap();
+    let asset_dir = ws.paths().assets_dir();
+    fs::create_dir_all(&asset_dir).unwrap();
+
+    // More rows than one batch, all with NULL sha256; one file is missing and
+    // one name is unsafe: both stay NULL.
+    let total = asset_service::HASH_BACKFILL_BATCH + 5;
+    {
+        let conn = rusqlite::Connection::open(ws.paths().db_path()).unwrap();
+        for i in 0..total {
+            let id = format!("asset-{i:04}");
+            let name = format!("{id}.bin");
+            fs::write(asset_dir.join(&name), format!("bytes-{i}")).unwrap();
+            conn.execute(
+                "INSERT INTO assets (id, file_path, mime_type, file_name, size_bytes, created_at)
+                 VALUES (?1, ?2, 'application/octet-stream', ?2, 1, 0)",
+                rusqlite::params![id, name],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO assets (id, file_path, mime_type, file_name, size_bytes, created_at)
+             VALUES ('gone', 'gone.bin', 'application/octet-stream', 'gone.bin', 1, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assets (id, file_path, mime_type, file_name, size_bytes, created_at)
+             VALUES ('unsafe', '../escape.bin', 'application/octet-stream', 'x', 1, 0)",
+            [],
+        )
+        .unwrap();
+    }
+
+    let hashed = ws
+        .apply_blocking(Mutation::HashExistingAssets)
+        .unwrap()
+        .into_count()
+        .unwrap();
+    assert_eq!(hashed, total as i64);
+
+    let conn = rusqlite::Connection::open(ws.paths().db_path()).unwrap();
+    let sha: String = conn
+        .query_row(
+            "SELECT sha256 FROM assets WHERE id = 'asset-0007'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(sha, sha_of(b"bytes-7"));
+    let null_ids: Vec<String> = conn
+        .prepare("SELECT id FROM assets WHERE sha256 IS NULL ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(null_ids, vec!["gone".to_string(), "unsafe".to_string()]);
+
+    // Idempotent: a second run hashes nothing.
+    let again = ws
+        .apply_blocking(Mutation::HashExistingAssets)
+        .unwrap()
+        .into_count()
+        .unwrap();
+    assert_eq!(again, 0);
+    assert_eq!(
+        Mutation::HashExistingAssets.name(),
+        "maintenance.hash_assets"
+    );
+
+    drop(ws);
+    fs::remove_dir_all(&dir).ok();
 }

@@ -9,26 +9,79 @@
 //!
 //! This is the write-safety gate that must exist before agent writes or another
 //! destructive migration (ADR-0005). Restoration is a separate, rehearsed flow.
+//!
+//! Backup 2.0 (P1.2): managed assets are immutable once written, so a snapshot
+//! hard-links them instead of copying (falling back to a copy across volumes or
+//! on filesystems without hard links). Ten snapshots of an unchanged asset dir
+//! therefore cost about one copy of the bytes. The manifest lists every asset
+//! with its `sha256` and whether it was linked. Retention is bounded by count
+//! and by total bytes. Restoring always *copies* files out of a snapshot, so a
+//! restored workspace never shares an inode with the snapshot it came from.
+//!
+//! Restore in the app: the database cannot be replaced while the `Workspace`
+//! holds connections, so [`request_restore`] only writes a marker and the app
+//! restarts; [`apply_pending_restore`] runs at the next startup, before the
+//! database is opened.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
+use serde::Serialize;
 
 /// How many validated snapshots to keep. Oldest validated are pruned first.
-const BACKUP_RETENTION: usize = 10;
+pub const BACKUP_RETENTION: usize = 10;
+
+/// Upper bound on the bytes the validated snapshots occupy together (2 GiB).
+/// A hard-linked file is counted once however many snapshots link it, and a
+/// file still linked from the live asset dir is not counted at all: pruning
+/// could not free it. Oldest snapshots are pruned first until under the limit;
+/// the newest validated snapshot is never pruned.
+pub const BACKUP_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Name of the restore marker file under the data dir.
+pub const RESTORE_MARKER: &str = "restore-pending.json";
 
 /// Minimum seconds between two startup snapshots. Rapid dev restarts within this
 /// window skip the snapshot so they cannot consume all ten recovery points.
 const RATE_LIMIT_SECONDS: u64 = 60;
 
-/// Names a snapshot directory (lexicographically sortable newest/oldest).
-fn snapshot_dir_name() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}", now.as_secs())
+/// Names a snapshot directory (lexicographically sortable newest/oldest):
+/// `<unix secs>`, or `<unix secs>-<n>` when a snapshot already took this second
+/// (`-` sorts before any digit, so the suffixed name still sorts after the
+/// plain one and before the next second).
+fn snapshot_dir_name(backup_root: &Path) -> String {
+    let secs = now_secs();
+    let base = format!("{secs}");
+    if !backup_root.join(&base).exists() {
+        return base;
+    }
+    let mut n = 1u32;
+    loop {
+        let candidate = format!("{secs}-{n}");
+        if !backup_root.join(&candidate).exists() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Creation time encoded in a snapshot directory name (`<secs>[-<n>]`).
+fn dir_created_secs(name: &str) -> Option<u64> {
+    name.split('-').next()?.parse::<u64>().ok()
+}
+
+/// True when `name` is a bare directory name: one non-empty path component,
+/// no separators, no `..`, not hidden (staging and pre-restore dirs are).
+pub fn is_bare_snapshot_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && !name.contains('\0')
+        && Path::new(name).components().count() == 1
 }
 
 fn now_secs() -> u64 {
@@ -95,52 +148,90 @@ fn backup_database(src: &Connection, dest: &Path) -> Result<(), rusqlite::Error>
     Ok(())
 }
 
-/// Copies an individual file, returning an error on failure. Callers treat a
-/// `NotFound` source as a non-fatal missing asset and anything else as a real
-/// I/O error.
-fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+/// Places one asset file into the snapshot: a hard link when the filesystem
+/// allows it (same volume), otherwise a copy. Returns whether it was linked.
+/// A `NotFound` source is returned as an error so the caller can record a
+/// missing asset; anything else is a real I/O error.
+fn link_or_copy_file(src: &Path, dst: &Path) -> std::io::Result<bool> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(src, dst)?;
-    Ok(())
+    match fs::hard_link(src, dst) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(e),
+        // Different volume, unsupported filesystem, link limit, ...: copy.
+        Err(_) => {
+            fs::copy(src, dst)?;
+            Ok(false)
+        }
+    }
 }
 
-/// Copies every asset referenced by the live DB into `assets/` under `dest`.
-/// Returns the number of assets copied and the relative paths of any asset
-/// files that were missing on disk. A missing file is recorded as a warning,
-/// not a hard failure, so the loss of one asset does not block the whole
-/// snapshot (including the DB, which is what matters most for recovery).
+/// One asset as recorded in the snapshot manifest.
+#[derive(Debug, Clone, Serialize)]
+struct ManifestAsset {
+    file_path: String,
+    sha256: Option<String>,
+    linked: bool,
+}
+
+/// What [`link_referenced_assets`] placed into a snapshot.
+struct SnapshotAssets {
+    /// Assets present in the snapshot (linked or copied).
+    placed: Vec<ManifestAsset>,
+    /// Relative paths of referenced files missing on disk.
+    missing: Vec<String>,
+}
+
+/// True when the `assets` table of `conn` has a `sha256` column. A snapshot
+/// taken right before migration 0020 is applied does not.
+fn assets_have_sha256(conn: &Connection) -> bool {
+    conn.prepare("SELECT sha256 FROM assets LIMIT 0").is_ok()
+}
+
+/// Hard-links (or copies, see [`link_or_copy_file`]) every asset referenced by
+/// the snapshot DB into `assets/` under `dest`. A missing file is recorded as a
+/// warning, not a hard failure, so the loss of one asset does not block the
+/// whole snapshot (including the DB, which is what matters most for recovery).
 /// Real I/O errors (e.g. permission denied) still fail the snapshot.
-fn copy_referenced_assets(
+fn link_referenced_assets(
     conn: &Connection,
     assets_dir: &Path,
     dest: &Path,
-) -> Result<(i64, Vec<String>), String> {
-    let paths: Vec<String> = {
-        let mut stmt = conn
-            .prepare("SELECT file_path FROM assets")
-            .map_err(|e| e.to_string())?;
+) -> Result<SnapshotAssets, String> {
+    let sql = if assets_have_sha256(conn) {
+        "SELECT file_path, sha256 FROM assets"
+    } else {
+        "SELECT file_path, NULL FROM assets"
+    };
+    let rows: Vec<(String, Option<String>)> = {
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |r| r.get::<_, String>(0))
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+            })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?
     };
 
-    let mut count: i64 = 0;
+    let mut placed = Vec::with_capacity(rows.len());
     let mut missing: Vec<String> = Vec::new();
-    for rel in paths {
+    for (rel, sha256) in rows {
         let src = assets_dir.join(&rel);
-        match copy_file(&src, &dest.join("assets").join(&rel)) {
-            Ok(()) => count += 1,
+        match link_or_copy_file(&src, &dest.join("assets").join(&rel)) {
+            Ok(linked) => placed.push(ManifestAsset {
+                file_path: rel,
+                sha256,
+                linked,
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 missing.push(rel);
             }
             Err(e) => return Err(e.to_string()),
         }
     }
-    Ok((count, missing))
+    Ok(SnapshotAssets { placed, missing })
 }
 
 /// Returns the current schema version (max applied migration).
@@ -181,19 +272,111 @@ fn validate_snapshot(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Removes validated snapshots beyond retention, oldest first. Unvalidated dirs
-/// are left in place.
+/// Removes validated snapshots beyond the default retention limits
+/// ([`BACKUP_RETENTION`], [`BACKUP_MAX_TOTAL_BYTES`]), oldest first.
+/// Unvalidated dirs are left in place.
 pub fn prune_old_backups(backup_root: &Path) {
-    let validated = validated_backups(backup_root);
-    if validated.len() <= BACKUP_RETENTION {
-        return;
+    prune_backups_with_limits(backup_root, BACKUP_RETENTION, BACKUP_MAX_TOTAL_BYTES);
+}
+
+/// Prunes validated snapshots, oldest first, until at most `max_count` remain
+/// and together they occupy at most `max_total_bytes` (see
+/// [`snapshots_disk_bytes`]). The newest validated snapshot is never pruned,
+/// even when it alone exceeds the byte limit. Unvalidated dirs are left alone.
+pub fn prune_backups_with_limits(backup_root: &Path, max_count: usize, max_total_bytes: u64) {
+    let mut dirs: Vec<PathBuf> = validated_backups(backup_root)
+        .into_iter()
+        .filter_map(|v| v.db.parent().map(Path::to_path_buf))
+        .collect();
+    while dirs.len() > 1
+        && (dirs.len() > max_count || snapshots_disk_bytes(&dirs) > max_total_bytes)
+    {
+        let oldest = dirs.remove(0);
+        let _ = fs::remove_dir_all(&oldest);
     }
-    let to_remove = validated.len() - BACKUP_RETENTION;
-    for v in validated.iter().take(to_remove) {
-        if let Some(dir) = v.db.parent() {
-            let _ = fs::remove_dir_all(dir);
+}
+
+/// Bytes the given snapshot dirs occupy on disk *because of the snapshots*,
+/// i.e. what deleting all of them could free.
+///
+/// On unix, a hard-linked file is counted once however many snapshots link it
+/// (keyed by device + inode), and a file that also has links outside these
+/// snapshots (`nlink` greater than the links found here, typically the live
+/// `assets/` file it was linked from) is not counted: pruning would not free
+/// it. On other platforms every file is counted.
+pub fn snapshots_disk_bytes(dirs: &[PathBuf]) -> u64 {
+    let mut files = Vec::new();
+    for dir in dirs {
+        collect_files(dir, &mut files);
+    }
+    count_unique_bytes(&files)
+}
+
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_files(&entry.path(), out);
+        } else if file_type.is_file() {
+            out.push(entry.path());
         }
     }
+}
+
+#[cfg(unix)]
+fn count_unique_bytes(files: &[PathBuf]) -> u64 {
+    use std::collections::HashMap;
+    use std::os::unix::fs::MetadataExt;
+
+    let mut total = 0u64;
+    // (dev, ino) -> (size, nlink, links seen in these dirs)
+    let mut shared: HashMap<(u64, u64), (u64, u64, u64)> = HashMap::new();
+    for path in files {
+        let Ok(meta) = fs::symlink_metadata(path) else {
+            continue;
+        };
+        if meta.nlink() <= 1 {
+            total += meta.len();
+        } else {
+            let entry =
+                shared
+                    .entry((meta.dev(), meta.ino()))
+                    .or_insert((meta.len(), meta.nlink(), 0));
+            entry.2 += 1;
+        }
+    }
+    for (size, nlink, seen) in shared.into_values() {
+        if seen >= nlink {
+            total += size;
+        }
+    }
+    total
+}
+
+#[cfg(not(unix))]
+fn count_unique_bytes(files: &[PathBuf]) -> u64 {
+    files
+        .iter()
+        .filter_map(|p| fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// Apparent size of one snapshot dir: the sum of its file sizes, whether or
+/// not they are hard links shared with other snapshots or the live assets.
+fn dir_apparent_bytes(dir: &Path) -> u64 {
+    let mut files = Vec::new();
+    collect_files(dir, &mut files);
+    files
+        .iter()
+        .filter_map(|p| fs::symlink_metadata(p).ok())
+        .map(|m| m.len())
+        .sum()
 }
 
 /// Returns true if the most recent validated snapshot is fresher than the rate
@@ -206,7 +389,7 @@ fn within_rate_limit(backup_root: &Path) -> bool {
     let Some(name) = last.db.parent().and_then(|p| p.file_name()) else {
         return false;
     };
-    let Some(ts) = name.to_string_lossy().parse::<u64>().ok() else {
+    let Some(ts) = dir_created_secs(&name.to_string_lossy()) else {
         return false;
     };
     now_secs().saturating_sub(ts) < RATE_LIMIT_SECONDS
@@ -219,6 +402,10 @@ pub struct SnapshotReport {
     /// Relative paths of referenced asset files that were missing on disk.
     /// Non-fatal: the snapshot is still published with `"validation": "ok"`.
     pub missing_assets: Vec<String>,
+    /// Assets placed into the snapshot (linked or copied).
+    pub asset_count: usize,
+    /// How many of those were hard-linked rather than copied.
+    pub linked_asset_count: usize,
 }
 
 /// Creates one validated, atomic snapshot into `backup_root` and returns a
@@ -235,41 +422,46 @@ fn create_snapshot(
     let staging = backup_root.join(format!(".staging-{}", uuid::Uuid::now_v7()));
     fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
 
-    let result = (|| -> Result<Vec<String>, String> {
+    let result = (|| -> Result<SnapshotAssets, String> {
         let dest_db = staging.join("workspace.sqlite3");
         backup_database(&conn, &dest_db).map_err(|e| e.to_string())?;
 
         let snap = Connection::open(&dest_db).map_err(|e| e.to_string())?;
         validate_snapshot(&snap)?;
-        let (asset_count, missing_assets) = copy_referenced_assets(&snap, assets_dir, &staging)?;
+        let assets = link_referenced_assets(&snap, assets_dir, &staging)?;
+        let linked_count = assets.placed.iter().filter(|a| a.linked).count();
 
         let manifest = serde_json::json!({
             "timestamp_secs": now_secs(),
             "schema_version": schema_version(&conn),
-            "asset_count": asset_count,
-            "missing_assets": missing_assets,
-            "missing_asset_count": missing_assets.len(),
+            "asset_count": assets.placed.len(),
+            "linked_asset_count": linked_count,
+            "assets": assets.placed,
+            "missing_assets": assets.missing,
+            "missing_asset_count": assets.missing.len(),
             "validation": "ok",
         });
         let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
         fs::write(staging.join("manifest.json"), manifest_bytes).map_err(|e| e.to_string())?;
-        Ok(missing_assets)
+        Ok(assets)
     })();
 
-    let missing_assets = match result {
-        Ok(missing) => missing,
+    let assets = match result {
+        Ok(assets) => assets,
         Err(e) => {
             let _ = fs::remove_dir_all(&staging);
             return Err(e);
         }
     };
 
-    let final_dir = backup_root.join(snapshot_dir_name());
+    let final_dir = backup_root.join(snapshot_dir_name(backup_root));
     fs::rename(&staging, &final_dir).map_err(|e| e.to_string())?;
     prune_old_backups(backup_root);
     Ok(SnapshotReport {
         dir: final_dir,
-        missing_assets,
+        missing_assets: assets.missing,
+        asset_count: assets.placed.len(),
+        linked_asset_count: assets.placed.iter().filter(|a| a.linked).count(),
     })
 }
 
@@ -283,11 +475,29 @@ pub fn snapshot_on_startup(db_path: &Path, assets_dir: &Path, backup_root: &Path
     if within_rate_limit(backup_root) {
         return;
     }
-    if let Ok(report) = create_snapshot(db_path, assets_dir, backup_root) {
-        if !report.missing_assets.is_empty() {
-            eprintln!(
-                "backup: {} referenced asset file(s) missing",
-                report.missing_assets.len()
+    tracing::info!("backup: startup snapshot started");
+    let started = Instant::now();
+    match create_snapshot(db_path, assets_dir, backup_root) {
+        Ok(report) => {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                asset_count = report.asset_count,
+                linked_asset_count = report.linked_asset_count,
+                missing_asset_count = report.missing_assets.len(),
+                "backup: startup snapshot published"
+            );
+            if !report.missing_assets.is_empty() {
+                eprintln!(
+                    "backup: {} referenced asset file(s) missing",
+                    report.missing_assets.len()
+                );
+            }
+        }
+        Err(_) => {
+            // The message can embed paths; log only that it failed.
+            tracing::warn!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "backup: startup snapshot failed"
             );
         }
     }
@@ -351,6 +561,9 @@ pub fn restore_from_backup(
     Ok(preserve)
 }
 
+/// Copies (never links) a directory tree. Restoring from a snapshot whose assets
+/// are hard links must yield independent files, so nothing done to the restored
+/// workspace can reach back into the snapshot.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
@@ -364,4 +577,149 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// One snapshot as shown in the "Restore from backup" dialog. Serialised in
+/// camelCase for the frontend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSummary {
+    /// Directory name under `backups/`; pass it back to `request_restore`.
+    pub dir_name: String,
+    /// Unix seconds when the snapshot was taken.
+    pub created_at_secs: u64,
+    /// Schema version recorded in the manifest (0 when unknown).
+    pub schema_version: i64,
+    /// Assets present in the snapshot.
+    pub asset_count: i64,
+    /// Apparent size of the snapshot (sum of its file sizes). Hard-linked
+    /// assets are shared with other snapshots and the live workspace, so the
+    /// sum over several snapshots overstates real disk usage.
+    pub total_bytes: u64,
+    /// True when the manifest says `"ok"` and the snapshot DB passes
+    /// `integrity_check` and `foreign_key_check` right now.
+    pub valid: bool,
+}
+
+/// Lists snapshots under `backup_root`, newest first. Staging and pre-restore
+/// directories (hidden names) are not listed. Every snapshot DB is opened
+/// read-only and validated, so this does blocking I/O proportional to the
+/// number and size of snapshots.
+pub fn list_backups(backup_root: &Path) -> Vec<BackupSummary> {
+    let mut out = Vec::new();
+    for dir in existing_backups(backup_root).into_iter().rev() {
+        let Some(dir_name) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        if !is_bare_snapshot_name(&dir_name) {
+            continue;
+        }
+        let manifest: Option<serde_json::Value> = fs::read(dir.join("manifest.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let manifest_ok = manifest
+            .as_ref()
+            .and_then(|m| m.get("validation"))
+            .and_then(|v| v.as_str())
+            == Some("ok");
+        let field_i64 = |key: &str| {
+            manifest
+                .as_ref()
+                .and_then(|m| m.get(key))
+                .and_then(|v| v.as_i64())
+        };
+        let created_at_secs = manifest
+            .as_ref()
+            .and_then(|m| m.get("timestamp_secs"))
+            .and_then(|v| v.as_u64())
+            .or_else(|| dir_created_secs(&dir_name))
+            .unwrap_or(0);
+        let valid = manifest_ok && validate_snapshot_file(&dir.join("workspace.sqlite3")).is_ok();
+        out.push(BackupSummary {
+            created_at_secs,
+            schema_version: field_i64("schema_version").unwrap_or(0),
+            asset_count: field_i64("asset_count").unwrap_or(0),
+            total_bytes: dir_apparent_bytes(&dir),
+            valid,
+            dir_name,
+        });
+    }
+    out
+}
+
+/// Opens a snapshot DB read-only (never creating it) and validates it.
+fn validate_snapshot_file(db: &Path) -> Result<(), String> {
+    if !db.is_file() {
+        return Err(format!("backup db not found: {}", db.display()));
+    }
+    let conn = Connection::open_with_flags(
+        db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
+    validate_snapshot(&conn)
+}
+
+/// Resolves `snapshot` to a snapshot directory under `backup_root`, refusing
+/// anything that is not a bare directory name of an existing snapshot.
+fn resolve_snapshot_dir(backup_root: &Path, snapshot: &str) -> Result<PathBuf, String> {
+    if !is_bare_snapshot_name(snapshot) {
+        return Err(format!("invalid snapshot name: {snapshot:?}"));
+    }
+    let dir = backup_root.join(snapshot);
+    if !dir.is_dir() {
+        return Err(format!("snapshot not found: {snapshot}"));
+    }
+    Ok(dir)
+}
+
+/// Asks for `snapshot_dir_name` (a directory under `<data_dir>/backups`) to be
+/// restored at the next startup: validates the snapshot, then writes
+/// `<data_dir>/restore-pending.json` = `{ "snapshot": "<dir name>" }`
+/// atomically. The caller restarts the app; [`apply_pending_restore`] does the
+/// actual replacement before the database is opened.
+pub fn request_restore(data_dir: &Path, snapshot_dir_name: &str) -> Result<(), String> {
+    let backup_root = crate::app::WorkspacePaths::new(data_dir).backups_dir();
+    let dir = resolve_snapshot_dir(&backup_root, snapshot_dir_name)?;
+    validate_snapshot_file(&dir.join("workspace.sqlite3"))?;
+
+    let marker = serde_json::json!({ "snapshot": snapshot_dir_name });
+    let bytes = serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?;
+    let tmp = data_dir.join(format!("{RESTORE_MARKER}.tmp"));
+    fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, data_dir.join(RESTORE_MARKER)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Applies a restore requested by [`request_restore`]. Must run at startup
+/// before anything opens the workspace database. Returns `Ok(None)` when no
+/// restore is pending, `Ok(Some(path))` with the preserved prior state after a
+/// restore. The marker is deleted before restoring, so a restore that fails
+/// (or crashes) is never retried in a loop; the error is returned for logging
+/// and startup continues with the current database.
+pub fn apply_pending_restore(data_dir: &Path) -> Result<Option<PathBuf>, String> {
+    let marker = data_dir.join(RESTORE_MARKER);
+    let bytes = match fs::read(&marker) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot read restore marker: {e}")),
+    };
+    fs::remove_file(&marker).map_err(|e| format!("cannot remove restore marker: {e}"))?;
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid restore marker: {e}"))?;
+    let snapshot = json
+        .get("snapshot")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "restore marker has no snapshot".to_string())?;
+
+    let paths = crate::app::WorkspacePaths::new(data_dir);
+    let dir = resolve_snapshot_dir(&paths.backups_dir(), snapshot)?;
+    restore_from_backup(
+        &dir,
+        &paths.db_path(),
+        &paths.assets_dir(),
+        &paths.backups_dir(),
+    )
+    .map(Some)
 }

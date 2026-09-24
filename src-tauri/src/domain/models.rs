@@ -17,6 +17,44 @@ pub struct Frame {
     pub height: f64,
 }
 
+impl Frame {
+    /// Card width bounds (formerly `CHECK(width >= 120 AND width <= 1600)`).
+    pub const MIN_WIDTH: f64 = 120.0;
+    pub const MAX_WIDTH: f64 = 1600.0;
+    /// Card height bounds (formerly `CHECK(height >= 48 AND height <= 10000)`).
+    pub const MIN_HEIGHT: f64 = 48.0;
+    pub const MAX_HEIGHT: f64 = 10000.0;
+
+    /// The frame invariants SQLite used to enforce with CHECK constraints on
+    /// `cards` (dropped in migration 0021): width in 120..=1600, height in
+    /// 48..=10000, finite x/y. Called by every repository function that
+    /// writes a whole frame.
+    pub fn validate(&self) -> Result<(), crate::domain::errors::WorkspaceError> {
+        use crate::domain::errors::WorkspaceError;
+        if !self.x.is_finite() || !self.y.is_finite() {
+            return Err(WorkspaceError::ConstraintViolation(
+                "card position must be finite".into(),
+            ));
+        }
+        // `contains` is false for NaN, so a NaN size is rejected here too.
+        if !(Self::MIN_WIDTH..=Self::MAX_WIDTH).contains(&self.width) {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "card width must be between {} and {}",
+                Self::MIN_WIDTH,
+                Self::MAX_WIDTH
+            )));
+        }
+        if !(Self::MIN_HEIGHT..=Self::MAX_HEIGHT).contains(&self.height) {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "card height must be between {} and {}",
+                Self::MIN_HEIGHT,
+                Self::MAX_HEIGHT
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Board identity within a snapshot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -231,6 +269,12 @@ pub struct AssetDto {
     pub size_bytes: i64,
     /// Path relative to the asset root, used to build the asset URL.
     pub file_path: String,
+    /// Lowercase hex SHA-256 of the stored file (ADR-0011 §4 blob identity).
+    /// `None` for rows created before migration 0020 that the background
+    /// `maintenance.hash_assets` job has not reached yet. `#[serde(default)]`
+    /// keeps older JSON (without the field) deserialisable.
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 /// A File Card: a text-like file copied into the managed asset store with a

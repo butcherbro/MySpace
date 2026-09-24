@@ -1,357 +1,38 @@
-//! Card aggregate: every card kind's rows, its projection back to a DTO, and
-//! the moves that change the board a card belongs to. Split out of
-//! `workspace_repository` without changing any SQL.
+//! Card aggregate: card writes and the moves that change the board a card
+//! belongs to. Per-kind projections (board load, single-card load) live in the
+//! kind handlers (`domain::kinds`, P1.3); `load_cards`/`load_card` iterate the
+//! registry.
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
+use crate::domain::card_kind::{handler, registry, sql_in_list, CardKind};
 use crate::domain::errors::WorkspaceError;
+use crate::domain::kinds;
 use crate::domain::models::{
-    ApplyEmbedMetadataInput, AssetDto, BoardPortalDto, CardDto, ConvertNoteToEmbedInput,
-    CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
-    EmbedCardDto, EmbedForMetadata, FileCardDto, FilesystemAliasDto, Frame, ImageCardDto,
-    MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, NoteCardDto,
-    PlaceUnsortedCardInput, PortalTarget, SetNoteColorInput, UpdateCardFrameInput,
-    UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
+    ApplyEmbedMetadataInput, CardDto, ConvertNoteToEmbedInput, CreateImageCardInput,
+    CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata,
+    Frame, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, PlaceUnsortedCardInput,
+    SetNoteColorInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput,
+    UpdateNoteInput,
 };
 
 use super::super::db;
 use super::immediate_tx;
 
-/// Loads active cards of a board. When `include_subtree_counts` is true, portal
-/// targets carry child board/card counts. `unsorted` selects either the placed
-/// canvas cards (0) or the Unsorted panel cards (1).
+/// Loads active cards of a board: every registered kind's
+/// [`CardKindHandler::load_many`](crate::domain::card_kind::CardKindHandler::load_many),
+/// in registry order. `unsorted` selects either the placed canvas cards
+/// (false; portals carry child board/card counts) or the Unsorted panel cards
+/// (true; portal counts are 0).
 pub(super) fn load_cards(
     conn: &Connection,
     board_id: &str,
-    include_subtree_counts: bool,
     unsorted: bool,
 ) -> Result<Vec<CardDto>, WorkspaceError> {
     let mut out = Vec::new();
-    let unsorted_flag: i64 = if unsorted { 1 } else { 0 };
-
-    // Notes
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    n.document_json, n.plain_text, n.color_token
-             FROM cards c
-             JOIN note_cards n ON n.card_id = c.id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
-             ORDER BY c.z_index, c.id",
-        )?;
-        let rows = stmt.query_map(params![board_id, unsorted_flag], |row| {
-            let document_json: String = row.get(8)?;
-            let document_json: serde_json::Value =
-                serde_json::from_str(&document_json).unwrap_or(serde_json::Value::Null);
-            Ok(CardDto::Note(NoteCardDto {
-                id: row.get(0)?,
-                board_id: row.get(1)?,
-                frame: Frame {
-                    x: row.get(2)?,
-                    y: row.get(3)?,
-                    width: row.get(4)?,
-                    height: row.get(5)?,
-                },
-                z_index: row.get(6)?,
-                revision: row.get(7)?,
-                document_json,
-                plain_text: row.get(9)?,
-                color_token: row.get(10)?,
-            }))
-        })?;
-
-        for r in rows {
-            out.push(r?);
-        }
+    for handler in registry() {
+        out.extend(handler.load_many(conn, board_id, unsorted)?);
     }
-
-    // Board portals. Child counts are aggregated in one query per portal via
-    // correlated subqueries, avoiding an N+1 pattern.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    p.target_board_id, b.revision, b.title, b.color_token, b.symbol,
-                    (SELECT COUNT(*) FROM boards cb
-                     WHERE cb.parent_board_id = p.target_board_id AND cb.deleted_at IS NULL) AS child_board_count,
-                    (SELECT COUNT(*) FROM cards cc
-                     WHERE cc.board_id = p.target_board_id AND cc.deleted_at IS NULL) AS child_card_count,
-                    ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
-             FROM cards c
-             JOIN board_portal_cards p ON p.card_id = c.id
-             JOIN boards b ON b.id = p.target_board_id
-             LEFT JOIN assets ca ON ca.id = b.cover_asset_id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
-             ORDER BY c.z_index, c.id",
-        )?;
-        let rows = stmt.query_map(params![board_id, unsorted_flag], |row| {
-            let target_id: String = row.get(8)?;
-            let (child_board_count, child_card_count) = if include_subtree_counts {
-                (row.get::<_, i64>(13)?, row.get::<_, i64>(14)?)
-            } else {
-                (0, 0)
-            };
-            let cover_asset = if row.get::<_, Option<String>>(15)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(15)?,
-                    file_name: row.get(16)?,
-                    mime_type: row.get(17)?,
-                    width: row.get(18)?,
-                    height: row.get(19)?,
-                    size_bytes: row.get(20)?,
-                    file_path: row.get(21)?,
-                })
-            } else {
-                None
-            };
-            Ok(CardDto::BoardPortal(BoardPortalDto {
-                id: row.get(0)?,
-                board_id: row.get(1)?,
-                frame: Frame {
-                    x: row.get(2)?,
-                    y: row.get(3)?,
-                    width: row.get(4)?,
-                    height: row.get(5)?,
-                },
-                z_index: row.get(6)?,
-                revision: row.get(7)?,
-                target: PortalTarget {
-                    id: target_id,
-                    board_revision: row.get(9)?,
-                    title: row.get(10)?,
-                    color_token: row.get(11)?,
-                    symbol: row.get(12)?,
-                    child_board_count,
-                    child_card_count,
-                    cover_asset,
-                },
-            }))
-        })?;
-
-        for r in rows {
-            out.push(r?);
-        }
-    }
-
-    // Image cards: a static image plus an editable caption.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    i.asset_id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
-                    i.caption_json, i.caption_plain_text
-             FROM cards c
-             JOIN image_cards i ON i.card_id = c.id
-             JOIN assets a ON a.id = i.asset_id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
-             ORDER BY c.z_index, c.id",
-        )?;
-        let rows = stmt.query_map(params![board_id, unsorted_flag], |row| {
-            let caption_json: String = row.get(15)?;
-            let caption_json: serde_json::Value =
-                serde_json::from_str(&caption_json).unwrap_or(serde_json::Value::Null);
-            Ok(CardDto::Image(ImageCardDto {
-                id: row.get(0)?,
-                board_id: row.get(1)?,
-                frame: Frame {
-                    x: row.get(2)?,
-                    y: row.get(3)?,
-                    width: row.get(4)?,
-                    height: row.get(5)?,
-                },
-                z_index: row.get(6)?,
-                revision: row.get(7)?,
-                asset: AssetDto {
-                    id: row.get(8)?,
-                    file_name: row.get(9)?,
-                    mime_type: row.get(10)?,
-                    width: row.get(11)?,
-                    height: row.get(12)?,
-                    size_bytes: row.get(13)?,
-                    file_path: row.get(14)?,
-                },
-                caption_json,
-                caption_plain_text: row.get(16)?,
-            }))
-        })?;
-
-        for r in rows {
-            out.push(r?);
-        }
-    }
-
-    // Embed (Link) cards: URL surface with optional preview/favicon and a
-    // versioned rich-text body. Columns mirror `load_embed_card`.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    e.source_url, e.display_url, e.site_name, e.title, e.provider,
-                    e.description_json, e.description_plain_text, e.description_origin,
-                    e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
-                    pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
-                    fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
-             FROM cards c
-             JOIN embed_cards e ON e.card_id = c.id
-             LEFT JOIN assets pa ON pa.id = e.asset_id
-             LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
-             ORDER BY c.z_index, c.id",
-        )?;
-        let rows = stmt.query_map(params![board_id, unsorted_flag], |row| {
-            let description_json: String = row.get(13)?;
-            let description_json: serde_json::Value =
-                serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
-
-            let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(16)?,
-                    file_name: row.get(21)?,
-                    mime_type: row.get(22)?,
-                    width: row.get(23)?,
-                    height: row.get(24)?,
-                    size_bytes: row.get(25)?,
-                    file_path: row.get(26)?,
-                })
-            } else {
-                None
-            };
-
-            let favicon_asset = if row.get::<_, Option<String>>(17)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(17)?,
-                    file_name: row.get(27)?,
-                    mime_type: row.get(28)?,
-                    width: row.get(29)?,
-                    height: row.get(30)?,
-                    size_bytes: row.get(31)?,
-                    file_path: row.get(32)?,
-                })
-            } else {
-                None
-            };
-
-            Ok(CardDto::Embed(Box::new(EmbedCardDto {
-                id: row.get(0)?,
-                board_id: row.get(1)?,
-                frame: Frame {
-                    x: row.get(2)?,
-                    y: row.get(3)?,
-                    width: row.get(4)?,
-                    height: row.get(5)?,
-                },
-                z_index: row.get(6)?,
-                revision: row.get(7)?,
-                source_url: row.get(8)?,
-                display_url: row.get(9)?,
-                site_name: row.get(10)?,
-                title: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-                provider: row.get(12)?,
-                description_json,
-                description_plain_text: row.get(14)?,
-                description_origin: row.get(15)?,
-                favicon_asset,
-                preview_asset,
-                preview_origin: row.get(18)?,
-                metadata_status: row.get(19)?,
-                metadata_error: row.get(20)?,
-            })))
-        })?;
-
-        for r in rows {
-            out.push(r?);
-        }
-    }
-
-    // Alias identity is SQLite-only: this projection never resolves locator bytes.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision, a.target_kind, a.path_hint, a.display_name
-             FROM cards c JOIN filesystem_aliases a ON a.card_id = c.id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2 ORDER BY c.z_index, c.id",
-        )?;
-        for row in stmt.query_map(params![board_id, unsorted_flag], |row| {
-            Ok(CardDto::FilesystemAlias(FilesystemAliasDto {
-                id: row.get(0)?,
-                board_id: row.get(1)?,
-                frame: Frame {
-                    x: row.get(2)?,
-                    y: row.get(3)?,
-                    width: row.get(4)?,
-                    height: row.get(5)?,
-                },
-                z_index: row.get(6)?,
-                revision: row.get(7)?,
-                target_kind: row.get(8)?,
-                path_hint: row.get(9)?,
-                display_name: row.get(10)?,
-            }))
-        })? {
-            out.push(row?);
-        }
-    }
-
-    // File cards: copied text-like files with their bounded inline preview.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
-                    f.preview_text,
-                    pa.id, pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path
-             FROM cards c
-             JOIN file_cards f ON f.card_id = c.id
-             JOIN assets a ON a.id = f.asset_id
-             LEFT JOIN assets pa ON pa.id = f.preview_asset_id
-             WHERE c.board_id = ?1 AND c.deleted_at IS NULL AND c.unsorted = ?2
-             ORDER BY c.z_index, c.id",
-        )?;
-        for row in stmt.query_map(params![board_id, unsorted_flag], |row| {
-            let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(16)?,
-                    file_name: row.get(17)?,
-                    mime_type: row.get(18)?,
-                    width: row.get(19)?,
-                    height: row.get(20)?,
-                    size_bytes: row.get(21)?,
-                    file_path: row.get(22)?,
-                })
-            } else {
-                None
-            };
-            Ok(CardDto::File(FileCardDto {
-                id: row.get(0)?,
-                board_id: row.get(1)?,
-                frame: Frame {
-                    x: row.get(2)?,
-                    y: row.get(3)?,
-                    width: row.get(4)?,
-                    height: row.get(5)?,
-                },
-                z_index: row.get(6)?,
-                revision: row.get(7)?,
-                asset: AssetDto {
-                    id: row.get(8)?,
-                    file_name: row.get(9)?,
-                    mime_type: row.get(10)?,
-                    width: row.get(11)?,
-                    height: row.get(12)?,
-                    size_bytes: row.get(13)?,
-                    file_path: row.get(14)?,
-                },
-                preview_text: row.get(15)?,
-                preview_asset,
-            }))
-        })? {
-            out.push(row?);
-        }
-    }
-
-    // Board shortcuts (todo.md №17): identity is read live via the target
-    // board's own row, never copied.
-    {
-        let shortcuts =
-            super::board_shortcuts::load_board_shortcuts(conn, board_id, unsorted_flag)?;
-        out.extend(shortcuts);
-    }
-
     Ok(out)
 }
 
@@ -366,262 +47,19 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
         )
         .optional()?;
 
-    let kind = kind.ok_or_else(|| WorkspaceError::NotFound(card_id.to_string()))?;
+    let kind: CardKind = kind
+        .ok_or_else(|| WorkspaceError::NotFound(card_id.to_string()))?
+        .parse()?;
 
-    match kind.as_str() {
-        "note" => {
-            conn.query_row(
-                "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                        n.document_json, n.plain_text, n.color_token
-                 FROM cards c
-                 JOIN note_cards n ON n.card_id = c.id
-                 WHERE c.id = ?1 AND c.deleted_at IS NULL",
-                [card_id],
-                |row| {
-                    let document_json: String = row.get(8)?;
-                    let document_json: serde_json::Value =
-                        serde_json::from_str(&document_json).unwrap_or(serde_json::Value::Null);
-                    Ok(CardDto::Note(NoteCardDto {
-                        id: row.get(0)?,
-                        board_id: row.get(1)?,
-                        frame: Frame {
-                            x: row.get(2)?,
-                            y: row.get(3)?,
-                            width: row.get(4)?,
-                            height: row.get(5)?,
-                        },
-                        z_index: row.get(6)?,
-                        revision: row.get(7)?,
-                        document_json,
-                        plain_text: row.get(9)?,
-                        color_token: row.get(10)?,
-                    }))
-                },
-            )
-            .map_err(WorkspaceError::from)
-        }
-        "board_portal" => {
-            conn.query_row(
-                "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                        p.target_board_id, b.revision, b.title, b.color_token, b.symbol,
-                        (SELECT COUNT(*) FROM boards cb
-                         WHERE cb.parent_board_id = p.target_board_id AND cb.deleted_at IS NULL) AS child_board_count,
-                        (SELECT COUNT(*) FROM cards cc
-                         WHERE cc.board_id = p.target_board_id AND cc.deleted_at IS NULL) AS child_card_count,
-                        ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
-                 FROM cards c
-                 JOIN board_portal_cards p ON p.card_id = c.id
-                 JOIN boards b ON b.id = p.target_board_id
-                 LEFT JOIN assets ca ON ca.id = b.cover_asset_id
-                 WHERE c.id = ?1 AND c.deleted_at IS NULL",
-                [card_id],
-                |row| {
-                    let cover_asset = if row.get::<_, Option<String>>(15)?.is_some() {
-                        Some(AssetDto {
-                            id: row.get(15)?,
-                            file_name: row.get(16)?,
-                            mime_type: row.get(17)?,
-                            width: row.get(18)?,
-                            height: row.get(19)?,
-                            size_bytes: row.get(20)?,
-                            file_path: row.get(21)?,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok(CardDto::BoardPortal(BoardPortalDto {
-                        id: row.get(0)?,
-                        board_id: row.get(1)?,
-                        frame: Frame {
-                            x: row.get(2)?,
-                            y: row.get(3)?,
-                            width: row.get(4)?,
-                            height: row.get(5)?,
-                        },
-                        z_index: row.get(6)?,
-                        revision: row.get(7)?,
-                        target: PortalTarget {
-                            id: row.get(8)?,
-                            board_revision: row.get(9)?,
-                            title: row.get(10)?,
-                            color_token: row.get(11)?,
-                            symbol: row.get(12)?,
-                            child_board_count: row.get(13)?,
-                            child_card_count: row.get(14)?,
-                            cover_asset,
-                        },
-                    }))
-                },
-            )
-            .map_err(WorkspaceError::from)
-        }
-        "image" => {
-            conn.query_row(
-                "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                        i.asset_id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
-                        i.caption_json, i.caption_plain_text
-                 FROM cards c
-                 JOIN image_cards i ON i.card_id = c.id
-                 JOIN assets a ON a.id = i.asset_id
-                 WHERE c.id = ?1 AND c.deleted_at IS NULL",
-                [card_id],
-                |row| {
-                    let caption_json: String = row.get(15)?;
-                    let caption_json: serde_json::Value =
-                        serde_json::from_str(&caption_json).unwrap_or(serde_json::Value::Null);
-                    Ok(CardDto::Image(ImageCardDto {
-                        id: row.get(0)?,
-                        board_id: row.get(1)?,
-                        frame: Frame {
-                            x: row.get(2)?,
-                            y: row.get(3)?,
-                            width: row.get(4)?,
-                            height: row.get(5)?,
-                        },
-                        z_index: row.get(6)?,
-                        revision: row.get(7)?,
-                        asset: AssetDto {
-                            id: row.get(8)?,
-                            file_name: row.get(9)?,
-                            mime_type: row.get(10)?,
-                            width: row.get(11)?,
-                            height: row.get(12)?,
-                            size_bytes: row.get(13)?,
-                            file_path: row.get(14)?,
-                        },
-                        caption_json,
-                        caption_plain_text: row.get(16)?,
-                    }))
-                },
-            )
-            .map_err(WorkspaceError::from)
-        }
-        "embed" => {
-            conn.query_row(
-                "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                        e.source_url, e.display_url, e.site_name, e.title, e.provider,
-                        e.description_json, e.description_plain_text, e.description_origin,
-                        e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
-                        pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
-                        fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
-                 FROM cards c
-                 JOIN embed_cards e ON e.card_id = c.id
-                 LEFT JOIN assets pa ON pa.id = e.asset_id
-                 LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
-                 WHERE c.id = ?1 AND c.deleted_at IS NULL",
-                [card_id],
-                |row| {
-                    let description_json: String = row.get(13)?;
-                    let description_json: serde_json::Value =
-                        serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
-
-                    let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
-                        Some(AssetDto {
-                            id: row.get(16)?,
-                            file_name: row.get(21)?,
-                            mime_type: row.get(22)?,
-                            width: row.get(23)?,
-                            height: row.get(24)?,
-                            size_bytes: row.get(25)?,
-                            file_path: row.get(26)?,
-                        })
-                    } else {
-                        None
-                    };
-
-                    let favicon_asset = if row.get::<_, Option<String>>(17)?.is_some() {
-                        Some(AssetDto {
-                            id: row.get(17)?,
-                            file_name: row.get(27)?,
-                            mime_type: row.get(28)?,
-                            width: row.get(29)?,
-                            height: row.get(30)?,
-                            size_bytes: row.get(31)?,
-                            file_path: row.get(32)?,
-                        })
-                    } else {
-                        None
-                    };
-
-                    Ok(CardDto::Embed(Box::new(EmbedCardDto {
-                        id: row.get(0)?,
-                        board_id: row.get(1)?,
-                        frame: Frame {
-                            x: row.get(2)?,
-                            y: row.get(3)?,
-                            width: row.get(4)?,
-                            height: row.get(5)?,
-                        },
-                        z_index: row.get(6)?,
-                        revision: row.get(7)?,
-                        source_url: row.get(8)?,
-                        display_url: row.get(9)?,
-                        site_name: row.get(10)?,
-                        title: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-                        provider: row.get(12)?,
-                        description_json,
-                        description_plain_text: row.get(14)?,
-                        description_origin: row.get(15)?,
-                        favicon_asset,
-                        preview_asset,
-                        preview_origin: row.get(18)?,
-                        metadata_status: row.get(19)?,
-                        metadata_error: row.get(20)?,
-                    })))
-                },
-            )
-            .map_err(WorkspaceError::from)
-        }
-        "filesystem_alias" => conn.query_row(
-            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision, a.target_kind, a.path_hint, a.display_name FROM cards c JOIN filesystem_aliases a ON a.card_id = c.id WHERE c.id = ?1 AND c.deleted_at IS NULL",
-            [card_id], |row| Ok(CardDto::FilesystemAlias(FilesystemAliasDto { id: row.get(0)?, board_id: row.get(1)?, frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? }, z_index: row.get(6)?, revision: row.get(7)?, target_kind: row.get(8)?, path_hint: row.get(9)?, display_name: row.get(10)? }))
-        ).map_err(WorkspaceError::from),
-        "file" => conn.query_row(
-            "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                    a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path,
-                    f.preview_text,
-                    pa.id, pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path
-             FROM cards c
-             JOIN file_cards f ON f.card_id = c.id
-             JOIN assets a ON a.id = f.asset_id
-             LEFT JOIN assets pa ON pa.id = f.preview_asset_id
-             WHERE c.id = ?1 AND c.deleted_at IS NULL",
-            [card_id], |row| {
-                let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
-                    Some(AssetDto {
-                        id: row.get(16)?,
-                        file_name: row.get(17)?,
-                        mime_type: row.get(18)?,
-                        width: row.get(19)?,
-                        height: row.get(20)?,
-                        size_bytes: row.get(21)?,
-                        file_path: row.get(22)?,
-                    })
-                } else {
-                    None
-                };
-                Ok(CardDto::File(FileCardDto {
-                    id: row.get(0)?,
-                    board_id: row.get(1)?,
-                    frame: Frame { x: row.get(2)?, y: row.get(3)?, width: row.get(4)?, height: row.get(5)? },
-                    z_index: row.get(6)?,
-                    revision: row.get(7)?,
-                    asset: AssetDto { id: row.get(8)?, file_name: row.get(9)?, mime_type: row.get(10)?, width: row.get(11)?, height: row.get(12)?, size_bytes: row.get(13)?, file_path: row.get(14)? },
-                    preview_text: row.get(15)?,
-                    preview_asset,
-                }))
-            }
-        ).map_err(WorkspaceError::from),
-        "board_shortcut" => super::board_shortcuts::load_board_shortcut_card(conn, card_id),
-        other => Err(WorkspaceError::ConstraintViolation(format!(
-            "unknown card kind: {other}"
-        ))),
-    }
+    handler(kind)
+        .load_one(conn, card_id)?
+        .ok_or_else(|| WorkspaceError::NotFound(card_id.to_string()))
 }
 
 /// A failed insert must leave no orphaned `cards` row: both inserts share one
 /// transaction, so any failure rolls both back.
 pub fn create_note(conn: &mut Connection, input: &CreateNoteInput) -> Result<(), WorkspaceError> {
+    input.frame.validate()?;
     let now = db::migrations::now_millis();
     let document_json = serde_json::to_string(&input.document_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
@@ -768,6 +206,7 @@ pub fn update_card_frame(
     conn: &mut Connection,
     input: &UpdateCardFrameInput,
 ) -> Result<(), WorkspaceError> {
+    input.frame.validate()?;
     let now = db::migrations::now_millis();
 
     // One IMMEDIATE transaction so the stale-revision diagnosis reads the same
@@ -816,6 +255,9 @@ pub fn update_card_frame(
 /// must match its expected revision, or the whole batch is rejected and rolled
 /// back.
 pub fn move_cards(conn: &mut Connection, input: &MoveCardsInput) -> Result<(), WorkspaceError> {
+    for item in &input.cards {
+        item.frame.validate()?;
+    }
     let tx = immediate_tx(conn)?;
 
     for item in &input.cards {
@@ -866,6 +308,7 @@ pub fn create_image_card(
     conn: &mut Connection,
     input: &CreateImageCardInput,
 ) -> Result<(), WorkspaceError> {
+    input.frame.validate()?;
     let now = db::migrations::now_millis();
     let caption_json = serde_json::to_string(&input.caption_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
@@ -991,81 +434,8 @@ pub fn convert_note_to_embed(
 
 /// Loads a single embed card (with its optional asset joins) into a DTO.
 pub fn load_embed_card(conn: &Connection, card_id: &str) -> Result<EmbedCardDto, WorkspaceError> {
-    let row = conn.query_row(
-        "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-                e.source_url, e.display_url, e.site_name, e.title, e.provider,
-                e.description_json, e.description_plain_text, e.description_origin,
-                e.asset_id, e.favicon_asset_id, e.preview_origin, e.metadata_status, e.metadata_error,
-                pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
-                fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path
-         FROM cards c
-         JOIN embed_cards e ON e.card_id = c.id
-         LEFT JOIN assets pa ON pa.id = e.asset_id
-         LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
-         WHERE c.id = ?1 AND c.deleted_at IS NULL",
-        [card_id],
-        |row| {
-            let description_json: String = row.get(13)?;
-            let description_json: serde_json::Value =
-                serde_json::from_str(&description_json).unwrap_or(serde_json::Value::Null);
-
-            let preview_asset = if row.get::<_, Option<String>>(16)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(16)?,
-                    file_name: row.get(21)?,
-                    mime_type: row.get(22)?,
-                    width: row.get(23)?,
-                    height: row.get(24)?,
-                    size_bytes: row.get(25)?,
-                    file_path: row.get(26)?,
-                })
-            } else {
-                None
-            };
-
-            let favicon_asset = if row.get::<_, Option<String>>(17)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(17)?,
-                    file_name: row.get(27)?,
-                    mime_type: row.get(28)?,
-                    width: row.get(29)?,
-                    height: row.get(30)?,
-                    size_bytes: row.get(31)?,
-                    file_path: row.get(32)?,
-                })
-            } else {
-                None
-            };
-
-            Ok(EmbedCardDto {
-                id: row.get(0)?,
-                board_id: row.get(1)?,
-                frame: Frame {
-                    x: row.get(2)?,
-                    y: row.get(3)?,
-                    width: row.get(4)?,
-                    height: row.get(5)?,
-                },
-                z_index: row.get(6)?,
-                revision: row.get(7)?,
-                source_url: row.get(8)?,
-                display_url: row.get(9)?,
-                site_name: row.get(10)?,
-                title: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-                provider: row.get(12)?,
-                description_json,
-                description_plain_text: row.get(14)?,
-                description_origin: row.get(15)?,
-                favicon_asset,
-                preview_asset,
-                preview_origin: row.get(18)?,
-                metadata_status: row.get(19)?,
-                metadata_error: row.get(20)?,
-            })
-        },
-    );
-
-    Ok(row?)
+    kinds::embed::load_embed(conn, card_id)?
+        .ok_or_else(|| WorkspaceError::NotFound(card_id.to_string()))
 }
 
 /// Updates an embed (Link) card's description body, bumping its revision,
@@ -1294,9 +664,12 @@ pub fn move_card_to_board(
     };
 
     let changed = tx.execute(
-        "UPDATE cards
-         SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4
-         WHERE id = ?5 AND revision = ?6 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut')",
+        &format!(
+            "UPDATE cards
+             SET board_id = ?1, x = ?2, y = ?3, revision = revision + 1, updated_at = ?4
+             WHERE id = ?5 AND revision = ?6 AND kind IN {}",
+            sql_in_list(CardKind::LEAF)
+        ),
         params![
             input.target_board_id,
             dest_x,
@@ -1357,7 +730,10 @@ pub fn move_cards_to_board_unsorted(
     // Validate every card revision up front so a stale one rolls back the batch.
     for item in &input.cards {
         let actual: i64 = tx.query_row(
-            "SELECT revision FROM cards WHERE id = ?1 AND kind IN ('note','image','embed','filesystem_alias','file','board_shortcut')",
+            &format!(
+                "SELECT revision FROM cards WHERE id = ?1 AND kind IN {}",
+                sql_in_list(CardKind::LEAF)
+            ),
             [item.id.as_str()],
             |r| r.get(0),
         )?;
@@ -1371,9 +747,12 @@ pub fn move_cards_to_board_unsorted(
 
     for item in &input.cards {
         tx.execute(
-            "UPDATE cards
-             SET board_id = ?1, unsorted = 1, revision = revision + 1, updated_at = ?2
-             WHERE id = ?3 AND revision = ?4 AND kind IN ('note','image','embed','filesystem_alias','file','board_shortcut')",
+            &format!(
+                "UPDATE cards
+                 SET board_id = ?1, unsorted = 1, revision = revision + 1, updated_at = ?2
+                 WHERE id = ?3 AND revision = ?4 AND kind IN {}",
+                sql_in_list(CardKind::LEAF)
+            ),
             params![input.target_board_id, now, item.id, item.expected_revision],
         )?;
     }
@@ -1387,15 +766,19 @@ pub fn place_unsorted_card(
     conn: &mut Connection,
     input: &PlaceUnsortedCardInput,
 ) -> Result<(), WorkspaceError> {
+    input.frame.validate()?;
     let now = db::migrations::now_millis();
 
     // One IMMEDIATE transaction so the stale-revision diagnosis reads the same
     // state the guarded UPDATE saw.
     let tx = immediate_tx(conn)?;
     let changed = tx.execute(
-        "UPDATE cards
-         SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
-         WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed','filesystem_alias','file','board_shortcut')",
+        &format!(
+            "UPDATE cards
+             SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
+             WHERE id = ?6 AND revision = ?7 AND kind IN {}",
+            sql_in_list(CardKind::LEAF)
+        ),
         params![
             input.frame.x,
             input.frame.y,
@@ -1489,13 +872,23 @@ pub fn create_link_batch(
             .map_err(|e| WorkspaceError::Database(e.to_string()))?
         };
 
+        let frame = Frame {
+            x: 40.0,
+            y: next_y,
+            width: 320.0,
+            height: 240.0,
+        };
+        frame.validate()?;
         tx.execute(
             "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
-             VALUES (?1, ?2, 'embed', 40, ?3, 320, 240, ?4, 1, ?5, ?5)",
+             VALUES (?1, ?2, 'embed', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)",
             params![
                 link.id,
                 input.board_id,
-                next_y,
+                frame.x,
+                frame.y,
+                frame.width,
+                frame.height,
                 card_ids.len() as i64,
                 now,
             ],

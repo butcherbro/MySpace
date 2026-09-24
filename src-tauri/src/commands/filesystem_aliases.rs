@@ -358,6 +358,35 @@ pub async fn create_file_card(
         .await
         .map_err(|e| WorkspaceError::Database(format!("stage task failed: {e}")))??;
 
+        // Dedup by hash (P1.2): when the freshly staged bytes already exist as
+        // an asset, drop the new copy and point the card at the existing row.
+        let (asset, new_asset) = match new_asset {
+            Some(staged) => {
+                let sha256 = staged.asset.sha256.clone();
+                let existing = ws
+                    .read(move |conn| match sha256 {
+                        Some(sha256) => asset_service::find_asset_by_sha256(conn, &sha256),
+                        None => Ok(None),
+                    })
+                    .await;
+                match existing {
+                    Ok(Some(existing)) => {
+                        asset_service::discard_staged(&staged);
+                        (existing, None)
+                    }
+                    Ok(None) => (asset, Some(staged)),
+                    Err(error) => {
+                        asset_service::discard_staged(&staged);
+                        if let Some(thumbnail) = &thumbnail {
+                            asset_service::discard_staged(thumbnail);
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            None => (asset, None),
+        };
+
         // Stage 3: one short transaction for the asset rows and the card rows.
         // A failure rolls the rows back; `commit_file_card` removes only the
         // files staged above (never a pre-existing asset file, never the

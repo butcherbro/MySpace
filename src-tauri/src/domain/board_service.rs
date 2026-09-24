@@ -38,6 +38,7 @@ pub fn create_child_board(
             "board title must not be empty".into(),
         ));
     }
+    input.frame.validate()?;
 
     let now = db::migrations::now_millis();
     let color = deterministic_color_token(&input.board_id);

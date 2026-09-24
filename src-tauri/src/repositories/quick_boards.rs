@@ -16,7 +16,8 @@ use super::immediate_tx;
 pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, WorkspaceError> {
     let mut stmt = conn.prepare(
         "SELECT qb.board_id, b.title, b.color_token, b.symbol, qb.sort_order,
-                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path,
+                ca.sha256
          FROM quick_boards qb
          JOIN boards b ON b.id = qb.board_id
          LEFT JOIN assets ca ON ca.id = b.cover_asset_id
@@ -33,6 +34,7 @@ pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, Worksp
                 height: row.get(9)?,
                 size_bytes: row.get(10)?,
                 file_path: row.get(11)?,
+                sha256: row.get(12)?,
             })
         } else {
             None

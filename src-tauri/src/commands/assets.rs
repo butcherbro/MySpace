@@ -48,15 +48,45 @@ pub async fn import_asset(
         .await
         .map_err(|e| WorkspaceError::Database(format!("stage task failed: {e}")))??;
 
-        match ws.apply(Mutation::InsertAsset(staged.asset.clone())).await {
-            Ok(_) => Ok(staged.asset),
-            Err(error) => {
-                asset_service::discard_staged(&staged);
-                Err(error)
-            }
-        }
+        record_or_reuse_staged(&ws, staged).await
     })
     .await
+}
+
+/// Records a staged asset, or reuses an existing asset with the same content.
+///
+/// Dedup by hash (P1.2): if a row with the staged file's SHA-256 already
+/// exists, the staged file is discarded and the existing asset is returned, so
+/// importing the same bytes twice keeps one file on disk. Callers must use the
+/// returned asset's `id`, which differs from the requested id on a hit.
+async fn record_or_reuse_staged(
+    ws: &Workspace,
+    staged: asset_service::StagedAsset,
+) -> Result<AssetDto, WorkspaceError> {
+    if let Some(sha256) = staged.asset.sha256.clone() {
+        let existing = match ws
+            .read(move |conn| asset_service::find_asset_by_sha256(conn, &sha256))
+            .await
+        {
+            Ok(existing) => existing,
+            Err(error) => {
+                asset_service::discard_staged(&staged);
+                return Err(error);
+            }
+        };
+        if let Some(existing) = existing {
+            asset_service::discard_staged(&staged);
+            return Ok(existing);
+        }
+    }
+
+    match ws.apply(Mutation::InsertAsset(staged.asset.clone())).await {
+        Ok(_) => Ok(staged.asset),
+        Err(error) => {
+            asset_service::discard_staged(&staged);
+            Err(error)
+        }
+    }
 }
 
 /// Resolves an asset id to its absolute on-disk path. Used by "Copy File Path"
@@ -145,13 +175,7 @@ pub async fn import_clipboard_image(ws: State<'_, Workspace>) -> Result<AssetDto
         .await
         .map_err(|e| WorkspaceError::Database(format!("clipboard task failed: {e}")))??;
 
-        match ws.apply(Mutation::InsertAsset(staged.asset.clone())).await {
-            Ok(_) => Ok(staged.asset),
-            Err(error) => {
-                asset_service::discard_staged(&staged);
-                Err(error)
-            }
-        }
+        record_or_reuse_staged(&ws, staged).await
     })
     .await
 }
