@@ -3,7 +3,7 @@
 
 use rusqlite::{Connection, Row, Transaction};
 
-use super::{card_frame, json_at, load_board_rows, load_one_row, DetailTable, AFTER_CARD};
+use super::{card_frame, document_at, load_board_rows, load_one_row, DetailTable, AFTER_CARD};
 use crate::domain::card_kind::{
     CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
 };
@@ -25,15 +25,17 @@ const SELECT_FROM: &str =
  JOIN note_cards n ON n.card_id = c.id";
 
 fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
+    let document = document_at(row, AFTER_CARD)?;
     Ok(CardDto::Note(NoteCardDto {
         id: row.get(0)?,
         board_id: row.get(1)?,
         frame: card_frame(row)?,
         z_index: row.get(6)?,
         revision: row.get(7)?,
-        document_json: json_at(row, AFTER_CARD)?,
+        document_json: document.json,
         plain_text: row.get(AFTER_CARD + 1)?,
         color_token: row.get(AFTER_CARD + 2)?,
+        corrupt: document.corrupt,
     }))
 }
 

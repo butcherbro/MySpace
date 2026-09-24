@@ -252,6 +252,14 @@ Owner: agent. Estimate: 1 day (after P1.1).
 
 ## P1.7 — Corrupt data as an explicit state; recovery dialog
 
+**Status: done 2026-09-24.** Note/image/embed DTOs carry `corrupt` (empty
+doc + stored plain text, `warn` with `error_code = "corrupt_document"`);
+text writes over a corrupt row need `acknowledgeCorrupt`. Damaged cards show
+the recovered text statically, never autosave, and offer Repair. A database
+that fails to open starts the app in recovery mode (`get_startup_failure`,
+no `Workspace` managed; the frontend `StartupGate` renders only the restore
+dialog). `tests/corrupt_documents.rs`, `tests/e2e/corrupt-note.spec.ts`.
+
 Steps: `document_json` parse failure yields `CardDto::Note { corrupt:
 true, documentJson: null }` (never silently `null`); the NoteCard renders a
 "damaged, showing plain text" state and never autosaves over it; startup

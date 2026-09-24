@@ -41,6 +41,7 @@ import type {
   SearchResultDto,
   SetBoardCoverInput,
   SetNoteColorInput,
+  StartupFailure,
   TextReceipt,
   TrashSelectionInput,
   TrashSummaryDto,
@@ -57,6 +58,10 @@ import type {
  * `WorkspaceGateway` abstraction.
  */
 export class TauriWorkspaceGateway implements WorkspaceGateway {
+  getStartupFailure(): Promise<StartupFailure | null> {
+    return invoke<StartupFailure | null>("get_startup_failure", {});
+  }
+
   getHomeBoard(): Promise<BoardSummary> {
     return invoke<BoardSummary>("get_home_board", {});
   }

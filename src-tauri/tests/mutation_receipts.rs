@@ -133,6 +133,7 @@ fn update_note_receipts_follow_the_stored_revision() {
                 id: "n1".into(),
                 expected_revision,
                 document_json: json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":text}]}]}),
+                acknowledge_corrupt: false,
             },
         )
         .unwrap()
@@ -347,6 +348,7 @@ fn receipts_travel_through_the_mutation_funnel() {
             id: "n1".into(),
             expected_revision: created.revision,
             document_json: rich_doc("again"),
+            acknowledge_corrupt: false,
         }))
         .unwrap()
         .into_text_receipt()
@@ -390,6 +392,7 @@ fn note_plain_text_is_derived_from_the_document() {
             id: "n1".into(),
             expected_revision: 1,
             document_json: rich_doc("edited"),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();
@@ -428,6 +431,7 @@ fn caption_plain_text_is_derived_from_the_caption_document() {
             id: "img".into(),
             expected_revision: 1,
             caption_json: rich_doc("new caption"),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();
@@ -456,6 +460,7 @@ fn description_plain_text_is_derived_on_convert_and_update() {
             id: "n1".into(),
             expected_revision: 2,
             description_json: rich_doc("comment"),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();

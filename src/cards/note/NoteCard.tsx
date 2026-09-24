@@ -1,6 +1,8 @@
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { StaticDocument } from "../../editor/StaticDocument";
+import { DamagedDocument } from "../../editor/DamagedDocument";
+import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import type { NoteEditorCommands } from "../../editor/editor-commands";
 import type { TextColorId } from "../../editor/text-color";
@@ -14,9 +16,9 @@ interface NoteCardProps {
   /** Exit edit mode. */
   onDeactivate: () => void;
   /** Persist note content as an authoritative document. Rejects on failure. */
-  onUpdate: (id: string, document: unknown) => Promise<void>;
+  onUpdate: DocumentSave;
   /** Finalize note editing (blur/Enter) and optionally convert into a Link Card. */
-  onFinalize?: (id: string, document: unknown) => Promise<void>;
+  onFinalize?: DocumentSave;
   /** Request a context menu (right-click) for this card. */
   onContextMenu: (cardId: string, x: number, y: number) => void;
   /** Persist a manual resize (width/height in CSS px). */
@@ -66,13 +68,23 @@ export const NoteCard = memo(function NoteCard({
   onStrikeStateChange,
   onTextColorChange,
 }: NoteCardProps) {
-  const { draft, saving, error, handleChange, handleBlur, handleFinalize } = useDocumentDraft({
+  // P1.7: a corrupt note shows its recovered text and never autosaves until
+  // the user starts a repair (see editor/corrupt-document.ts).
+  const repair = useCorruptRepair({ corrupt: note.corrupt === true, onUpdate, onFinalize });
+  const { draft, saving, error, handleChange, handleBlur, handleFinalize, replaceDraft } = useDocumentDraft({
     id: note.id,
     persistedDocument: note.documentJson,
-    onUpdate,
-    onFinalize,
+    onUpdate: repair.onUpdate,
+    onFinalize: repair.onFinalize,
     onSaved: onDeactivate,
+    corrupt: repair.damaged,
   });
+  // The Repair click also reaches the canvas as a card click, which starts
+  // editing, so the editor mounts on the recovered document.
+  const startRepair = () => {
+    repair.beginRepair();
+    replaceDraft(recoveredDocument(note.plainText));
+  };
 
   // The static view is swapped for an editor on the click that starts editing,
   // so remember where that click landed (see NoteEditor `initialCaretPoint`).
@@ -200,6 +212,7 @@ export const NoteCard = memo(function NoteCard({
       data-editing={editing ? "true" : "false"}
       data-saving={saving ? "true" : "false"}
       data-error={error ? "true" : "false"}
+      data-corrupt={repair.damaged ? "true" : "false"}
       style={{ width: appliedWidth, height: appliedHeight }}
       onPointerDown={(e) => {
         lastPointerDownRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -210,7 +223,14 @@ export const NoteCard = memo(function NoteCard({
         onContextMenu(note.id, e.clientX, e.clientY);
       }}
     >
-      {editing ? (
+      {repair.damaged ? (
+        <DamagedDocument
+          label="note"
+          plainText={note.plainText}
+          onRepair={startRepair}
+          highlightQuery={highlightQuery}
+        />
+      ) : editing ? (
         <NoteEditor
           document={draft}
           editable

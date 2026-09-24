@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction};
 
 use super::{
-    asset_at, asset_columns, card_frame, json_at, load_board_rows, load_one_row, DetailTable,
+    asset_at, asset_columns, card_frame, document_at, load_board_rows, load_one_row, DetailTable,
     AFTER_CARD, ASSET_WIDTH, CARD_COLUMNS,
 };
 use crate::domain::card_kind::{
@@ -59,6 +59,7 @@ fn select_from() -> String {
 
 fn map_embed(row: &Row<'_>) -> rusqlite::Result<EmbedCardDto> {
     let e = AFTER_CARD;
+    let description = document_at(row, e + 5)?;
     Ok(EmbedCardDto {
         id: row.get(0)?,
         board_id: row.get(1)?,
@@ -70,7 +71,7 @@ fn map_embed(row: &Row<'_>) -> rusqlite::Result<EmbedCardDto> {
         site_name: row.get(e + 2)?,
         title: row.get::<_, Option<String>>(e + 3)?.unwrap_or_default(),
         provider: row.get(e + 4)?,
-        description_json: json_at(row, e + 5)?,
+        description_json: description.json,
         description_plain_text: row.get(e + 6)?,
         description_origin: row.get(e + 7)?,
         preview_origin: row.get(e + 8)?,
@@ -78,6 +79,7 @@ fn map_embed(row: &Row<'_>) -> rusqlite::Result<EmbedCardDto> {
         metadata_error: row.get(e + 10)?,
         preview_asset: asset_at(row, PREVIEW)?,
         favicon_asset: asset_at(row, FAVICON)?,
+        corrupt: description.corrupt,
     })
 }
 

@@ -41,6 +41,7 @@ import type {
   SearchResultDto,
   SetBoardCoverInput,
   SetNoteColorInput,
+  StartupFailure,
   TextReceipt,
   TrashEntryDto,
   TrashSelectionInput,
@@ -87,6 +88,27 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   private duplicateSequence = 0;
 
   private dataVersion = 0;
+
+  /** Seeded once by the `?fixture=corrupt-note` fixture (P1.7). */
+  private corruptFixtureSeeded = false;
+
+  /**
+   * P1.7 recovery mode: tests set this directly; the browser harness sets it
+   * with `?fixture=startup-failure`.
+   */
+  startupFailure: StartupFailure | null = null;
+
+  getStartupFailure(): Promise<StartupFailure | null> {
+    if (this.startupFailure) return Promise.resolve({ ...this.startupFailure });
+    if (fixtureParam() === "startup-failure") {
+      return Promise.resolve({
+        code: "db_open_failed",
+        message:
+          "[db_open_failed/sqlite_26] The workspace database could not be opened. You can restore it from a backup snapshot or quit.",
+      });
+    }
+    return Promise.resolve(null);
+  }
 
   getHomeBoard(): Promise<BoardSummary> {
     return Promise.resolve({ ...this.board });
@@ -150,6 +172,13 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         cards: [structuredClone(alias)],
         unsortedCards: [],
       });
+    }
+    // Test-only corrupt-note fixture (P1.7): one note whose stored document
+    // could not be parsed (recovered plain text only) next to a healthy one.
+    // Seeded once, so later reloads see the repaired state.
+    if (boardId === "home" && !this.corruptFixtureSeeded && fixtureParam() === "corrupt-note") {
+      this.corruptFixtureSeeded = true;
+      this.snapshot.cards = corruptNoteFixtureCards();
     }
     // Test-only dense fixture activated by a query parameter.
     if (
@@ -215,6 +244,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for ${input.id}`));
     }
+    if (card.corrupt && !input.acknowledgeCorrupt) {
+      return Promise.reject(new Error(CORRUPT_REJECTION));
+    }
+    card.corrupt = false;
     card.revision += 1;
     card.documentJson = input.documentJson;
     card.plainText = documentToPlainText(input.documentJson);
@@ -716,6 +749,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for ${input.id}`));
     }
+    if (card.corrupt && !input.acknowledgeCorrupt) {
+      return Promise.reject(new Error(CORRUPT_REJECTION));
+    }
+    card.corrupt = false;
     card.revision += 1;
     card.captionJson = input.captionJson;
     card.captionPlainText = documentToPlainText(input.captionJson);
@@ -732,6 +769,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for ${input.id}`));
     }
+    if (card.corrupt && !input.acknowledgeCorrupt) {
+      return Promise.reject(new Error(CORRUPT_REJECTION));
+    }
+    card.corrupt = false;
     card.revision += 1;
     card.descriptionJson = input.descriptionJson;
     card.descriptionPlainText = documentToPlainText(input.descriptionJson);
@@ -1400,6 +1441,34 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
     return crumbs;
   }
+}
+
+/** The backend's rejection of an unacknowledged write over a corrupt document. */
+const CORRUPT_REJECTION = "constraint violation: document is corrupt; open it to repair first";
+
+/** The `?fixture=` query parameter of the browser harness, if any. */
+function fixtureParam(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("fixture");
+}
+
+/** Cards of the `?fixture=corrupt-note` board (P1.7). */
+function corruptNoteFixtureCards(): CardDto[] {
+  const note = (id: string, x: number, text: string, corrupt: boolean): CardDto => ({
+    kind: "note",
+    id,
+    boardId: "home",
+    frame: { x, y: 60, width: 240, height: 120 },
+    zIndex: 0,
+    revision: 1,
+    documentJson: corrupt
+      ? { type: "doc", content: [] }
+      : { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
+    plainText: text,
+    colorToken: "default",
+    corrupt,
+  });
+  return [note("corrupt-note", 60, "Recovered words", true), note("healthy-note", 360, "Healthy words", false)];
 }
 
 function cardTitle(card: CardDto): string {

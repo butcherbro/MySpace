@@ -102,6 +102,7 @@ fn updating_note_text_bumps_its_board() {
         id,
         expected_revision: revision,
         document_json: doc("changed"),
+        acknowledge_corrupt: false,
     }))
     .unwrap();
     assert!(seq(&ws, &home) > before);

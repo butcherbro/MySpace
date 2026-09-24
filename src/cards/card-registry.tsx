@@ -15,6 +15,7 @@ import { EmbedCard } from "./link/EmbedCard";
 import { FolderShortcutCard } from "./folder/FolderShortcutCard";
 import { FileCard } from "./file/FileCard";
 import { BoardShortcutCard } from "./board/BoardShortcutCard";
+import type { DocumentSave } from "../editor/corrupt-document";
 // The single card-kind list and per-kind capability registry live in
 // ./card-kinds.ts (kept out of this JSX-heavy file so importing the plain
 // data doesn't pull in every card component, and so react-refresh's
@@ -26,13 +27,13 @@ export interface CardRenderContext {
   /** Exit note editing. */
   onDeactivate: () => void;
   /** Persist note content as an authoritative document. */
-  onUpdateNote: (id: string, document: unknown) => Promise<void>;
+  onUpdateNote: DocumentSave;
   /** Finalize note editing and optionally convert the note into a Link Card. */
-  onFinalizeNote: (id: string, document: unknown) => Promise<void>;
+  onFinalizeNote: DocumentSave;
   /** Persist an image card's caption. */
-  onUpdateImageCaption: (id: string, document: unknown) => Promise<void>;
+  onUpdateImageCaption: DocumentSave;
   /** Persist an embed (Link) card's description body. */
-  onUpdateEmbedDescription: (id: string, document: unknown) => Promise<void>;
+  onUpdateEmbedDescription: DocumentSave;
   /** Retry metadata enrichment for a failed Link Card. */
   onRetryEmbedMetadata: (id: string) => void;
   /** Open a board portal. */

@@ -1,23 +1,12 @@
 import { useEffect, useState } from "react";
 import type { BackupSummary, WorkspaceGateway } from "../services/workspace-gateway";
 import { errorMessage } from "../services/error-message";
+import { formatBackupDate } from "./format-backup-date";
 import "./restore-dialog.css";
 
 interface RestoreDialogProps {
   gateway: WorkspaceGateway;
   onClose: () => void;
-}
-
-function formatBackupDate(createdAtSecs: number): string {
-  const date = new Date(createdAtSecs * 1000);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function formatSizeMb(totalBytes: number): string {

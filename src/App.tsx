@@ -53,6 +53,7 @@ import { UnsortedPanel } from "./navigation/UnsortedPanel";
 import { useBoardNavigation } from "./navigation/use-board-navigation";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
+import type { DocumentSaveOptions } from "./editor/corrupt-document";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickFolder, pickImageFile } from "./services/asset-picker";
@@ -837,7 +838,7 @@ function App() {
   });
 
   const handleUpdateNote = useCallback(
-    (id: string, document: unknown): Promise<void> => {
+    (id: string, document: unknown, options?: DocumentSaveOptions): Promise<void> => {
       return queueRef.current.run(async () => {
         const note = cardsRef.current.find(
           (n): n is NoteCardDto => n.kind === "note" && n.id === id,
@@ -855,6 +856,7 @@ function App() {
           id,
           expectedRevision: note.revision,
           documentJson: document,
+          ...acknowledgeCorrupt(options),
         });
         // Keep the ref authoritative *inside this microtask*: the note's own
         // auto-grow (NoteCard) debounces a resize write off the same keystroke
@@ -863,7 +865,7 @@ function App() {
         // note above for the same pattern).
         cardsRef.current = cardsRef.current.map((c) =>
           c.id === id
-            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText }
+            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText, corrupt: false }
             : c,
         );
         dispatch({
@@ -882,7 +884,7 @@ function App() {
   );
 
   const handleFinalizeNote = useCallback(
-    (id: string, document: unknown): Promise<void> => {
+    (id: string, document: unknown, options?: DocumentSaveOptions): Promise<void> => {
       return queueRef.current.run(async () => {
         const note = cardsRef.current.find(
           (n): n is NoteCardDto => n.kind === "note" && n.id === id,
@@ -911,12 +913,13 @@ function App() {
           id,
           expectedRevision: note.revision,
           documentJson: document,
+          ...acknowledgeCorrupt(options),
         });
         // Same ref-staleness guard as handleUpdateNote above: a pending
         // auto-grow resize can be queued right behind this finalize.
         cardsRef.current = cardsRef.current.map((c) =>
           c.id === id
-            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText }
+            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText, corrupt: false }
             : c,
         );
         dispatch({
@@ -935,7 +938,7 @@ function App() {
   );
 
   const handleUpdateImageCaption = useCallback(
-    (id: string, document: unknown): Promise<void> => {
+    (id: string, document: unknown, options?: DocumentSaveOptions): Promise<void> => {
       return queueRef.current.run(async () => {
         const image = cardsRef.current.find(
           (c): c is ImageCardDto => c.kind === "image" && c.id === id,
@@ -948,6 +951,7 @@ function App() {
           id,
           expectedRevision: image.revision,
           captionJson: document,
+          ...acknowledgeCorrupt(options),
         });
         dispatch({
           type: "imageCaptionUpdated",
@@ -965,7 +969,7 @@ function App() {
   );
 
   const handleUpdateEmbedDescription = useCallback(
-    (id: string, document: unknown): Promise<void> => {
+    (id: string, document: unknown, options?: DocumentSaveOptions): Promise<void> => {
       return queueRef.current.run(async () => {
         const embed = cardsRef.current.find(
           (c): c is EmbedCardDto => c.kind === "embed" && c.id === id,
@@ -978,6 +982,7 @@ function App() {
           id,
           expectedRevision: embed.revision,
           descriptionJson: document,
+          ...acknowledgeCorrupt(options),
         });
         dispatch({
           type: "embedDescriptionUpdated",
@@ -2241,10 +2246,14 @@ function App() {
     const latest = () => cardHandlersRef.current;
     return {
       onDeactivate: () => latest().onDeactivate(),
-      onUpdateNote: (id: string, document: unknown) => latest().onUpdateNote(id, document),
-      onFinalizeNote: (id: string, document: unknown) => latest().onFinalizeNote(id, document),
-      onUpdateImageCaption: (id: string, document: unknown) => latest().onUpdateImageCaption(id, document),
-      onUpdateEmbedDescription: (id: string, document: unknown) => latest().onUpdateEmbedDescription(id, document),
+      onUpdateNote: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onUpdateNote(id, document, options),
+      onFinalizeNote: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onFinalizeNote(id, document, options),
+      onUpdateImageCaption: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onUpdateImageCaption(id, document, options),
+      onUpdateEmbedDescription: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onUpdateEmbedDescription(id, document, options),
       onRetryEmbedMetadata: (id: string) => latest().onRetryEmbedMetadata(id),
       onOpenBoard: (boardId: string) => latest().onOpenBoard(boardId),
       onRenameBoard: (boardId: string, title: string) => latest().onRenameBoard(boardId, title),
@@ -2582,6 +2591,11 @@ function App() {
 }
 
 export default App;
+
+/** The `acknowledgeCorrupt` flag of a text write, present only when set (P1.7). */
+function acknowledgeCorrupt(options?: DocumentSaveOptions): { acknowledgeCorrupt?: true } {
+  return options?.acknowledgeCorrupt ? { acknowledgeCorrupt: true } : {};
+}
 
 /** A short, human-friendly URL for display (strips scheme and trailing slash). */
 function displayUrl(raw: string): string {

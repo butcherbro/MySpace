@@ -343,6 +343,7 @@ fn a_stale_apply_discards_staged_files_and_records_no_rows() {
             id: "link-card".to_string(),
             expected_revision: revision,
             description_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "edited"}]}]}),
+            acknowledge_corrupt: false,
         },
     ))
     .unwrap();
@@ -366,6 +367,7 @@ fn enrich_preserves_a_user_authored_description() {
             id: "link-card".to_string(),
             expected_revision: revision,
             description_json: serde_json::json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"мой комментарий"}]}]}),
+            acknowledge_corrupt: false,
         }))
         .unwrap();
 

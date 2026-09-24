@@ -4,7 +4,7 @@
 use rusqlite::{Connection, Row, Transaction};
 
 use super::{
-    asset_columns, card_frame, json_at, load_board_rows, load_one_row, required_asset_at,
+    asset_columns, card_frame, document_at, load_board_rows, load_one_row, required_asset_at,
     DetailTable, AFTER_CARD, ASSET_WIDTH, CARD_COLUMNS,
 };
 use crate::domain::card_kind::{
@@ -33,6 +33,7 @@ fn select_from() -> String {
 
 fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
     let caption = AFTER_CARD + ASSET_WIDTH;
+    let document = document_at(row, caption)?;
     Ok(CardDto::Image(ImageCardDto {
         id: row.get(0)?,
         board_id: row.get(1)?,
@@ -40,8 +41,9 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
         z_index: row.get(6)?,
         revision: row.get(7)?,
         asset: required_asset_at(row, AFTER_CARD)?,
-        caption_json: json_at(row, caption)?,
+        caption_json: document.json,
         caption_plain_text: row.get(caption + 1)?,
+        corrupt: document.corrupt,
     }))
 }
 

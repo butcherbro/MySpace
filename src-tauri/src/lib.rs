@@ -133,10 +133,23 @@ pub fn run() {
                 db::backup::snapshot_on_startup(&db_path, &assets_dir, &backup_dir);
             }
 
-            let conn = db::open_and_bootstrap(&db_path)
-                .expect("failed to open and bootstrap workspace database");
-            let workspace = app::Workspace::from_connection(conn, paths)
-                .expect("failed to start workspace writer");
+            // The backup commands read the paths, not the `Workspace`, so they
+            // also work in recovery mode.
+            app.manage(paths.clone());
+
+            // A database that cannot be opened no longer panics: the app
+            // starts in recovery mode (P1.7) with no `Workspace` managed, and
+            // the frontend, seeing `get_startup_failure`, shows only the
+            // restore-from-backup dialog. No maintenance (and no snapshot of
+            // the broken database, which would rotate out good backups) runs.
+            let workspace = match app::open_workspace(paths) {
+                Ok(workspace) => workspace,
+                Err(failure) => {
+                    app.manage(app::StartupState(Some(failure)));
+                    return Ok(());
+                }
+            };
+            app.manage(app::StartupState(None));
             app.manage(workspace.clone());
 
             // Startup maintenance runs after the window is up, on the writer
@@ -165,6 +178,7 @@ pub fn run() {
             commands::assets::resolve_asset_path,
             commands::assets::copy_image_cards,
             commands::assets::import_clipboard_image,
+            commands::startup::get_startup_failure,
             commands::backup::list_backups,
             commands::backup::request_restore,
             commands::boards::load_board_snapshot,

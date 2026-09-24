@@ -140,3 +140,18 @@
 .restore-dialog-overlay > * {
   pointer-events: auto;
 }
+
+/* P1.7 recovery mode: the dialog is the whole app, centred on the desk. */
+.recovery-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--desk);
+}
+
+.recovery-screen .restore-dialog__actions {
+  flex-wrap: wrap;
+}

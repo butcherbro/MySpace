@@ -143,6 +143,8 @@ export function reducer(
                 revision: action.revision,
                 documentJson: action.documentJson,
                 plainText: action.plainText,
+                // A successful write stored a valid document (P1.7).
+                corrupt: false,
               }
             : c,
         ),
@@ -158,6 +160,8 @@ export function reducer(
                 revision: action.revision,
                 captionJson: action.captionJson,
                 captionPlainText: action.captionPlainText,
+                // A successful write stored a valid document (P1.7).
+                corrupt: false,
               }
             : c,
         ),
@@ -173,6 +177,8 @@ export function reducer(
                 revision: action.revision,
                 descriptionJson: action.descriptionJson,
                 descriptionPlainText: action.descriptionPlainText,
+                // A successful write stored a valid document (P1.7).
+                corrupt: false,
               }
             : c,
         ),

@@ -3,6 +3,8 @@ import type { EmbedCardDto } from "../../services/workspace-gateway";
 import { HighlightedText } from "../../components/HighlightedText";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { StaticDocument } from "../../editor/StaticDocument";
+import { DamagedDocument } from "../../editor/DamagedDocument";
+import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { openExternalUrl } from "../../services/url-opener";
 import "./link-card.css";
@@ -10,7 +12,7 @@ import "./link-card.css";
 interface EmbedCardProps {
   embed: EmbedCardDto;
   /** Persist the description body as an authoritative document. Rejects on failure. */
-  onUpdate: (id: string, document: unknown) => Promise<void>;
+  onUpdate: DocumentSave;
   /** Persist a manual resize. */
   onResize: (id: string, width: number, height: number) => void;
   /** Request a context menu (right-click). */
@@ -41,12 +43,21 @@ export const EmbedCard = memo(function EmbedCard({
   const previewAsset = embed.previewAsset;
   const hasPreview = previewAsset !== null;
 
-  const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
+  // P1.7: a corrupt description shows its recovered text and never
+  // autosaves until the user starts a repair (see editor/corrupt-document.ts).
+  const repair = useCorruptRepair({ corrupt: embed.corrupt === true, onUpdate });
+  const { draft, saving, error, handleChange, handleBlur, replaceDraft } = useDocumentDraft({
     id: embed.id,
     persistedDocument: embed.descriptionJson,
-    onUpdate,
+    onUpdate: repair.onUpdate,
     onSaved: () => setEditing(false),
+    corrupt: repair.damaged,
   });
+  const startRepair = () => {
+    repair.beginRepair();
+    replaceDraft(recoveredDocument(embed.descriptionPlainText));
+    setEditing(true);
+  };
 
   const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
@@ -199,10 +210,17 @@ export const EmbedCard = memo(function EmbedCard({
           data-testid="link-description"
           onDoubleClick={(e) => {
             e.stopPropagation();
-            setEditing(true);
+            if (!repair.damaged) setEditing(true);
           }}
         >
-          {editing ? (
+          {repair.damaged ? (
+            <DamagedDocument
+              label="description"
+              plainText={embed.descriptionPlainText}
+              onRepair={startRepair}
+              highlightQuery={highlightQuery}
+            />
+          ) : editing ? (
             <NoteEditor
               document={draft}
               editable

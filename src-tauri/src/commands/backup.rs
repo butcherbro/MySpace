@@ -4,18 +4,23 @@
 //! `request_restore` only validates the choice, writes the restore marker and
 //! restarts the app; `db::backup::apply_pending_restore` performs the restore
 //! during the next startup, before the database is opened.
+//!
+//! Both commands take the managed [`WorkspacePaths`], not the `Workspace`, so
+//! they also work in recovery mode (P1.7), when no `Workspace` is managed.
 
 use tauri::State;
 
-use crate::app::Workspace;
+use crate::app::WorkspacePaths;
 use crate::db::backup::{self, BackupSummary};
 use crate::domain::errors::WorkspaceError;
 use crate::telemetry::instrument_async;
 
 /// Lists backup snapshots, newest first, each validated on the spot.
 #[tauri::command]
-pub async fn list_backups(ws: State<'_, Workspace>) -> Result<Vec<BackupSummary>, WorkspaceError> {
-    let backup_root = ws.paths().backups_dir();
+pub async fn list_backups(
+    paths: State<'_, WorkspacePaths>,
+) -> Result<Vec<BackupSummary>, WorkspaceError> {
+    let backup_root = paths.backups_dir();
     instrument_async("list_backups", async move {
         tokio::task::spawn_blocking(move || backup::list_backups(&backup_root))
             .await
@@ -30,11 +35,11 @@ pub async fn list_backups(ws: State<'_, Workspace>) -> Result<Vec<BackupSummary>
 #[tauri::command]
 pub async fn request_restore(
     app: tauri::AppHandle,
-    ws: State<'_, Workspace>,
+    paths: State<'_, WorkspacePaths>,
     snapshot: String,
 ) -> Result<(), WorkspaceError> {
-    let data_dir = ws.paths().data_dir.clone();
-    let backup_root = ws.paths().backups_dir();
+    let data_dir = paths.data_dir.clone();
+    let backup_root = paths.backups_dir();
     instrument_async("request_restore", async move {
         if !backup::is_bare_snapshot_name(&snapshot) {
             return Err(WorkspaceError::ConstraintViolation(

@@ -57,6 +57,13 @@ export interface NoteCardDto {
   plainText: string;
   /** Semantic background-color preset id (`default`, `yellow`, …). */
   colorToken: string;
+  /**
+   * P1.7: the stored document is not valid JSON. `documentJson` is then an
+   * empty doc and `plainText` is the only recoverable content; the card shows
+   * it read-only and a write must carry `acknowledgeCorrupt: true`. Always
+   * sent by the backend; optional so older fixtures stay valid.
+   */
+  corrupt?: boolean;
 }
 
 export interface BoardPortalDto {
@@ -136,6 +143,13 @@ export interface ImageCardDto {
   asset: AssetDto;
   captionJson: unknown;
   captionPlainText: string;
+  /**
+   * P1.7: the stored caption is not valid JSON. `captionJson` is then an
+   * empty doc and `captionPlainText` is the only recoverable content; the card shows
+   * it read-only and a write must carry `acknowledgeCorrupt: true`. Always
+   * sent by the backend; optional so older fixtures stay valid.
+   */
+  corrupt?: boolean;
 }
 
 export type LinkMetadataStatus = "pending" | "ready" | "failed";
@@ -165,6 +179,13 @@ export interface EmbedCardDto {
   previewOrigin: "fetched" | "custom" | null;
   metadataStatus: LinkMetadataStatus;
   metadataError: string | null;
+  /**
+   * P1.7: the stored description is not valid JSON. `descriptionJson` is then an
+   * empty doc and `descriptionPlainText` is the only recoverable content; the card shows
+   * it read-only and a write must carry `acknowledgeCorrupt: true`. Always
+   * sent by the backend; optional so older fixtures stay valid.
+   */
+  corrupt?: boolean;
 }
 
 export interface FilesystemAliasDto {
@@ -251,6 +272,8 @@ export interface UpdateNoteInput {
   id: string;
   expectedRevision: number;
   documentJson: unknown;
+  /** P1.7: required (true) to overwrite a stored document that is corrupt. */
+  acknowledgeCorrupt?: boolean;
 }
 
 export interface MoveCardInput {
@@ -380,6 +403,8 @@ export interface UpdateImageCaptionInput {
   id: string;
   expectedRevision: number;
   captionJson: unknown;
+  /** P1.7: required (true) to overwrite a stored document that is corrupt. */
+  acknowledgeCorrupt?: boolean;
 }
 
 export interface TrashItemInput {
@@ -400,6 +425,8 @@ export interface UpdateEmbedDescriptionInput {
   id: string;
   expectedRevision: number;
   descriptionJson: unknown;
+  /** P1.7: required (true) to overwrite a stored document that is corrupt. */
+  acknowledgeCorrupt?: boolean;
 }
 
 export interface EnrichEmbedMetadataInput {
@@ -528,6 +555,12 @@ export interface BoardChangeSeq {
  * or an in-memory mock (for browser-mode tests).
  */
 export interface WorkspaceGateway {
+  /**
+   * P1.7: `null` normally; set when the workspace database could not be opened
+   * at startup. The app then renders only the recovery dialog and calls no
+   * other command except `listBackups` / `requestRestore`.
+   */
+  getStartupFailure(): Promise<StartupFailure | null>;
   getHomeBoard(): Promise<BoardSummary>;
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot>;
   readCard(cardId: string): Promise<CardDto>;
@@ -589,6 +622,14 @@ export interface WorkspaceGateway {
    * not found, or it failed validation) and nothing changed.
    */
   requestRestore(dirName: string): Promise<never>;
+}
+
+/** Why the app started in recovery mode (P1.7). No paths, no content. */
+export interface StartupFailure {
+  /** Stable error code (`db_open_failed`, `workspace_start_failed`). */
+  code: string;
+  /** User-facing text, prefixed with the code. */
+  message: string;
 }
 
 /** One snapshot as shown in the "Restore from backup" dialog. */

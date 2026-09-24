@@ -448,7 +448,11 @@ P1 (до серьёзного роста), в порядке выполнени�
       (`dataVersion` + `changeSeq` с writer-соединения); фронт перезагружает доску
       только если писал другой процесс и именно в открытую доску
       (`src/state/external-change-detector.ts`).
-- [ ] Повреждённый `document_json` как явное состояние карточки; диалог восстановления.
+- [x] P1.7 Повреждённые данные: `corrupt` в DTO заметки/картинки/ссылки (пустой doc +
+      сохранённый plain text, `warn` `corrupt_document`), запись поверх — только с
+      `acknowledgeCorrupt`; карточка «Damaged … — showing recovered text» без автосейва,
+      Repair → редактор; сбой открытия БД при старте → recovery mode
+      (`get_startup_failure`, `StartupGate` + `RecoveryDialog`, restore из последнего снапшота / Quit).
 - [x] P1.8 Стоимость карточки на канвасе: `onlyRenderVisibleElements`; простаивающие
       заметки/подписи/описания — статический HTML (`editor/static-document.ts`,
       `StaticDocument`), Tiptap только у редактируемой карточки (каретка ставится

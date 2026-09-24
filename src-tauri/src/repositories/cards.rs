@@ -75,6 +75,28 @@ fn card_receipt(tx: &Transaction<'_>, id: &str) -> Result<CardReceipt, Workspace
     })
 }
 
+/// Rejects a write over a stored document that is corrupt (P1.7) unless the
+/// caller acknowledged it: the user must open the damaged card and repair it
+/// first, so an autosave can never silently replace unrecoverable content.
+/// `select` reads the stored document column for `?1`.
+fn guard_corrupt_document(
+    tx: &Transaction<'_>,
+    select: &str,
+    id: &str,
+    acknowledged: bool,
+) -> Result<(), WorkspaceError> {
+    if acknowledged {
+        return Ok(());
+    }
+    let stored: Option<String> = tx.query_row(select, [id], |r| r.get(0)).optional()?;
+    if stored.is_some_and(|text| kinds::is_corrupt_document(&text)) {
+        return Err(WorkspaceError::ConstraintViolation(
+            "document is corrupt; open it to repair first".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// A failed insert must leave no orphaned `cards` row: both inserts share one
 /// transaction, so any failure rolls both back.
 /// `plain_text` is derived from `document_json` here, never taken from the
@@ -131,6 +153,12 @@ pub fn update_note(
     let plain_text = document_to_plain_text(&input.document_json);
 
     let tx = immediate_tx(conn)?;
+    guard_corrupt_document(
+        &tx,
+        "SELECT document_json FROM note_cards WHERE card_id = ?1",
+        &input.id,
+        input.acknowledge_corrupt,
+    )?;
 
     let changed = tx.execute(
         "UPDATE cards SET revision = revision + 1, updated_at = ?1
@@ -202,6 +230,12 @@ pub fn update_image_caption(
     let caption_plain_text = document_to_plain_text(&input.caption_json);
 
     let tx = immediate_tx(conn)?;
+    guard_corrupt_document(
+        &tx,
+        "SELECT caption_json FROM image_cards WHERE card_id = ?1",
+        &input.id,
+        input.acknowledge_corrupt,
+    )?;
 
     let changed = tx.execute(
         "UPDATE cards SET revision = revision + 1, updated_at = ?1
@@ -496,6 +530,12 @@ pub fn update_embed_description(
     let description_plain_text = document_to_plain_text(&input.description_json);
 
     let tx = immediate_tx(conn)?;
+    guard_corrupt_document(
+        &tx,
+        "SELECT description_json FROM embed_cards WHERE card_id = ?1",
+        &input.id,
+        input.acknowledge_corrupt,
+    )?;
 
     let changed = tx.execute(
         "UPDATE cards SET revision = revision + 1, updated_at = ?1

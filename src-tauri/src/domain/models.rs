@@ -115,6 +115,11 @@ pub struct NoteCardDto {
     pub plain_text: String,
     /// Semantic background-color preset id (`default`, `yellow`, …).
     pub color_token: String,
+    /// True when the stored `document_json` is not valid JSON (P1.7): the JSON field
+    /// then carries an empty doc and the plain text is the only recoverable
+    /// content. Writes to a corrupt card must set `acknowledgeCorrupt`.
+    #[serde(default)]
+    pub corrupt: bool,
 }
 
 /// A board portal card.
@@ -141,6 +146,11 @@ pub struct ImageCardDto {
     pub asset: AssetDto,
     pub caption_json: Value,
     pub caption_plain_text: String,
+    /// True when the stored `caption_json` is not valid JSON (P1.7): the JSON field
+    /// then carries an empty doc and the plain text is the only recoverable
+    /// content. Writes to a corrupt card must set `acknowledgeCorrupt`.
+    #[serde(default)]
+    pub corrupt: bool,
 }
 
 /// The Link Card (link preview) surface. The user-facing "Link Card" is the
@@ -168,6 +178,11 @@ pub struct EmbedCardDto {
     pub preview_origin: Option<String>,
     pub metadata_status: String,
     pub metadata_error: Option<String>,
+    /// True when the stored `description_json` is not valid JSON (P1.7): the JSON field
+    /// then carries an empty doc and the plain text is the only recoverable
+    /// content. Writes to a corrupt card must set `acknowledgeCorrupt`.
+    #[serde(default)]
+    pub corrupt: bool,
 }
 
 /// A durable shortcut to an external filesystem item. The stored bookmark
@@ -369,6 +384,10 @@ pub struct UpdateNoteInput {
     pub id: String,
     pub expected_revision: i64,
     pub document_json: Value,
+    /// Required (true) to overwrite a stored document that is corrupt
+    /// (P1.7); without it such a write is rejected.
+    #[serde(default)]
+    pub acknowledge_corrupt: bool,
 }
 
 /// Receipt of a card-level write: the revision the row now has, read back
@@ -634,6 +653,10 @@ pub struct UpdateImageCaptionInput {
     pub id: String,
     pub expected_revision: i64,
     pub caption_json: Value,
+    /// Required (true) to overwrite a stored document that is corrupt
+    /// (P1.7); without it such a write is rejected.
+    #[serde(default)]
+    pub acknowledge_corrupt: bool,
 }
 
 /// Input for converting a Note into an Embed (Link) Card transactionally. The
@@ -658,6 +681,10 @@ pub struct UpdateEmbedDescriptionInput {
     pub id: String,
     pub expected_revision: i64,
     pub description_json: Value,
+    /// Required (true) to overwrite a stored document that is corrupt
+    /// (P1.7); without it such a write is rejected.
+    #[serde(default)]
+    pub acknowledge_corrupt: bool,
 }
 
 /// Input for asynchronously enriching a pending embed (Link) card.

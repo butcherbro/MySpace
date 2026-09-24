@@ -106,10 +106,55 @@ pub(crate) fn required_asset_at(row: &Row<'_>, first: usize) -> rusqlite::Result
     ))
 }
 
-/// A JSON document column; unparsable text becomes `null` (as before).
-pub(crate) fn json_at(row: &Row<'_>, index: usize) -> rusqlite::Result<serde_json::Value> {
+/// The document a corrupt column is projected as: an empty Tiptap doc.
+pub fn empty_document() -> serde_json::Value {
+    serde_json::json!({ "type": "doc", "content": [] })
+}
+
+/// Parses a stored rich-text document column. Blank text (the legacy
+/// `DEFAULT ''` of `embed_cards.description_json`) is "no document" and
+/// becomes `null`; any other unparsable text is corrupt (`None`).
+pub fn parse_stored_document(text: &str) -> Option<serde_json::Value> {
+    if text.trim().is_empty() {
+        return Some(serde_json::Value::Null);
+    }
+    serde_json::from_str(text).ok()
+}
+
+/// True when a stored document column holds corrupt (unparsable) text.
+pub fn is_corrupt_document(text: &str) -> bool {
+    parse_stored_document(text).is_none()
+}
+
+/// A stored document read back with its corruption flag (P1.7).
+pub(crate) struct StoredDocument {
+    pub json: serde_json::Value,
+    pub corrupt: bool,
+}
+
+/// A JSON document column of the card whose id is column 0. Corrupt text
+/// never fails the load: it becomes [`empty_document`] with `corrupt: true`
+/// and is logged (card id and error code only, never content).
+pub(crate) fn document_at(row: &Row<'_>, index: usize) -> rusqlite::Result<StoredDocument> {
     let text: String = row.get(index)?;
-    Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
+    Ok(match parse_stored_document(&text) {
+        Some(json) => StoredDocument {
+            json,
+            corrupt: false,
+        },
+        None => {
+            let card_id: String = row.get(0)?;
+            tracing::warn!(
+                card_id = %card_id,
+                error_code = "corrupt_document",
+                "stored document is not valid JSON; projecting an empty doc"
+            );
+            StoredDocument {
+                json: empty_document(),
+                corrupt: true,
+            }
+        }
+    })
 }
 
 /// Runs `select_from` (a `SELECT … FROM cards c JOIN …` without WHERE) for

@@ -547,6 +547,7 @@ fn updating_a_note_updates_results() {
             id: "n1".into(),
             expected_revision: 1,
             document_json: doc("fresh nebula"),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();

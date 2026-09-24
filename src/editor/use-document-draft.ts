@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { registerDraftFlusher } from "./draft-flush-registry";
 
 /**
@@ -15,6 +15,12 @@ import { registerDraftFlusher } from "./draft-flush-registry";
  * - incoming `persistedDocument` is adopted only while clean (snapshot reload /
  *   undo / restore never clobber an in-progress edit).
  *
+ * P1.7: while `corrupt` is true (the stored document could not be parsed and
+ * the card shows recovered plain text) the hook never writes: no debounced
+ * save, no blur/finalize/unmount/barrier flush. `replaceDraft` seeds a fresh
+ * document (the Repair action) as a dirty draft without scheduling a save;
+ * the next blur/finalize persists it.
+ *
  * `onUpdate(id, doc)` must reject on failure so the caller can keep the editor
  * open and the draft visible. `onSaved()` fires after a successful flush so the
  * parent can close editing consistently.
@@ -25,8 +31,14 @@ export function useDocumentDraft(opts: {
   onUpdate: (id: string, document: unknown) => Promise<void>;
   onFinalize?: (id: string, document: unknown) => Promise<void>;
   onSaved?: () => void;
+  /** The stored document is corrupt: never save (P1.7). */
+  corrupt?: boolean;
 }) {
-  const { id, persistedDocument, onUpdate, onFinalize, onSaved } = opts;
+  const { id, persistedDocument, onUpdate, onFinalize, onSaved, corrupt = false } = opts;
+  const corruptRef = useRef(corrupt);
+  useLayoutEffect(() => {
+    corruptRef.current = corrupt;
+  }, [corrupt]);
 
   const [draft, setDraft] = useState<unknown>(persistedDocument);
   const [saving, setSaving] = useState(false);
@@ -76,6 +88,7 @@ export function useDocumentDraft(opts: {
 
   const handleChange = useCallback(
     (doc: unknown) => {
+      if (corruptRef.current) return;
       dirtyRef.current = true;
       needsFinalizeRef.current = true;
       draftRef.current = doc;
@@ -102,6 +115,10 @@ export function useDocumentDraft(opts: {
       clearTimeout(debounceTimer.current);
       debounceTimer.current = null;
     }
+    if (corruptRef.current) {
+      onSaved?.();
+      return;
+    }
     if (dirtyRef.current || needsFinalizeRef.current) {
       void finalize(draftRef.current);
     } else {
@@ -114,6 +131,7 @@ export function useDocumentDraft(opts: {
       clearTimeout(debounceTimer.current);
       debounceTimer.current = null;
     }
+    if (corruptRef.current) return Promise.resolve();
     if (dirtyRef.current || needsFinalizeRef.current) {
       return finalize(draftRef.current);
     }
@@ -127,7 +145,7 @@ export function useDocumentDraft(opts: {
   useEffect(() => {
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
-      if (dirtyRef.current && !savingRef.current) {
+      if (dirtyRef.current && !savingRef.current && !corruptRef.current) {
         const doc = draftRef.current;
         dirtyRef.current = false;
         void onUpdate(id, doc).catch(() => {
@@ -146,5 +164,18 @@ export function useDocumentDraft(opts: {
     return registerDraftFlusher(handleFinalize);
   }, [handleFinalize]);
 
-  return { draft, saving, error, handleChange, handleBlur, handleFinalize };
+  // Seed a fresh document (Repair of a corrupt card, P1.7): a dirty draft the
+  // next blur/finalize persists; no debounced save is scheduled.
+  const replaceDraft = useCallback((doc: unknown) => {
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+    dirtyRef.current = true;
+    needsFinalizeRef.current = true;
+    draftRef.current = doc;
+    setDraft(doc);
+  }, []);
+
+  return { draft, saving, error, handleChange, handleBlur, handleFinalize, replaceDraft };
 }

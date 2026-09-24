@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import type { ImageCardDto } from "../../services/workspace-gateway";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { StaticDocument } from "../../editor/StaticDocument";
+import { DamagedDocument } from "../../editor/DamagedDocument";
+import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { computeResizedImageFrameSize } from "./image-card-geometry";
 import "./image-card.css";
@@ -10,7 +12,7 @@ import "./image-card.css";
 interface ImageCardProps {
   image: ImageCardDto;
   /** Persist the caption as an authoritative document. Rejects on failure. */
-  onUpdate: (id: string, document: unknown) => Promise<void>;
+  onUpdate: DocumentSave;
   /** Persist a manual resize (width/height in CSS px). */
   onResize: (id: string, width: number, height: number) => void;
   /** Request a context menu (right-click). */
@@ -36,12 +38,21 @@ export const ImageCard = memo(function ImageCard({
   const [preview, setPreview] = useState(false);
   const hasCaption = image.captionPlainText.trim().length > 0;
 
-  const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
+  // P1.7: a corrupt caption shows its recovered text and never autosaves
+  // until the user starts a repair (see editor/corrupt-document.ts).
+  const repair = useCorruptRepair({ corrupt: image.corrupt === true, onUpdate });
+  const { draft, saving, error, handleChange, handleBlur, replaceDraft } = useDocumentDraft({
     id: image.id,
     persistedDocument: image.captionJson,
-    onUpdate,
+    onUpdate: repair.onUpdate,
     onSaved: () => setEditing(false),
+    corrupt: repair.damaged,
   });
+  const startRepair = () => {
+    repair.beginRepair();
+    replaceDraft(recoveredDocument(image.captionPlainText));
+    setEditing(true);
+  };
 
   const cardClassName = [
     "image-card",
@@ -172,10 +183,17 @@ export const ImageCard = memo(function ImageCard({
         data-testid="image-caption"
         onDoubleClick={(e) => {
           e.stopPropagation();
-          setEditing(true);
+          if (!repair.damaged) setEditing(true);
         }}
       >
-        {editing ? (
+        {repair.damaged ? (
+          <DamagedDocument
+            label="caption"
+            plainText={image.captionPlainText}
+            onRepair={startRepair}
+            highlightQuery={highlightQuery}
+          />
+        ) : editing ? (
           <NoteEditor
             document={draft}
             editable

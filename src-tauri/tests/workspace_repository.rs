@@ -248,6 +248,7 @@ fn update_note_changes_content_and_bumps_revision() {
             id: "note-x".to_string(),
             expected_revision: 1,
             document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "second"}]}]}),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();
@@ -292,6 +293,7 @@ fn update_note_with_stale_revision_is_rejected() {
             id: "note-s".to_string(),
             expected_revision: 1,
             document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "v2"}]}]}),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();
@@ -303,6 +305,7 @@ fn update_note_with_stale_revision_is_rejected() {
             id: "note-s".to_string(),
             expected_revision: 1,
             document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "should not apply"}]}]}),
+            acknowledge_corrupt: false,
         },
     );
     assert!(matches!(
@@ -765,6 +768,7 @@ fn update_image_caption_persists_and_bumps_revision() {
             id: "cap-card-1".to_string(),
             expected_revision: 1,
             caption_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello caption"}]}]}),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();

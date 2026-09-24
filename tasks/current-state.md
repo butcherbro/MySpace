@@ -14,7 +14,12 @@ heading describes 2026-09-13 and is kept for history. Current work is on
 `claude/awesome-goodall-4tfsko`: the architecture audit
 (`docs/audits/2026-09-24-architecture-audit.md`) and its P0 fixes are done with
 every gate green (cargo fmt / clippy `-D warnings` / test, vitest 451, e2e 57).
-P1.1 (database off the main thread) is done: `src-tauri/src/app/workspace.rs`
+P1 is complete (P1.1–P1.9, 2026-09-24): single-writer `Workspace`,
+content-addressed assets + backup 2.0 with restore, card-kind registry,
+FTS5 search, receipts + Rust plain-text codec, targeted invalidation,
+corrupt-document state + startup recovery, virtualised canvas, CI audits.
+Details per item in `docs/plans/2026-09-24-p1-scalability-and-sync-readiness.md`
+(status paragraphs) and `tasks/todo.md`. P1.1 (database off the main thread) was the first: `src-tauri/src/app/workspace.rs`
 is the only owner of SQLite connections, every write is a `domain::Mutation`
 applied on one writer thread, every Tauri command is `async`, and the MCP
 binary goes through the same handle. Next is P1.2 ∥ P1.3 per
