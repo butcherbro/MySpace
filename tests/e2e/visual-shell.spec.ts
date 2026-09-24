@@ -49,3 +49,33 @@ test("context menu stays within the viewport on a dense board", async ({ page })
     expect(menu.y + menu.height).toBeLessThanOrEqual(viewport.height);
   }
 });
+
+test.describe("Windows native title bar (no macOS traffic-light inset)", () => {
+  test.use({ viewport: { width: 1180, height: 800 } });
+
+  test("the top bar's right-most button stays inside the viewport", async ({ page }) => {
+    // Force the Windows code path regardless of the host OS running this
+    // suite: the app stamps this attribute on <html> at startup from
+    // navigator.userAgentData/platform (src/app/platform.ts), and CSS scopes
+    // the macOS traffic-light inset to `html[data-platform="macos"]`.
+    await page.addInitScript(() => {
+      document.documentElement?.setAttribute("data-platform", "windows");
+      document.addEventListener("DOMContentLoaded", () => {
+        document.documentElement.setAttribute("data-platform", "windows");
+      });
+    });
+
+    await page.goto("/?fixture=dense");
+
+    const rightMostButton = page.locator(".topbar-actions button").last();
+    await expect(rightMostButton).toBeVisible();
+    const box = await rightMostButton.boundingBox();
+    const viewport = page.viewportSize();
+    expect(box).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    if (box && viewport) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    }
+  });
+});
