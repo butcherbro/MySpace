@@ -26,7 +26,7 @@ use crate::domain::errors::WorkspaceError;
 /// A command is considered slow (and logged at `warn!` with `slow = true`) once
 /// it runs past this threshold. This is the signal used to prioritize moving DB
 /// work off the main thread.
-const SLOW_COMMAND_THRESHOLD: Duration = Duration::from_millis(250);
+pub const SLOW_COMMAND_THRESHOLD: Duration = Duration::from_millis(250);
 
 /// Holds the non-blocking file appender's flush guard alive for the process
 /// lifetime. Dropping it stops log writes, so it is stashed in Tauri's managed
@@ -139,6 +139,35 @@ pub fn instrument<T, E: ErrorCode>(
         }
     }
 
+    result
+}
+
+/// Async variant of [`instrument`] for `async fn` commands: the span covers
+/// the whole await, so the reported time is what the UI waited for (queue time
+/// on the writer included; the writer logs its own `queue_ms`/`exec_ms` split
+/// under the `mutation` span).
+pub async fn instrument_async<T, E: ErrorCode, F>(name: &'static str, fut: F) -> Result<T, E>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+{
+    let span = tracing::info_span!("command", name);
+    let start = Instant::now();
+    let result = tracing::Instrument::instrument(fut, span).await;
+    let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_millis() as u64;
+    let slow = elapsed > SLOW_COMMAND_THRESHOLD;
+
+    match &result {
+        Ok(_) if slow => tracing::warn!(command = name, elapsed_ms, outcome = "ok", slow = true),
+        Ok(_) => tracing::info!(command = name, elapsed_ms, outcome = "ok"),
+        Err(err) => tracing::warn!(
+            command = name,
+            elapsed_ms,
+            outcome = "error",
+            error_code = err.code(),
+            slow = slow,
+        ),
+    }
     result
 }
 

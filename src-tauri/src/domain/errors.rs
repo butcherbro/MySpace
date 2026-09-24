@@ -32,6 +32,23 @@ impl std::fmt::Display for WorkspaceError {
     }
 }
 
+impl WorkspaceError {
+    /// True when the failure is SQLite reporting a busy/locked database, i.e.
+    /// another process held the write lock past `busy_timeout`. The writer
+    /// thread re-runs such mutations a bounded number of times. Detected on
+    /// the message because `Database` carries only a string at the IPC
+    /// boundary; `From<rusqlite::Error>` below writes these messages, so the
+    /// two stay in step.
+    pub fn is_busy(&self) -> bool {
+        match self {
+            WorkspaceError::Database(message) => {
+                message.contains("database is locked") || message.contains("database table is locked")
+            }
+            _ => false,
+        }
+    }
+}
+
 impl std::error::Error for WorkspaceError {}
 
 impl From<rusqlite::Error> for WorkspaceError {

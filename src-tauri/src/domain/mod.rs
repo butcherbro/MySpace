@@ -9,4 +9,5 @@ pub mod link_metadata;
 pub mod markdown_preview;
 pub mod models;
 pub mod move_selection;
+pub mod mutation;
 pub mod trash_service;

@@ -94,6 +94,41 @@ pub fn store_asset_bytes(
     })
 }
 
+/// Writes already-validated bytes into the asset directory as a staged asset
+/// (file only, no database access). The caller records the row through
+/// `Mutation::InsertAsset` and calls [`discard_staged`] if that fails. This is
+/// the split of [`store_asset_bytes`] required by the single-writer model: file
+/// I/O before the mutation is queued, the row insert on the writer thread.
+pub fn stage_asset_bytes(
+    asset_dir: &Path,
+    file_name: &str,
+    mime_type: &str,
+    bytes: &[u8],
+) -> Result<StagedAsset, WorkspaceError> {
+    let id = uuid::Uuid::now_v7().to_string();
+    let ext = extension_for_mime(mime_type);
+    let relative = format!("{id}.{ext}");
+    let dest = asset_dir.join(&relative);
+
+    fs::create_dir_all(asset_dir)
+        .map_err(|e| WorkspaceError::Database(format!("cannot create asset dir: {e}")))?;
+    fs::write(&dest, bytes)
+        .map_err(|e| WorkspaceError::Database(format!("cannot store asset bytes: {e}")))?;
+
+    Ok(StagedAsset {
+        asset: AssetDto {
+            id,
+            file_name: file_name.to_string(),
+            mime_type: mime_type.to_string(),
+            width: None,
+            height: None,
+            size_bytes: bytes.len() as i64,
+            file_path: relative,
+        },
+        file_abs: dest,
+    })
+}
+
 /// Loads an asset's metadata by id, if it exists.
 pub fn load_asset(conn: &Connection, id: &str) -> Result<Option<AssetDto>, WorkspaceError> {
     let mut stmt = conn.prepare(

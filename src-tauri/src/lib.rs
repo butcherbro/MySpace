@@ -1,3 +1,4 @@
+pub mod app;
 pub mod commands;
 pub mod db;
 pub mod domain;
@@ -145,7 +146,16 @@ pub fn run() {
                 );
             }
 
-            app.manage(DbHandle::new(conn));
+            // TRANSITIONAL (P1.1 in progress): the writer thread owns the
+            // bootstrapped connection; not-yet-converted commands still use the
+            // legacy mutex on a second connection. Removed once every command
+            // module goes through `Workspace`.
+            let paths = app::WorkspacePaths::new(data_dir.clone());
+            let workspace = app::Workspace::from_connection(conn, paths)
+                .expect("failed to start workspace writer");
+            app.manage(workspace);
+            let legacy = db::open_readonly_checked(&db_path).expect("legacy connection");
+            app.manage(DbHandle::new(legacy));
             app.manage(AppPaths {
                 data_dir: data_dir.clone(),
             });
