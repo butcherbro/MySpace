@@ -282,6 +282,23 @@ describe("extractPathCandidate", () => {
     expect(extractPathCandidate("relative/path")).toBeNull();
   });
 
+  it("accepts Windows drive, UNC and ~\\ paths", () => {
+    expect(extractPathCandidate("C:\\Users\\bro\\Docs")).toBe("C:\\Users\\bro\\Docs");
+    expect(extractPathCandidate("D:/data")).toBe("D:/data");
+    expect(extractPathCandidate("\\\\server\\share\\dir")).toBe("\\\\server\\share\\dir");
+    expect(extractPathCandidate("~\\Docs")).toBe("~\\Docs");
+  });
+
+  it("unwraps Explorer's quoted 'Copy as path' output", () => {
+    expect(extractPathCandidate('"C:\\Users\\bro\\a.txt"\r\n')).toBe("C:\\Users\\bro\\a.txt");
+    expect(extractPathCandidate('"/Users/bro/a.txt"')).toBe("/Users/bro/a.txt");
+  });
+
+  it("rejects drive-relative and URL-like text", () => {
+    expect(extractPathCandidate("C:relative")).toBeNull();
+    expect(extractPathCandidate("https://example.com/a")).toBeNull();
+  });
+
   it("rejects empty/whitespace-only text", () => {
     expect(extractPathCandidate("")).toBeNull();
     expect(extractPathCandidate("   ")).toBeNull();

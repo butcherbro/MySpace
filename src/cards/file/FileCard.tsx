@@ -1,6 +1,7 @@
 import { memo, useRef, useState } from "react";
 import type { FileCardDto } from "../../services/workspace-gateway";
 import "./file-card.css";
+import { assetUrl } from "../../services/asset-url";
 
 interface Props {
   file: FileCardDto;
@@ -170,7 +171,7 @@ export const FileCard = memo(function FileCard({ file, onOpen, onReveal, onResiz
           {file.previewAsset ? (
             <img
               className="file-card__thumb"
-              src={`myspace-asset://localhost/${file.previewAsset.filePath}`}
+              src={assetUrl(file.previewAsset.filePath)}
               alt=""
               draggable={false}
             />
@@ -241,7 +242,7 @@ export const FileCard = memo(function FileCard({ file, onOpen, onReveal, onResiz
           className="file-card__html"
           data-testid="file-preview"
           title={file.asset.fileName}
-          src={`myspace-asset://localhost/${file.asset.filePath}`}
+          src={assetUrl(file.asset.filePath)}
           sandbox=""
           tabIndex={-1}
         />

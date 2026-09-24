@@ -1,6 +1,7 @@
 import type { CardDto } from "../services/workspace-gateway";
 import { BoardIdentityThumbnail } from "../boards/BoardIdentityThumbnail";
 import "./unsorted-panel.css";
+import { assetUrl } from "../services/asset-url";
 
 interface UnsortedPanelProps {
   cards: CardDto[];
@@ -88,7 +89,7 @@ export function UnsortedPanel({ cards, onPlace, onDragStartCard, onClose }: Unso
               <div className="unsorted-panel__image">
                 <img
                   className="unsorted-panel__image-img"
-                  src={`myspace-asset://localhost/${card.asset.filePath}`}
+                  src={assetUrl(card.asset.filePath)}
                   alt=""
                   draggable={false}
                 />
@@ -102,7 +103,7 @@ export function UnsortedPanel({ cards, onPlace, onDragStartCard, onClose }: Unso
                 {card.previewAsset && (
                   <img
                     className="unsorted-panel__link-preview"
-                    src={`myspace-asset://localhost/${card.previewAsset.filePath}`}
+                    src={assetUrl(card.previewAsset.filePath)}
                     alt=""
                     draggable={false}
                   />

@@ -1,6 +1,7 @@
 import type { TrashSummaryDto } from "../../services/workspace-gateway";
 import { BoardIdentityThumbnail } from "../../boards/BoardIdentityThumbnail";
 import "./trash-drawer.css";
+import { assetUrl } from "../../services/asset-url";
 
 interface TrashDrawerProps {
   summary: TrashSummaryDto | null;
@@ -103,7 +104,7 @@ export function TrashDrawer({
                           ) : item.thumbnailAsset ? (
                             <img
                               className="trash-drawer__thumb-img"
-                              src={`myspace-asset://localhost/${item.thumbnailAsset.filePath}`}
+                              src={assetUrl(item.thumbnailAsset.filePath)}
                               alt=""
                             />
                           ) : (

@@ -81,6 +81,8 @@ import {
   initialState,
   reducer,
 } from "./state/current-board-store";
+import { fileNameFromPath } from "./services/platform-path";
+import { assetUrl } from "./services/asset-url";
 
 type ToolKind = "note" | "link" | "board";
 
@@ -562,7 +564,7 @@ function App() {
         // (assets.width/height в БД всегда NULL), поэтому пропорции для
         // стартового frame берём в браузере — иначе карточка получает
         // фиксированный 320x240 и обрезает картинку под рамку (todo.md №3).
-        const natural = await loadNaturalImageSize(`myspace-asset://localhost/${asset.filePath}`);
+        const natural = await loadNaturalImageSize(assetUrl(asset.filePath));
         const { width, height } = computeInitialImageFrameSize(natural?.width, natural?.height);
         const card: ImageCardDto = {
           kind: "image",
@@ -738,7 +740,7 @@ function App() {
       if (classification.kind === "folder") {
         await createFolderShortcut(classification.expandedPath, cursor.x - 180, cursor.y - 150);
       } else {
-        const fileName = classification.expandedPath.split("/").pop() || classification.expandedPath;
+        const fileName = fileNameFromPath(classification.expandedPath);
         await createFileCard(
           { path: classification.expandedPath, fileName, mimeType: "application/octet-stream" },
           cursor.x,

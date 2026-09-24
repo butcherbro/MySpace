@@ -39,8 +39,18 @@ tracing-appender = "0.2"
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
 # Content hash of every managed asset (P1.2, ADR-0011 §4: blob identity).
 sha2 = "0.10"
+# Canonical paths without the Windows `\\?\` verbatim prefix for the path
+# folder locator (already in the tree via tauri-plugin-opener).
+dunce = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
+
+# Cross-platform clipboard for everything that is not macOS (macOS keeps the
+# proven NSPasteboard path in commands/clipboard.rs). `image-data` is off: we
+# only write text and file lists (CF_HDROP on Windows, text/uri-list on X11).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+arboard = { version = "3.6", default-features = false }
+

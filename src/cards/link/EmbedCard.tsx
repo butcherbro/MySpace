@@ -8,6 +8,7 @@ import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../ed
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { openExternalUrl } from "../../services/url-opener";
 import "./link-card.css";
+import { assetUrl } from "../../services/asset-url";
 
 interface EmbedCardProps {
   embed: EmbedCardDto;
@@ -146,7 +147,7 @@ export const EmbedCard = memo(function EmbedCard({
       {previewAsset && embed.metadataStatus !== "pending" && (
         <img
           className="link-card__preview"
-          src={`myspace-asset://localhost/${previewAsset.filePath}`}
+          src={assetUrl(previewAsset.filePath)}
           alt={embed.title}
           onLoad={fitEnrichedContent}
         />
@@ -160,7 +161,7 @@ export const EmbedCard = memo(function EmbedCard({
           {embed.faviconAsset && (
             <img
               className="link-card__favicon"
-              src={`myspace-asset://localhost/${embed.faviconAsset.filePath}`}
+              src={assetUrl(embed.faviconAsset.filePath)}
               alt=""
             />
           )}

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { isWindowsAbsolutePath, stripWrappingQuotes } from "../services/platform-path";
 
 export interface CanvasPasteData {
   html: string;
@@ -16,7 +17,8 @@ export interface CanvasPasteOptions {
   onPasteCards?: () => boolean;
   /**
    * Checked second, before text/html: a single-line clipboard text that looks
-   * like a filesystem path (`/…` or `~/…`, todo.md №23). Resolves to whether
+   * like a filesystem path (`/…`, `~/…`, or on Windows `C:\…` / `\\server\share…`,
+   * todo.md №23). Resolves to whether
    * it was handled (an existing folder/file became a shortcut/file card) — a
    * missing path resolves `false`, and the paste falls through to the normal
    * text/html note below.
@@ -26,7 +28,9 @@ export interface CanvasPasteOptions {
 
 /**
  * A single-line clipboard string shaped like an absolute or home-relative
- * filesystem path. Multi-line text is never a path candidate — even one that
+ * filesystem path — posix (`/…`, `~`, `~/…`) or Windows (`C:\…`, `C:/…`,
+ * `\\server\share…`, `~\…`), optionally wrapped in the double quotes that
+ * Explorer's "Copy as path" adds. Multi-line text is never a path candidate — even one that
  * starts with `/` — so a copied code snippet or log excerpt keeps going to
  * the normal note paste instead of a (failed) existence check.
  */
@@ -34,7 +38,9 @@ export function extractPathCandidate(text: string): string | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
   if (trimmed.includes("\n") || trimmed.includes("\r")) return null;
-  if (trimmed.startsWith("/") || trimmed.startsWith("~/") || trimmed === "~") return trimmed;
+  const path = stripWrappingQuotes(trimmed);
+  if (path.startsWith("/") || path.startsWith("~/") || path.startsWith("~\\") || path === "~") return path;
+  if (isWindowsAbsolutePath(path)) return path;
   return null;
 }
 

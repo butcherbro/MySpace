@@ -8,6 +8,7 @@ import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../ed
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { computeResizedImageFrameSize } from "./image-card-geometry";
 import "./image-card.css";
+import { assetUrl } from "../../services/asset-url";
 
 interface ImageCardProps {
   image: ImageCardDto;
@@ -77,7 +78,7 @@ export const ImageCard = memo(function ImageCard({
 
   const appliedWidth = draftSize?.width ?? image.frame.width;
   const appliedHeight = draftSize?.height ?? image.frame.height;
-  const src = `myspace-asset://localhost/${image.asset.filePath}`;
+  const src = assetUrl(image.asset.filePath);
 
   // Close the preview on Escape.
   useEffect(() => {

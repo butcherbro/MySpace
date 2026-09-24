@@ -54,6 +54,7 @@ import type {
 } from "./workspace-gateway";
 import { denseBoardSnapshot } from "../test/dense-board-fixture";
 import { documentToPlainText } from "../editor/document-codec";
+import { fileNameFromPath } from "./platform-path";
 
 /**
  * In-memory gateway for browser-mode tests and fixtures. It keeps a single
@@ -602,8 +603,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {
-    const pathParts = input.sourcePath.split("/").filter(Boolean);
-    const displayName = pathParts[pathParts.length - 1] ?? input.sourcePath;
+    const displayName = fileNameFromPath(input.sourcePath);
     const card: FilesystemAliasDto = {
       kind: "filesystem_alias",
       id: input.id,
@@ -654,8 +654,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]> {
     return Promise.resolve(paths.map((path) => {
-      const pathParts = path.split("/").filter(Boolean);
-      const fileName = pathParts[pathParts.length - 1] ?? path;
+      const fileName = fileNameFromPath(path);
       const nameParts = fileName.split(".");
       const extension = fileName.includes(".") ? nameParts[nameParts.length - 1]?.toLowerCase() ?? "" : "";
       const imageMimeTypes: Record<string, string> = {
@@ -687,7 +686,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (expandedPath.includes("does-not-exist")) {
       return Promise.resolve({ kind: "missing", expandedPath });
     }
-    const fileName = expandedPath.split("/").filter(Boolean).pop() ?? expandedPath;
+    const fileName = fileNameFromPath(expandedPath);
     const kind = fileName.includes(".") ? "file" : "folder";
     return Promise.resolve({ kind, expandedPath });
   }
@@ -700,7 +699,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   async createFileCard(input: CreateFileCardInput): Promise<FileCardDto> {
-    const fileName = input.fileName.split("/").pop() ?? input.fileName;
+    const fileName = fileNameFromPath(input.fileName);
     const card: FileCardDto = {
       kind: "file",
       id: input.id,

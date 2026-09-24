@@ -464,6 +464,11 @@ P1 (до серьёзного роста), в порядке выполнени�
       Проверить на Mac: бюджет 500 мс (`DENSE_BOARD_PAINT_BUDGET_MS=500`).
 - [ ] `cargo audit`/Dependabot в CI.
 
+P2 / platform:
+- [x] Windows: build + CI + path locator + opener + clipboard (done 2026-09-24);
+      thumbnails on Windows pending. Подробности: README → «Platforms».
+      Проверить на живом Windows: см. список «Needs a human on Windows» там же.
+
 Известные флейки e2e (не регрессия, воспроизводится на `f819aee`):
 - [ ] `group-tab-drop.spec.ts:40` — на медленном кадре рамка выделения захватывает
       портал (3 узла вместо 2), ~25 % прогонов при `--workers 1`. Починить

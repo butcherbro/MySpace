@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import type { QuickBoardDto } from "../services/workspace-gateway";
 import "./quick-boards-rail.css";
+import { assetUrl } from "../services/asset-url";
 
 interface QuickBoardsRailProps {
   quickBoards: QuickBoardDto[];
@@ -134,7 +135,7 @@ export function QuickBoardsRail({
                   {board.coverAsset ? (
                     <img
                       className="quick-boards-rail__cover"
-                      src={`myspace-asset://localhost/${board.coverAsset.filePath}`}
+                      src={assetUrl(board.coverAsset.filePath)}
                       alt=""
                       draggable={false}
                     />

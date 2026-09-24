@@ -1,6 +1,7 @@
 // Native file picker for importing an image asset. This isolates the
 // `@tauri-apps/plugin-dialog` import (and any Tauri-specific behavior) from the
 // rest of the UI, mirroring how the gateway isolates the Tauri IPC API.
+import { fileNameFromPath } from "./platform-path";
 
 /** Result of picking an image file, or null if the user cancelled. */
 export interface PickedImage {
@@ -53,11 +54,6 @@ export async function pickFolder(): Promise<string | null> {
 
   if (!selected || Array.isArray(selected)) return null;
   return selected;
-}
-
-function fileNameFromPath(path: string): string {
-  const parts = path.split("/");
-  return parts[parts.length - 1] ?? path;
 }
 
 function mimeTypeFromName(path: string): string {

@@ -13,6 +13,23 @@ pub enum LocatorError {
     /// collapsing into an opaque "could not create folder locator" and makes a
     /// future regression diagnosable from the error text alone.
     Io(String),
+    /// The stored blob is a locator format this build cannot resolve: a macOS
+    /// bookmark read on Windows/Linux, or a [`PATH_LOCATOR_PREFIX`] blob read
+    /// on macOS (e.g. a database moved between machines). Surfaced like a
+    /// missing target — the shortcut is broken here and must be dropped again —
+    /// but kept distinct so the reason is never confused with a deleted folder.
+    ForeignFormat(&'static str),
+}
+
+/// Tag that starts every path-based locator blob ([`PathLocator`]). macOS
+/// bookmark data starts with its own `book` magic, so the two formats are
+/// distinguishable by prefix alone. Every locator-format constant lives here so
+/// device-scoped locators can extend the scheme in one place.
+pub const PATH_LOCATOR_PREFIX: &[u8] = b"path:v1:";
+
+/// True when `blob` was written by [`PathLocator`].
+pub fn is_path_locator(blob: &[u8]) -> bool {
+    blob.starts_with(PATH_LOCATOR_PREFIX)
 }
 
 impl std::fmt::Display for LocatorError {
@@ -21,6 +38,10 @@ impl std::fmt::Display for LocatorError {
             LocatorError::Missing => write!(f, "bookmark not found"),
             LocatorError::PermissionLost => write!(f, "permission lost"),
             LocatorError::Io(message) => write!(f, "{message}"),
+            LocatorError::ForeignFormat(format) => write!(
+                f,
+                "folder shortcut was created on another platform ({format}); drop the folder again"
+            ),
         }
     }
 }
@@ -68,7 +89,7 @@ pub fn list_preview_with_refresh(
     };
     let resolved = match locator.resolve(locator_blob) {
         Ok(value) => value,
-        Err(LocatorError::Missing) => {
+        Err(LocatorError::Missing | LocatorError::ForeignFormat(_)) => {
             return (
                 FolderPreviewDto {
                     status: FolderPreviewStatus::Missing,
@@ -221,6 +242,9 @@ impl FolderLocator for MacosBookmarkLocator {
     fn resolve(&self, bytes: &[u8]) -> Result<ResolvedFolder, LocatorError> {
         use objc2::runtime::Bool;
         use objc2_foundation::{NSData, NSURLBookmarkResolutionOptions, NSURL};
+        if is_path_locator(bytes) {
+            return Err(LocatorError::ForeignFormat("path locator"));
+        }
         let data = NSData::with_bytes(bytes);
         let mut stale = Bool::default();
         let url = unsafe {
@@ -259,25 +283,56 @@ impl FolderLocator for MacosBookmarkLocator {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub struct UnsupportedPlatformLocator;
-#[cfg(not(target_os = "macos"))]
-impl Default for UnsupportedPlatformLocator {
-    fn default() -> Self {
-        Self
+/// Path-based folder locator for Windows and Linux (and any non-macOS build).
+///
+/// Stores `PATH_LOCATOR_PREFIX` + the canonical absolute path as UTF-8. Unlike a
+/// macOS bookmark it does not follow the folder across renames or moves: a
+/// moved folder resolves as [`LocatorError::Missing`] (the "broken shortcut"
+/// state) until it is dropped again. Compiled on every platform so its tests
+/// run everywhere; only non-macOS builds use it as the platform locator.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PathLocator;
+
+fn io_to_locator_error(error: std::io::Error) -> LocatorError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => LocatorError::Missing,
+        std::io::ErrorKind::PermissionDenied => LocatorError::PermissionLost,
+        _ => LocatorError::Io(error.to_string()),
     }
 }
-#[cfg(not(target_os = "macos"))]
-impl FolderLocator for UnsupportedPlatformLocator {
-    fn create(&self, _: &Path) -> Result<Vec<u8>, LocatorError> {
-        Err(LocatorError::Io(
-            "folder shortcuts require a macOS build".into(),
-        ))
+
+impl FolderLocator for PathLocator {
+    fn create(&self, path: &Path) -> Result<Vec<u8>, LocatorError> {
+        // `dunce` strips the `\\?\` verbatim prefix `std::fs::canonicalize`
+        // adds on Windows (it keeps it when the path cannot be expressed
+        // without one); elsewhere it is plain `std::fs::canonicalize`.
+        let canonical = dunce::canonicalize(path).map_err(io_to_locator_error)?;
+        let value = canonical
+            .to_str()
+            .ok_or_else(|| LocatorError::Io("path is not valid UTF-8".into()))?;
+        let mut blob = Vec::with_capacity(PATH_LOCATOR_PREFIX.len() + value.len());
+        blob.extend_from_slice(PATH_LOCATOR_PREFIX);
+        blob.extend_from_slice(value.as_bytes());
+        Ok(blob)
     }
-    fn resolve(&self, _: &[u8]) -> Result<ResolvedFolder, LocatorError> {
-        Err(LocatorError::Io(
-            "folder shortcuts require a macOS build".into(),
-        ))
+    fn resolve(&self, bytes: &[u8]) -> Result<ResolvedFolder, LocatorError> {
+        let Some(raw) = bytes.strip_prefix(PATH_LOCATOR_PREFIX) else {
+            return Err(LocatorError::ForeignFormat("macOS bookmark"));
+        };
+        let value = std::str::from_utf8(raw)
+            .map_err(|_| LocatorError::Io("path locator is not valid UTF-8".into()))?;
+        if value.is_empty() {
+            return Err(LocatorError::Io("path locator is empty".into()));
+        }
+        let path = PathBuf::from(value);
+        match path.try_exists() {
+            Ok(true) => Ok(ResolvedFolder {
+                path,
+                refreshed_locator: None,
+            }),
+            Ok(false) => Err(LocatorError::Missing),
+            Err(error) => Err(io_to_locator_error(error)),
+        }
     }
 }
 
@@ -352,8 +407,11 @@ fn mime_for_ext(ext: Option<&str>) -> Option<String> {
 /// filesystem. Returns `("folder" | "file" | "missing", expanded_path)` — a
 /// missing path is the signal for the caller to fall back to a plain-text
 /// note paste instead of creating a shortcut/file card.
+///
+/// Windows paths (`C:\Users\x\Docs`, UNC `\\server\share\dir`) go through
+/// unchanged apart from the unquoting below; `~\...` is also expanded there.
 pub fn classify_path(raw: &str, home_dir: Option<&Path>) -> (String, PathBuf) {
-    let expanded = expand_home(raw, home_dir);
+    let expanded = expand_home(strip_wrapping_quotes(raw.trim()), home_dir);
     let path = PathBuf::from(&expanded);
     let kind = if path.is_dir() {
         "folder"
@@ -365,15 +423,146 @@ pub fn classify_path(raw: &str, home_dir: Option<&Path>) -> (String, PathBuf) {
     (kind.to_string(), path)
 }
 
-fn expand_home(raw: &str, home_dir: Option<&Path>) -> String {
+/// Explorer's "Copy as path" wraps the path in double quotes
+/// (`"C:\Users\x\file.txt"`); a quoted path is never meant literally.
+fn strip_wrapping_quotes(raw: &str) -> &str {
+    raw.strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(raw)
+}
+
+/// Expands a leading `~` against `home_dir`. Anything else — an absolute unix
+/// path, a Windows drive or UNC path — is returned unchanged. `~\` is only a
+/// separator on Windows; elsewhere a backslash is a legal filename character.
+pub fn expand_home(raw: &str, home_dir: Option<&Path>) -> String {
     let Some(home) = home_dir else {
         return raw.to_string();
     };
     if raw == "~" {
         return home.to_string_lossy().into_owned();
     }
-    if let Some(rest) = raw.strip_prefix("~/") {
+    let rest = raw.strip_prefix("~/");
+    #[cfg(windows)]
+    let rest = rest.or_else(|| raw.strip_prefix("~\\"));
+    if let Some(rest) = rest {
         return home.join(rest).to_string_lossy().into_owned();
     }
     raw.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("myspace-{tag}-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn path_locator_round_trips_an_existing_folder() {
+        let dir = temp_dir("path-locator");
+        let blob = PathLocator.create(&dir).unwrap();
+        assert!(is_path_locator(&blob));
+        assert!(blob.starts_with(PATH_LOCATOR_PREFIX));
+        let resolved = PathLocator.resolve(&blob).unwrap();
+        assert_eq!(resolved.path, dunce::canonicalize(&dir).unwrap());
+        assert!(resolved.refreshed_locator.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn path_locator_reports_a_deleted_folder_as_missing() {
+        let dir = temp_dir("path-locator-gone");
+        let blob = PathLocator.create(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            PathLocator.resolve(&blob).err(),
+            Some(LocatorError::Missing)
+        );
+        // Creating a locator for a path that does not exist is also `Missing`.
+        assert_eq!(PathLocator.create(&dir).err(), Some(LocatorError::Missing));
+    }
+
+    #[test]
+    fn path_locator_rejects_foreign_and_malformed_blobs() {
+        // Real macOS bookmark data starts with the `book` magic.
+        let bookmark = b"book\x00\x02\x00\x00mac-bookmark-bytes";
+        assert_eq!(
+            PathLocator.resolve(bookmark).err(),
+            Some(LocatorError::ForeignFormat("macOS bookmark"))
+        );
+        assert!(!is_path_locator(bookmark));
+        assert!(matches!(
+            PathLocator.resolve(PATH_LOCATOR_PREFIX).err(),
+            Some(LocatorError::Io(_))
+        ));
+        let mut invalid_utf8 = PATH_LOCATOR_PREFIX.to_vec();
+        invalid_utf8.extend_from_slice(&[0xff, 0xfe]);
+        assert!(matches!(
+            PathLocator.resolve(&invalid_utf8).err(),
+            Some(LocatorError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn foreign_format_preview_is_the_broken_shortcut_state() {
+        let preview = list_preview(&PathLocator, b"bookdata", "/hint", "Name", 50);
+        assert_eq!(preview.status, FolderPreviewStatus::Missing);
+    }
+
+    #[test]
+    fn expand_home_leaves_non_tilde_absolute_paths_unchanged() {
+        let home = Path::new("/home/me");
+        for raw in [
+            "/usr/local",
+            "C:\\Users\\x\\Docs",
+            "\\\\server\\share\\dir",
+            "~user/x",
+        ] {
+            assert_eq!(expand_home(raw, Some(home)), raw);
+        }
+        assert_eq!(expand_home("~", Some(home)), "/home/me");
+        assert_eq!(expand_home("~/Docs", None), "~/Docs");
+    }
+
+    #[test]
+    fn classify_path_strips_explorer_quotes() {
+        let dir = temp_dir("quoted-path");
+        let quoted = format!("\"{}\"", dir.display());
+        let (kind, expanded) = classify_path(&quoted, None);
+        assert_eq!(kind, "folder");
+        assert_eq!(expanded, dir);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn expand_home_treats_backslash_tilde_literally_off_windows() {
+        assert_eq!(
+            expand_home("~\\Docs", Some(Path::new("/home/me"))),
+            "~\\Docs"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_expand_and_classify() {
+        let home = Path::new("C:\\Users\\me");
+        assert_eq!(expand_home("~\\Docs", Some(home)), "C:\\Users\\me\\Docs");
+        assert_eq!(expand_home("~/Docs", Some(home)), "C:\\Users\\me\\Docs");
+        let unc = "\\\\server\\share\\dir";
+        assert_eq!(expand_home(unc, Some(home)), unc);
+        let dir = temp_dir("win-classify");
+        let as_text = dir.to_string_lossy().into_owned();
+        assert!(as_text.contains('\\'));
+        let (kind, expanded) = classify_path(&as_text, Some(home));
+        assert_eq!(kind, "folder");
+        assert_eq!(expanded, dir);
+        let (kind, name, _) = classify_drop(&dir.join("report.PDF"));
+        assert_eq!(kind, "office_file");
+        assert_eq!(name.as_deref(), Some("report.PDF"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

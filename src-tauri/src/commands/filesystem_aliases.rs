@@ -4,8 +4,8 @@
 //! Every command is `async` and touches the database only through the
 //! [`Workspace`] handle: reads on the pool, writes as a [`Mutation`] on the
 //! writer thread. The writer thread does no file I/O: copies, previews, Quick
-//! Look thumbnails, locator resolution and the `open` subprocess all run in
-//! `spawn_blocking`, completed before a mutation is queued (or after a read
+//! Look thumbnails, locator resolution and opening/revealing in the system file
+//! manager (via `tauri-plugin-opener`) all run in `spawn_blocking`, completed before a mutation is queued (or after a read
 //! returns).
 use crate::{
     app::Workspace,
@@ -29,7 +29,7 @@ use tauri::State;
 #[cfg(target_os = "macos")]
 type PlatformLocator = filesystem_alias_service::MacosBookmarkLocator;
 #[cfg(not(target_os = "macos"))]
-type PlatformLocator = filesystem_alias_service::UnsupportedPlatformLocator;
+type PlatformLocator = filesystem_alias_service::PathLocator;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateFolderAliasCommandInput {
@@ -177,13 +177,37 @@ pub struct PathClassification {
 #[tauri::command]
 pub fn classify_path(path: String) -> PathClassification {
     crate::telemetry::instrument_infallible("classify_path", move || {
-        let home = std::env::var("HOME").ok().map(PathBuf::from);
+        let home = home_dir();
         let (kind, expanded) = filesystem_alias_service::classify_path(&path, home.as_deref());
         PathClassification {
             kind,
             expanded_path: expanded.to_string_lossy().into_owned(),
         }
     })
+}
+
+/// `HOME` everywhere; on Windows (where `HOME` is usually unset) fall back to
+/// `USERPROFILE`, so a pasted `~\\Docs` still expands.
+fn home_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|v| !v.is_empty());
+    #[cfg(windows)]
+    let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()));
+    home.map(PathBuf::from)
+}
+
+/// Opens `path` with the system default handler (Finder on macOS — the opener
+/// plugin shells out to `open` there — Explorer or the associated app on
+/// Windows, `xdg-open` on Linux).
+fn open_with_system(path: &Path) -> Result<(), WorkspaceError> {
+    tauri_plugin_opener::open_path(path, None::<&str>)
+        .map_err(|e| WorkspaceError::Database(format!("could not open {}: {e}", path.display())))
+}
+
+/// Shows `path` selected in the system file manager (Finder / Explorer / the
+/// FileManager1 D-Bus service on Linux).
+fn reveal_with_system(path: &Path) -> Result<(), WorkspaceError> {
+    tauri_plugin_opener::reveal_item_in_dir(path)
+        .map_err(|e| WorkspaceError::Database(format!("could not reveal {}: {e}", path.display())))
 }
 
 #[tauri::command]
@@ -230,15 +254,11 @@ pub async fn open_folder_in_finder(
                 LocatorError::Io(message) => {
                     WorkspaceError::Database(format!("could not open folder shortcut: {message}"))
                 }
+                foreign @ LocatorError::ForeignFormat(_) => {
+                    WorkspaceError::ConstraintViolation(foreign.to_string())
+                }
             })?;
-            #[cfg(target_os = "macos")]
-            std::process::Command::new("open")
-                .arg(&resolved.path)
-                .status()
-                .map_err(|e| WorkspaceError::Database(e.to_string()))?;
-            #[cfg(not(target_os = "macos"))]
-            let _ = resolved;
-            Ok(())
+            open_with_system(&resolved.path)
         })
         .await
         .map_err(|e| WorkspaceError::Database(format!("open task failed: {e}")))?
@@ -436,14 +456,7 @@ pub async fn open_file_card(
 
         tokio::task::spawn_blocking(move || {
             let asset_path = asset_service::asset_abs_path(&asset_dir, &asset_file);
-            #[cfg(target_os = "macos")]
-            std::process::Command::new("open")
-                .arg(&asset_path)
-                .status()
-                .map_err(|e| WorkspaceError::Database(e.to_string()))?;
-            #[cfg(not(target_os = "macos"))]
-            let _ = asset_path;
-            Ok(())
+            open_with_system(&asset_path)
         })
         .await
         .map_err(|e| WorkspaceError::Database(format!("open task failed: {e}")))?
@@ -451,7 +464,8 @@ pub async fn open_file_card(
     .await
 }
 
-/// Reveals the File Card's original source file in Finder (selected). Falls back
+/// Reveals the File Card's original source file in the system file manager
+/// (Finder / Explorer), selected. Falls back
 /// to the managed copy when the source path is unknown.
 #[tauri::command]
 pub async fn reveal_file_card(
@@ -471,22 +485,12 @@ pub async fn reveal_file_card(
         let asset_dir = ws.paths().assets_dir();
 
         tokio::task::spawn_blocking(move || {
-            let target = if !source.is_empty() && std::path::Path::new(&source).exists() {
-                source
+            let target = if !source.is_empty() && Path::new(&source).exists() {
+                PathBuf::from(source)
             } else {
                 asset_service::asset_abs_path(&asset_dir, &asset_file)
-                    .to_string_lossy()
-                    .into_owned()
             };
-            #[cfg(target_os = "macos")]
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(&target)
-                .status()
-                .map_err(|e| WorkspaceError::Database(e.to_string()))?;
-            #[cfg(not(target_os = "macos"))]
-            let _ = target;
-            Ok(())
+            reveal_with_system(&target)
         })
         .await
         .map_err(|e| WorkspaceError::Database(format!("reveal task failed: {e}")))?

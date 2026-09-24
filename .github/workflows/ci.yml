@@ -119,9 +119,51 @@ jobs:
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  windows-cargo:
+    # Proves the app builds and the Rust gates pass on Windows (path folder
+    # locator, opener, arboard clipboard, `cfg(windows)` path tests). Like
+    # `linux-cargo` it only builds the frontend bundle the Rust build embeds;
+    # frontend correctness stays with the macOS `gates` job, which remains the
+    # required one. No `tauri build` here: packaging is too slow for CI, and
+    # `cargo test` already compiles and links the app.
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # The Rust build embeds the frontend bundle, so it has to exist before
+      # any cargo command runs.
+      - name: Build the frontend bundle
+        run: npm run build
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust lints
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   security-audit:
     # Dependency vulnerability scan. Deliberately NOT a `needs:` dependency
-    # of `gates`/`linux-cargo` and they don't depend on it either, so a
+    # of `gates`/`linux-cargo`/`windows-cargo` and they don't depend on it either, so a
     # newly-introduced advisory (including ones that show up the first time
     # this job runs, before anyone has triaged them) does not block those
     # jobs or the ability to merge while the finding is being triaged.
