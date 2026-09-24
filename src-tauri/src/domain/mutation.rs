@@ -7,16 +7,18 @@
 //! function. Nothing outside this module and the writer thread calls a
 //! mutating repository function.
 //!
-//! Why an enum and not closures: the device-sync journal (ADR-0011, S1) records
-//! each applied mutation as `(op, payload)`. The variant name is the `op`; the
-//! carried input is the payload. When the journal lands, this enum gains
-//! `Serialize`/`Deserialize` and `execute` gains a journal append inside the same
-//! transaction. Inputs that cannot be serialised today (`StagedAsset`, the
-//! enrichment input) are the ones S1 has to make serialisable, so keeping them
-//! visible here is deliberate.
+//! The device-sync journal (ADR-0011, S1) records every journaled mutation in
+//! the same transaction (`sync::funnel`). What it records is the resulting
+//! STATE of each entity the mutation touched (one `changes` row per entity,
+//! detected by triggers), tagged with [`Mutation::op_name`] as the row's `op`.
+//! Replaying state instead of re-executing commands is what makes replay
+//! deterministic without serialising inputs that carry staged files
+//! (`StagedAsset`, the enrichment plan) and without re-minting the ids a
+//! command generates internally (trash batches, duplicated subtrees).
 //!
 //! Adding a mutating command = adding a variant here + one match arm in
-//! `execute`, one `name` arm and one `is_local_only` arm. Nothing else.
+//! `execute`, `op_name`, `target` and `is_local_only`, and its op name in
+//! [`OP_NAMES`]. Nothing else: journaling follows from the tables it writes.
 //!
 //! Local-only data (ADR-0011, ADR-0012). Some writes only touch state that
 //! belongs to this installation and must never leave it: the viewport, the
@@ -47,6 +49,7 @@ use crate::domain::models::{
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::devices;
 use crate::repositories::workspace_repository as repo;
+use crate::sync::{ApplyReport, ChangeRow};
 
 /// Tables that hold device-local state and are never synced: not journaled,
 /// not exchanged, not overwritten by a replay (ADR-0011 "what the data layer
@@ -61,14 +64,101 @@ use crate::repositories::workspace_repository as repo;
 ///   `local_meta` identity), not through journaled rows, so a rename is a
 ///   local write on every device and no two devices ever fight over a row.
 ///
-/// Derived tables (`search_index`, `search_index_keys`, `boards.change_seq`)
-/// are rebuilt by triggers on each replica and are not listed: the journal
-/// never carries them either.
+/// - `entity_clocks`, `purged`, `pending_changes`, `sync_cursors`: the sync
+///   engine's own bookkeeping (migration 0025): what this replica applied,
+///   tombstoned, parked and holds. Each replica derives its own.
+///
+/// `changes` (0025) is deliberately NOT local: it is the journal itself, the
+/// wire format a transport exchanges. Derived tables (`search_index`,
+/// `search_index_keys`, `boards.change_seq`) are rebuilt by triggers on each
+/// replica and are not listed: the journal never carries them either.
 pub const LOCAL_ONLY_TABLES: &[&str] = &[
     "local_meta",
     "filesystem_alias_locators",
     "board_view_states",
     "known_devices",
+    "entity_clocks",
+    "purged",
+    "pending_changes",
+    "sync_cursors",
+];
+
+/// What a mutation primarily acts on ([`Mutation::target`]); recorded as the
+/// `cause` of its journal rows and usable by telemetry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityKind {
+    Board,
+    Card,
+    Asset,
+    QuickBoard,
+    TrashBatch,
+    LinkBatch,
+    Device,
+    /// Whole-workspace operations (Empty Trash, maintenance, a sync batch).
+    Workspace,
+}
+
+impl EntityKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            EntityKind::Board => "board",
+            EntityKind::Card => "card",
+            EntityKind::Asset => "asset",
+            EntityKind::QuickBoard => "quick_board",
+            EntityKind::TrashBatch => "trash_batch",
+            EntityKind::LinkBatch => "link_batch",
+            EntityKind::Device => "device",
+            EntityKind::Workspace => "workspace",
+        }
+    }
+}
+
+/// Every [`Mutation::op_name`], in declaration order. Stable: an op name is
+/// stored in journal rows and must never be renamed once released (a test
+/// pins this list).
+pub const OP_NAMES: &[&str] = &[
+    "card.create_note",
+    "card.create_image",
+    "card.create_board_shortcut",
+    "card.update_note",
+    "card.set_note_color",
+    "card.update_image_caption",
+    "card.move",
+    "card.move_many",
+    "card.move_to_board",
+    "card.move_many_to_unsorted",
+    "card.place_unsorted",
+    "card.convert_note_to_embed",
+    "card.update_embed_description",
+    "selection.move_to_board",
+    "selection.undo_move",
+    "board.save_viewport",
+    "board.create_child",
+    "board.rename",
+    "board.move",
+    "board.set_cover",
+    "board.duplicate",
+    "trash.note",
+    "trash.board",
+    "trash.selection",
+    "trash.restore_batch",
+    "trash.empty",
+    "quick_board.add",
+    "quick_board.remove",
+    "quick_board.reorder",
+    "asset.insert",
+    "card.create_filesystem_alias",
+    "card.refresh_alias_locator",
+    "card.create_file",
+    "card.set_alias_local_target",
+    "device.rename",
+    "link_batch.create",
+    "link_batch.trash",
+    "card.apply_embed_metadata",
+    "maintenance.collapse_favicons",
+    "maintenance.collect_orphaned_assets",
+    "maintenance.hash_assets",
+    "sync.apply_changes",
 ];
 
 /// One write, as data. See the module docs.
@@ -189,6 +279,11 @@ pub enum Mutation {
     /// Background backfill of `assets.sha256` for rows created before
     /// migration 0020 (see `asset_service::hash_existing_assets`).
     HashExistingAssets,
+
+    // ---- sync ---------------------------------------------------------------
+    /// Replays a peer's journal rows (`sync::replay::apply_remote`). Not
+    /// journaled itself: the rows are stored verbatim with their origin.
+    ApplySyncChanges(Vec<ChangeRow>),
 }
 
 /// Payload of [`Mutation::CommitFileCard`].
@@ -221,6 +316,7 @@ pub enum MutationOutcome {
     CardsReceipt(CardsReceipt),
     ViewportReceipt(ViewportReceipt),
     Device(DeviceIdentity),
+    SyncReport(ApplyReport),
 }
 
 fn unexpected(what: &str) -> WorkspaceError {
@@ -314,12 +410,18 @@ impl MutationOutcome {
             _ => Err(unexpected("device identity")),
         }
     }
+    pub fn into_sync_report(self) -> Result<ApplyReport, WorkspaceError> {
+        match self {
+            Self::SyncReport(r) => Ok(r),
+            _ => Err(unexpected("sync report")),
+        }
+    }
 }
 
 impl Mutation {
-    /// Stable operation name: the telemetry `op` field and, later, the journal
-    /// `op` column. Snake case, never renamed once journaled.
-    pub fn name(&self) -> &'static str {
+    /// Stable operation name: the telemetry `op` field and the journal `op`
+    /// column. `area.snake_case`, listed in [`OP_NAMES`], never renamed.
+    pub fn op_name(&self) -> &'static str {
         match self {
             Self::CreateNote(_) => "card.create_note",
             Self::CreateImageCard(_) => "card.create_image",
@@ -362,7 +464,102 @@ impl Mutation {
             Self::CollapseFaviconDuplicates => "maintenance.collapse_favicons",
             Self::CollectOrphanedAssets => "maintenance.collect_orphaned_assets",
             Self::HashExistingAssets => "maintenance.hash_assets",
+            Self::ApplySyncChanges(_) => "sync.apply_changes",
         }
+    }
+
+    /// The entity this mutation primarily acts on. Exhaustive on purpose.
+    /// Multi-entity mutations name their anchor (the target board of a move,
+    /// the first item of a selection); the journal itself records every
+    /// entity actually written, whatever this says.
+    pub fn target(&self) -> (EntityKind, &str) {
+        use EntityKind as K;
+        match self {
+            Self::CreateNote(i) => (K::Card, &i.id),
+            Self::CreateImageCard(i) => (K::Card, &i.id),
+            Self::CreateBoardShortcut(i) => (K::Card, &i.id),
+            Self::UpdateNote(i) => (K::Card, &i.id),
+            Self::SetNoteColor(i) => (K::Card, &i.id),
+            Self::UpdateImageCaption(i) => (K::Card, &i.id),
+            Self::MoveCard(i) => (K::Card, &i.id),
+            Self::MoveCards(i) => (K::Card, i.cards.first().map_or("", |c| c.id.as_str())),
+            Self::MoveCardToBoard(i) => (K::Card, &i.id),
+            Self::MoveCardsToBoardUnsorted(i) => (K::Board, &i.target_board_id),
+            Self::PlaceUnsortedCard(i) => (K::Card, &i.id),
+            Self::ConvertNoteToEmbed(i) => (K::Card, &i.id),
+            Self::UpdateEmbedDescription(i) => (K::Card, &i.id),
+            Self::MoveSelectionToBoard(i) => (K::Board, &i.target_board_id),
+            Self::UndoMoveSelection(r) => (K::Board, &r.target_board_id),
+            Self::SaveViewport(i) => (K::Board, &i.board_id),
+            Self::CreateChildBoard(i) => (K::Board, &i.board_id),
+            Self::RenameBoard { board_id, .. } => (K::Board, board_id),
+            Self::MoveBoard(i) => (K::Board, &i.board_id),
+            Self::SetBoardCover { board_id, .. } => (K::Board, board_id),
+            Self::DuplicateBoard(i) => (K::Board, &i.new_board_id),
+            Self::TrashNote { card_id } => (K::Card, card_id),
+            Self::TrashBoard { board_id } => (K::Board, board_id),
+            Self::TrashSelection(i) => match i.items.first() {
+                Some(item) if item.kind == "board_portal" => (K::Board, &item.id),
+                Some(item) => (K::Card, &item.id),
+                None => (K::Workspace, ""),
+            },
+            Self::RestoreTrashBatch { batch_id } => (K::TrashBatch, batch_id),
+            Self::EmptyTrash { .. } => (K::Workspace, ""),
+            Self::AddQuickBoard(i) => (K::QuickBoard, &i.board_id),
+            Self::RemoveQuickBoard { board_id } => (K::QuickBoard, board_id),
+            Self::ReorderQuickBoards(_) => (K::Workspace, ""),
+            Self::InsertAsset(asset) => (K::Asset, &asset.id),
+            Self::CreateFilesystemAlias(i) => (K::Card, &i.id),
+            Self::RefreshFilesystemAliasLocator { card_id, .. } => (K::Card, card_id),
+            Self::CommitFileCard(job) => (K::Card, &job.input.id),
+            Self::SetFilesystemAliasLocalTarget { card_id, .. } => (K::Card, card_id),
+            Self::RenameDevice { .. } => (K::Device, ""),
+            Self::CreateLinkBatch(i) => (K::Board, &i.board_id),
+            Self::TrashLinkBatch { agent_batch_id } => (K::LinkBatch, agent_batch_id),
+            Self::ApplyEmbedMetadata(plan) => (K::Card, &plan.update.id),
+            Self::CollapseFaviconDuplicates
+            | Self::CollectOrphanedAssets
+            | Self::HashExistingAssets
+            | Self::ApplySyncChanges(_) => (K::Workspace, ""),
+        }
+    }
+
+    /// True when the funnel appends journal rows for what this mutation
+    /// wrote: every shared write except a replay (whose rows are stored as
+    /// received).
+    pub fn is_journaled(&self) -> bool {
+        !self.is_local_only() && !matches!(self, Self::ApplySyncChanges(_))
+    }
+
+    /// Maintenance that interleaves file I/O with its own short transactions
+    /// and therefore does not run inside the funnel's single transaction
+    /// (see `sync::funnel`).
+    pub fn manages_own_transactions(&self) -> bool {
+        matches!(
+            self,
+            Self::CollapseFaviconDuplicates
+                | Self::CollectOrphanedAssets
+                | Self::HashExistingAssets
+        )
+    }
+
+    /// Work that must happen before the mutation's transaction opens, once
+    /// (not on a busy retry): today only the mandatory pre-Empty-Trash backup,
+    /// which refuses the mutation unless a validated snapshot is on disk.
+    pub fn prepare(&self, paths: &WorkspacePaths) -> Result<(), WorkspaceError> {
+        if let Self::EmptyTrash { confirmation } = self {
+            if confirmation != "EMPTY" {
+                // `execute` reports the error; no backup for a refused call.
+                return Ok(());
+            }
+            crate::db::backup::snapshot_before_destructive_operation(
+                &paths.db_path(),
+                &paths.assets_dir(),
+                &paths.backups_dir(),
+            )
+            .map_err(WorkspaceError::Database)?;
+        }
+        Ok(())
     }
 
     /// True for writes that touch only [`LOCAL_ONLY_TABLES`]: the journal (S1)
@@ -410,13 +607,16 @@ impl Mutation {
             | Self::ApplyEmbedMetadata(_)
             | Self::CollapseFaviconDuplicates
             | Self::CollectOrphanedAssets
-            | Self::HashExistingAssets => false,
+            | Self::HashExistingAssets
+            | Self::ApplySyncChanges(_) => false,
         }
     }
 
     /// Applies the mutation on the writer connection. Runs on the writer
-    /// thread only; the borrow (not a move) is what lets the writer re-run a
-    /// mutation after a busy-database error.
+    /// thread only (through `sync::funnel::apply`, which adds the journal and
+    /// the transaction; [`Mutation::prepare`] runs first); the borrow (not a
+    /// move) is what lets the writer re-run a mutation after a busy-database
+    /// error.
     pub fn execute(
         &self,
         conn: &mut Connection,
@@ -485,16 +685,9 @@ impl Mutation {
                 trash_service::restore_trash_batch(conn, batch_id).map(|_| Out::Unit)
             }
             Self::EmptyTrash { confirmation } => {
-                // Mandatory pre-empty backup gate: refuse to mutate unless a
-                // fresh validated snapshot is on disk. Runs here, on the writer
-                // thread, so it never blocks the UI and no write can interleave
-                // between the snapshot and the delete.
-                crate::db::backup::snapshot_before_destructive_operation(
-                    &paths.db_path(),
-                    &paths.assets_dir(),
-                    &paths.backups_dir(),
-                )
-                .map_err(WorkspaceError::Database)?;
+                // The mandatory pre-empty backup gate is `prepare`: it runs on
+                // the writer thread right before this transaction opens, so
+                // no write can interleave between the snapshot and the delete.
                 trash_service::empty_trash(conn, confirmation).map(Out::EmptyTrash)
             }
 
@@ -569,6 +762,9 @@ impl Mutation {
             Self::HashExistingAssets => {
                 asset_service::hash_existing_assets(conn, &paths.assets_dir()).map(Out::Count)
             }
+            Self::ApplySyncChanges(rows) => {
+                crate::sync::replay::apply_remote(conn, rows.clone()).map(Out::SyncReport)
+            }
         }
     }
 }
@@ -590,4 +786,104 @@ fn trash_link_batch(conn: &mut Connection, agent_batch_id: &str) -> Result<Strin
         })
         .collect();
     trash_service::trash_selection(conn, &TrashSelectionInput { items })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Snapshot of the journal op vocabulary. Changing an existing entry is a
+    /// wire-format break: add new names, never rename.
+    #[test]
+    fn op_names_are_unique_and_stable() {
+        let unique: std::collections::BTreeSet<&str> = OP_NAMES.iter().copied().collect();
+        assert_eq!(unique.len(), OP_NAMES.len(), "duplicate op name");
+        for name in OP_NAMES {
+            assert!(
+                name.chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_' || c == '.'),
+                "{name} is not area.snake_case"
+            );
+        }
+        assert_eq!(
+            OP_NAMES.join("\n"),
+            "card.create_note
+card.create_image
+card.create_board_shortcut
+card.update_note
+card.set_note_color
+card.update_image_caption
+card.move
+card.move_many
+card.move_to_board
+card.move_many_to_unsorted
+card.place_unsorted
+card.convert_note_to_embed
+card.update_embed_description
+selection.move_to_board
+selection.undo_move
+board.save_viewport
+board.create_child
+board.rename
+board.move
+board.set_cover
+board.duplicate
+trash.note
+trash.board
+trash.selection
+trash.restore_batch
+trash.empty
+quick_board.add
+quick_board.remove
+quick_board.reorder
+asset.insert
+card.create_filesystem_alias
+card.refresh_alias_locator
+card.create_file
+card.set_alias_local_target
+device.rename
+link_batch.create
+link_batch.trash
+card.apply_embed_metadata
+maintenance.collapse_favicons
+maintenance.collect_orphaned_assets
+maintenance.hash_assets
+sync.apply_changes"
+        );
+    }
+
+    #[test]
+    fn op_name_is_listed() {
+        let samples = [
+            Mutation::TrashNote {
+                card_id: "c".into(),
+            },
+            Mutation::RenameBoard {
+                board_id: "b".into(),
+                title: "t".into(),
+            },
+            Mutation::EmptyTrash {
+                confirmation: "EMPTY".into(),
+            },
+            Mutation::RenameDevice { name: "n".into() },
+            Mutation::CollectOrphanedAssets,
+            Mutation::ApplySyncChanges(Vec::new()),
+        ];
+        for m in &samples {
+            assert!(OP_NAMES.contains(&m.op_name()), "{}", m.op_name());
+        }
+        assert_eq!(samples[0].target(), (EntityKind::Card, "c"));
+        assert!(!samples[3].is_journaled());
+        assert!(!samples[5].is_journaled() && !samples[5].is_local_only());
+        assert!(samples[4].manages_own_transactions());
+        assert!(samples[2].is_journaled());
+    }
+
+    #[test]
+    fn journal_bookkeeping_is_local_but_the_journal_is_not() {
+        for table in ["entity_clocks", "purged", "pending_changes", "sync_cursors"] {
+            assert!(LOCAL_ONLY_TABLES.contains(&table), "{table}");
+        }
+        assert!(!LOCAL_ONLY_TABLES.contains(&"changes"));
+    }
 }

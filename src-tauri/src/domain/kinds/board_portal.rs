@@ -2,7 +2,7 @@
 //! (`board_portal_cards`). The target board's identity and subtree counts are
 //! read live; duplicating a portal duplicates its whole target subtree.
 
-use rusqlite::{params, Connection, Row, Transaction};
+use rusqlite::{params, Connection, Row};
 
 use super::{
     asset_at, asset_columns, card_frame, load_board_rows, load_one_row, DetailTable, AFTER_CARD,
@@ -105,7 +105,7 @@ impl CardKindHandler for BoardPortalHandler {
     /// new board, then point the copied portal card at that copy.
     fn copy_detail(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         from_id: &str,
         to_id: &str,
         ctx: &CopyContext,
@@ -146,7 +146,7 @@ impl CardKindHandler for BoardPortalHandler {
         Ok(())
     }
 
-    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+    fn delete_details(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError> {
         DETAIL.delete(tx, ids)
     }
 
@@ -173,7 +173,7 @@ impl CardKindHandler for BoardPortalHandler {
 
     fn from_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError> {

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{Connection, OptionalExtension, Row, Transaction};
+use rusqlite::{Connection, OptionalExtension, Row};
 
 use super::{
     asset_at, asset_columns, card_frame, document_at, load_board_rows, load_one_row, DetailTable,
@@ -120,7 +120,7 @@ impl CardKindHandler for EmbedHandler {
     /// The copy shares the original's preview/favicon asset rows.
     fn copy_detail(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         from_id: &str,
         to_id: &str,
         _ctx: &CopyContext,
@@ -128,7 +128,7 @@ impl CardKindHandler for EmbedHandler {
         DETAIL.copy(tx, from_id, to_id)
     }
 
-    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+    fn delete_details(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError> {
         DETAIL.delete(tx, ids)
     }
 
@@ -202,7 +202,7 @@ impl CardKindHandler for EmbedHandler {
 
     fn from_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError> {

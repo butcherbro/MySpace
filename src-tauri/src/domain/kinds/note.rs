@@ -1,7 +1,7 @@
 //! `note` cards: a rich-text document plus its plain-text projection and a
 //! background color preset (`note_cards`).
 
-use rusqlite::{Connection, Row, Transaction};
+use rusqlite::{Connection, Row};
 
 use super::{card_frame, document_at, load_board_rows, load_one_row, DetailTable, AFTER_CARD};
 use crate::domain::card_kind::{
@@ -59,7 +59,7 @@ impl CardKindHandler for NoteHandler {
 
     fn copy_detail(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         from_id: &str,
         to_id: &str,
         _ctx: &CopyContext,
@@ -67,7 +67,7 @@ impl CardKindHandler for NoteHandler {
         DETAIL.copy(tx, from_id, to_id)
     }
 
-    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+    fn delete_details(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError> {
         DETAIL.delete(tx, ids)
     }
 
@@ -112,7 +112,7 @@ impl CardKindHandler for NoteHandler {
 
     fn from_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError> {

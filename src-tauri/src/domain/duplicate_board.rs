@@ -14,7 +14,7 @@
 //! restoring that batch brings all of it back — there is nothing for this
 //! module to reverse itself.
 
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::card_kind::{handler, CardKind, CopyContext};
 use crate::domain::errors::WorkspaceError;
@@ -43,7 +43,7 @@ fn truncate_title(title: &str) -> String {
 /// Finder-style unique title among the target board's direct children:
 /// "<title> copy", then "<title> copy 2", "<title> copy 3", ...
 fn unique_duplicate_title(
-    tx: &Transaction,
+    tx: &Connection,
     parent_board_id: &str,
     source_title: &str,
 ) -> Result<String, WorkspaceError> {
@@ -94,7 +94,7 @@ struct SourceCard {
 /// (only the root of a duplicate is renamed "... copy").
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn copy_board_subtree(
-    tx: &Transaction,
+    tx: &Connection,
     source_board_id: &str,
     new_board_id: &str,
     workspace_id: &str,

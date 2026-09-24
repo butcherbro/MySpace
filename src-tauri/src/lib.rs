@@ -4,6 +4,7 @@ pub mod db;
 pub mod domain;
 pub mod repositories;
 pub mod services;
+pub mod sync;
 pub mod telemetry;
 
 use std::time::Duration;
@@ -231,6 +232,9 @@ pub fn run() {
             commands::quick_boards::add_quick_board,
             commands::quick_boards::remove_quick_board,
             commands::quick_boards::reorder_quick_boards,
+            commands::sync::sync_export_changes,
+            commands::sync::sync_apply_changes,
+            commands::sync::sync_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

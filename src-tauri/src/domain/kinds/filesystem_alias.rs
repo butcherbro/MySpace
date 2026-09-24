@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{Connection, Row, Transaction};
+use rusqlite::{Connection, Row};
 
 use super::{card_frame, load_board_rows, load_one_row, DetailTable, AFTER_CARD};
 use crate::domain::card_kind::{
@@ -79,7 +79,7 @@ impl CardKindHandler for FilesystemAliasHandler {
 
     fn copy_detail(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         from_id: &str,
         to_id: &str,
         _ctx: &CopyContext,
@@ -98,7 +98,7 @@ impl CardKindHandler for FilesystemAliasHandler {
     /// Deletes the detail rows only. Locators are tied to the `cards` row
     /// (`ON DELETE CASCADE`, migration 0024), so they go when the card is
     /// hard-deleted, and survive a journal codec drop/re-apply of this row.
-    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+    fn delete_details(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError> {
         DETAIL.delete(tx, ids)
     }
 
@@ -151,7 +151,7 @@ impl CardKindHandler for FilesystemAliasHandler {
 
     fn from_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError> {

@@ -81,6 +81,14 @@ pub fn open_and_bootstrap(path: &std::path::Path) -> Result<Connection> {
     let fingerprint = crate::domain::device::current_machine_fingerprint(data_dir);
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     crate::repositories::devices::ensure_device_identity(&tx, Some(&fingerprint))?;
+    // One-time journal backfill (ADR-0011 S1, migration 0025): needs the
+    // final device identity, hence here and not in the migration step.
+    crate::sync::snapshot::ensure_journal_snapshot(&tx).map_err(|e| {
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some(format!("journal snapshot failed: {e}")),
+        )
+    })?;
     tx.commit()?;
     Ok(conn)
 }

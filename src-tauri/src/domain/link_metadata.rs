@@ -32,7 +32,7 @@ use crate::domain::mutation::Mutation;
 use crate::domain::plain_text::plain_text_to_document as plain_text_document;
 use crate::repositories::workspace_repository;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension};
 
 const MAX_REDIRECTS: usize = 5;
 const TEXT_LIMIT: usize = 2 * 1024 * 1024;
@@ -350,7 +350,7 @@ pub fn collapse_favicon_duplicates(
     }
 
     let mut collapsed = 0i64;
-    let tx = conn.transaction().map_err(WorkspaceError::from)?;
+    let tx = crate::repositories::immediate_tx(conn).map_err(WorkspaceError::from)?;
     for (_, asset_ids) in groups.iter().filter(|(_, ids)| ids.len() > 1) {
         let Some(canonical) = asset_ids.first() else {
             continue;
@@ -560,7 +560,7 @@ fn commit_embed_enrichment_rows(
     conn: &mut Connection,
     plan: &EmbedEnrichmentPlan,
 ) -> Result<EmbedCardDto, WorkspaceError> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = crate::repositories::immediate_tx(conn)?;
     for staged in &plan.staged_assets {
         asset_service::insert_asset_row(&tx, &staged.asset)?;
     }

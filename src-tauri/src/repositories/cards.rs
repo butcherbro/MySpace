@@ -3,7 +3,7 @@
 //! kind handlers (`domain::kinds`, P1.3); `load_cards`/`load_card` iterate the
 //! registry.
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::card_kind::{handler, registry, sql_in_list, CardKind};
 use crate::domain::errors::WorkspaceError;
@@ -59,7 +59,7 @@ pub fn load_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceE
 
 /// Reads a card's stored revision back inside the write transaction, so a
 /// receipt reports what SQLite holds rather than a revision computed in Rust.
-fn stored_revision(tx: &Transaction<'_>, id: &str) -> Result<i64, WorkspaceError> {
+fn stored_revision(tx: &Connection, id: &str) -> Result<i64, WorkspaceError> {
     Ok(
         tx.query_row("SELECT revision FROM cards WHERE id = ?1", [id], |r| {
             r.get(0)
@@ -68,7 +68,7 @@ fn stored_revision(tx: &Transaction<'_>, id: &str) -> Result<i64, WorkspaceError
 }
 
 /// Reads the stored revision and wraps it in a [`CardReceipt`].
-fn card_receipt(tx: &Transaction<'_>, id: &str) -> Result<CardReceipt, WorkspaceError> {
+fn card_receipt(tx: &Connection, id: &str) -> Result<CardReceipt, WorkspaceError> {
     Ok(CardReceipt {
         id: id.to_string(),
         revision: stored_revision(tx, id)?,
@@ -80,7 +80,7 @@ fn card_receipt(tx: &Transaction<'_>, id: &str) -> Result<CardReceipt, Workspace
 /// first, so an autosave can never silently replace unrecoverable content.
 /// `select` reads the stored document column for `?1`.
 fn guard_corrupt_document(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     select: &str,
     id: &str,
     acknowledged: bool,
@@ -638,7 +638,7 @@ pub fn apply_embed_metadata(
 /// write transaction (link enrichment records its asset rows, favicon-cache
 /// rows and the card update atomically). Does not commit and does not reload.
 pub fn apply_embed_metadata_in_tx(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     input: &ApplyEmbedMetadataInput,
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();

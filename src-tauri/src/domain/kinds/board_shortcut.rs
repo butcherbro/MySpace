@@ -4,7 +4,7 @@
 //! whose target is gone or trashed projects as broken (`target: None`)
 //! instead of failing the whole board read.
 
-use rusqlite::{Connection, Row, Transaction};
+use rusqlite::{Connection, Row};
 
 use super::{
     asset_at, asset_columns, card_frame, load_board_rows, load_one_row, DetailTable, AFTER_CARD,
@@ -87,7 +87,7 @@ impl CardKindHandler for BoardShortcutHandler {
     /// inside the duplicated subtree (docs/decisions/0010-board-shortcuts.md).
     fn copy_detail(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         from_id: &str,
         to_id: &str,
         _ctx: &CopyContext,
@@ -95,7 +95,7 @@ impl CardKindHandler for BoardShortcutHandler {
         DETAIL.copy(tx, from_id, to_id)
     }
 
-    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+    fn delete_details(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError> {
         DETAIL.delete(tx, ids)
     }
 
@@ -120,7 +120,7 @@ impl CardKindHandler for BoardShortcutHandler {
 
     fn from_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError> {

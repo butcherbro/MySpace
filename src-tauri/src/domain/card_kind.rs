@@ -17,7 +17,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use rusqlite::{Connection, Transaction};
+use rusqlite::Connection;
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{AssetDto, CardDto};
@@ -170,7 +170,7 @@ pub trait CardKindHandler: Sync + Send {
     /// row `to_id` (board duplication).
     fn copy_detail(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         from_id: &str,
         to_id: &str,
         ctx: &CopyContext,
@@ -178,7 +178,7 @@ pub trait CardKindHandler: Sync + Send {
 
     /// Hard-deletes this kind's detail rows for `ids` (empty trash). Returns
     /// the number of rows removed. Must not touch `cards` itself.
-    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError>;
+    fn delete_details(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError>;
 
     /// Loads the hits for `candidates` — cards of this kind that the
     /// full-text index matched for `query` (already trimmed, non-empty) —
@@ -207,7 +207,7 @@ pub trait CardKindHandler: Sync + Send {
     #[allow(clippy::wrong_self_convention)]
     fn from_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError>;

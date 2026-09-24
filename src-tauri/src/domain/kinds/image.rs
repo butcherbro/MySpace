@@ -1,7 +1,7 @@
 //! `image` cards: a static image asset plus an editable caption
 //! (`image_cards`).
 
-use rusqlite::{Connection, Row, Transaction};
+use rusqlite::{Connection, Row};
 
 use super::{
     asset_columns, card_frame, document_at, load_board_rows, load_one_row, required_asset_at,
@@ -68,7 +68,7 @@ impl CardKindHandler for ImageHandler {
     /// The copy shares the original's asset row (copy-in model).
     fn copy_detail(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         from_id: &str,
         to_id: &str,
         _ctx: &CopyContext,
@@ -76,7 +76,7 @@ impl CardKindHandler for ImageHandler {
         DETAIL.copy(tx, from_id, to_id)
     }
 
-    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+    fn delete_details(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError> {
         DETAIL.delete(tx, ids)
     }
 
@@ -132,7 +132,7 @@ impl CardKindHandler for ImageHandler {
 
     fn from_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError> {

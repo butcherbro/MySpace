@@ -2,7 +2,7 @@
 //! Stored inside the caller's transaction, so the receipt and the aggregates it
 //! describes commit or roll back together.
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::errors::WorkspaceError;
 
@@ -41,7 +41,7 @@ pub fn find_operation_receipt(
 /// aggregates it describes commit or roll back together (ADR-0007 rule 5).
 #[allow(clippy::too_many_arguments)]
 pub fn store_operation_receipt(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     operation_id: &str,
     operation_kind: &str,
     idempotency_key: &str,

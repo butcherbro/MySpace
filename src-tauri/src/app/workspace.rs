@@ -12,10 +12,10 @@
 //! Tauri command (async fn)  ──►  Workspace (Clone, Send + Sync)
 //! MCP adapter (blocking)    ──►      .read(|conn| …)   → read pool (N connections, WAL readers)
 //!                                    .apply(Mutation)  → writer thread (1 connection, FIFO queue)
-//!                                                        └─ Mutation::execute
-//!                                                           ├─ domain / repository fn (existing code)
-//!                                                           ├─ (later) journal row      ← ADR-0011 hook
-//!                                                           └─ MutationOutcome
+//!                                                        └─ sync::funnel::apply (one BEGIN IMMEDIATE)
+//!                                                           ├─ Mutation::execute → domain / repository fn
+//!                                                           ├─ journal rows (sync::tracking::flush)
+//!                                                           └─ COMMIT → MutationOutcome
 //! ```
 //!
 //! Invariants:
@@ -350,7 +350,7 @@ fn run_mutation(
     paths: &WorkspacePaths,
     enqueued: Instant,
 ) -> Result<MutationOutcome, WorkspaceError> {
-    let name = mutation.name();
+    let name = mutation.op_name();
     let span = tracing::info_span!("mutation", op = name);
     let _enter = span.enter();
 
@@ -359,7 +359,13 @@ fn run_mutation(
 
     let mut attempt = 0u32;
     let result = loop {
-        match mutation.execute(conn, paths) {
+        // The pre-destructive backup runs once, outside the transaction.
+        if attempt == 0 {
+            if let Err(err) = mutation.prepare(paths) {
+                break Err(err);
+            }
+        }
+        match crate::sync::funnel::apply(conn, mutation, paths) {
             Err(err) if err.is_busy() && attempt < BUSY_RETRIES => {
                 attempt += 1;
                 let backoff = busy_backoff(attempt);

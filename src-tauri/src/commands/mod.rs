@@ -11,4 +11,5 @@ pub mod link_metadata;
 pub mod quick_boards;
 pub mod search;
 pub mod startup;
+pub mod sync;
 pub mod trash;

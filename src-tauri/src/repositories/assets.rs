@@ -2,7 +2,7 @@
 //! assets, and the folder shortcut's device-scoped locators (ADR-0012). Split
 //! out of `workspace_repository`.
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CreateFileCardInput, CreateFilesystemAliasInput};
@@ -92,7 +92,7 @@ pub fn set_filesystem_alias_local_target(
 /// asset must already be copied and its preview read before this call. Idempotent
 /// replay by card id returns Ok without inserting a second row.
 pub fn insert_file_card_rows(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     input: &CreateFileCardInput,
     asset_id: &str,
     preview_text: &str,

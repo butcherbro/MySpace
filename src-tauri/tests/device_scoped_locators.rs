@@ -412,14 +412,14 @@ fn local_only_mutations_write_only_local_only_tables() {
         }),
     ];
     for mutation in mutations {
-        assert!(mutation.is_local_only(), "{}", mutation.name());
+        assert!(mutation.is_local_only(), "{}", mutation.op_name());
         let before = shared_state(&conn);
         mutation.execute(&mut conn, &paths).unwrap();
         assert_eq!(
             shared_state(&conn),
             before,
             "{} changed a synced table",
-            mutation.name()
+            mutation.op_name()
         );
     }
     assert_eq!(

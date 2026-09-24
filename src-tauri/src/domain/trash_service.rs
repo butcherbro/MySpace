@@ -5,7 +5,7 @@
 //! a recursive CTE and trashed atomically; restore reverses a whole batch with
 //! original placement preserved.
 
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Connection};
 
 use crate::domain::card_kind::{registry, sql_in_list, CardKind};
 use crate::domain::errors::WorkspaceError;
@@ -138,7 +138,7 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
 /// inside an existing transaction. Assumes the board exists and is not trashed;
 /// callers are responsible for those checks.
 fn trash_board_in_tx(
-    tx: &Transaction,
+    tx: &Connection,
     board_id: &str,
     batch_id: &str,
     now: i64,

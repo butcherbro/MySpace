@@ -176,6 +176,12 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../../migrations/0024_device_scoped_locators.sql"),
         after: Some(crate::repositories::devices::migrate_0024),
     },
+    Migration {
+        version: 25,
+        name: "change_journal",
+        sql: include_str!("../../migrations/0025_change_journal.sql"),
+        after: None,
+    },
 ];
 
 /// The result of comparing the database's applied migrations against what

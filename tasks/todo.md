@@ -491,3 +491,30 @@ P2 / platform:
 - [ ] Резервная копия: приватный git remote — по решению пользователя.
 - [ ] Опционально: подогнать frame старых image cards под пропорции; полноэкранный
       просмотр `.md`.
+
+## Sync
+
+- [x] **S1 — change journal** (ADR-0011, migration 0025): `changes` (wire
+      format), HLC in `local_meta.hlc_last`, per-register `entity_clocks`,
+      `purged` tombstones, `pending_changes`, `sync_cursors`. Every journaled
+      mutation writes its rows in the same `BEGIN IMMEDIATE` as the write
+      (`sync::funnel`), from the app and the MCP server alike. One-time backfill
+      of pre-journal data at startup (`local_meta.journal_snapshot_done`).
+- [x] **S2 — replay engine** (`sync::replay::apply_remote`): idempotent,
+      LWW per register, park/retry of rows whose dependency is missing, purge
+      never resurrects, conflict copy for concurrent note edits, forwarding
+      (star and mesh). Commands `sync_export_changes`, `sync_apply_changes`,
+      `sync_status`; event `sync-applied` with the touched board ids.
+      Tests: `src-tauri/tests/sync_replay.rs`.
+- [ ] **S3 — transport.** Open question: relay server vs LAN (mDNS + HTTP) vs
+      a shared folder (iCloud Drive / Dropbox) holding per-device journal files
+      and blobs. The engine is transport-agnostic; whichever is chosen must
+      deliver per-origin prefixes (cursor semantics) and fetch blobs by
+      `sha256` (`sync_status.missingBlobs`), and the handshake must carry each
+      peer's `{deviceId, deviceName}` into `known_devices`.
+- [ ] Frontend: listen to `sync-applied` and reload touched boards (the P1.6
+      poll ignores own-process commits, and replay commits on the app's own
+      writer); render image/file cards whose blob is missing as "waiting for
+      file" instead of a broken image.
+- [ ] Journal compaction (all peers' cursors past a row → it can be folded
+      into a snapshot) and a policy for devices that stay offline for months.

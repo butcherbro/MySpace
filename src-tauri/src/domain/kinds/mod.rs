@@ -4,7 +4,7 @@
 //! detail table. See `domain::card_kind` for the contract.
 
 use rusqlite::types::{Value as SqlValue, ValueRef};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, Transaction};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 
 use crate::domain::card_kind::{CardKind, CardKindHandler};
 use crate::domain::errors::WorkspaceError;
@@ -204,7 +204,7 @@ pub(crate) struct DetailTable {
 
 impl DetailTable {
     /// Copies `from_id`'s row to `to_id` verbatim.
-    pub fn copy(&self, tx: &Transaction, from_id: &str, to_id: &str) -> Result<(), WorkspaceError> {
+    pub fn copy(&self, tx: &Connection, from_id: &str, to_id: &str) -> Result<(), WorkspaceError> {
         let columns = self.columns.join(", ");
         let copied = tx.execute(
             &format!(
@@ -223,7 +223,7 @@ impl DetailTable {
     }
 
     /// Deletes the rows of `ids`, in bounded chunks.
-    pub fn delete(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+    pub fn delete(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError> {
         let mut deleted = 0u64;
         for chunk in ids.chunks(DELETE_CHUNK) {
             let placeholders = vec!["?"; chunk.len()].join(", ");
@@ -268,7 +268,7 @@ impl DetailTable {
     /// object. Every column must be present (`null` is a value).
     pub fn write_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError> {

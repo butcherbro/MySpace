@@ -549,7 +549,7 @@ fn hash_existing_assets_backfills_null_rows_through_the_writer() {
         .unwrap();
     assert_eq!(again, 0);
     assert_eq!(
-        Mutation::HashExistingAssets.name(),
+        Mutation::HashExistingAssets.op_name(),
         "maintenance.hash_assets"
     );
 

@@ -68,3 +68,87 @@
 
 Real-time collaboration, multi-user permissions, merging rich text, cloud
 accounts, mobile clients.
+
+## Status
+
+S1 (journal) and S2 (replay engine) implemented 2026-09-24, transport-agnostic
+(no network code). Migration **0025** (`0025_change_journal.sql`), module
+`src-tauri/src/sync/`, commands `sync_export_changes`, `sync_apply_changes`,
+`sync_status`, tests `src-tauri/tests/sync_replay.rs`.
+
+**Deviation from Decision 2: rows carry entity state, not commands.** A
+journal row is the full image of ONE entity after the write (card row + kind
+payload via `to_payload`, board row, asset row, quick-board reference) with the
+HLC of each of its *registers*; replay merges registers by LWW. Command replay
+was rejected while implementing: an LWW skip of a partial command (e.g. a
+frame-only move losing to an older move-to-board) makes replicas diverge, and
+re-executing commands needs every internally minted id (trash batches,
+duplicated subtrees, link batches) and every staged file to be serialised. With
+state, those ids simply arrive as data, and the merge converges in any delivery
+order. The originating command is kept as the row's `op`
+(`Mutation::op_name`, pinned by a snapshot test in `domain::mutation`).
+
+- **Schema:** `changes(seq, origin_device_id, hlc, entity_kind, entity_id, op,
+  payload_json, received_at, UNIQUE(origin_device_id, hlc))` + index on `hlc`;
+  `entity_clocks(entity_kind, entity_id, field, hlc)` (`field` = register:
+  the LWW unit is a register, not the whole entity); `purged`;
+  `pending_changes`; `sync_cursors(peer_device_id, last_hlc)`. The last four
+  and `local_meta` are in `LOCAL_ONLY_TABLES`; `changes` is the wire format.
+- **HLC:** `{wall_ms:015}-{counter:05}-{device_id}`, string order = clock
+  order; last value in `local_meta.hlc_last`, advanced inside the writer's
+  IMMEDIATE transaction, so the app and the MCP server never issue a duplicate.
+- **Registers:** card `place` (board, frame, z, unsorted), `life` (trash),
+  `body` (kind + detail row); board `meta` (title, color, symbol, cover),
+  `place` (parent), `life`; asset `body`; quick board `body` (present,
+  order). The root board travels as `@home` (each install has its own Home id).
+- **Journal write:** one `BEGIN IMMEDIATE` per mutation owned by
+  `sync::funnel`; repository transactions became savepoints
+  (`repositories::WriteTx`). Per-connection TEMP triggers record which
+  entity/register a write actually changed; before `COMMIT` one row per touched
+  entity is written in dependency order (boards parent-first, assets, cards,
+  quick boards, then purges). Detection by trigger, so no mutation can forget
+  to journal. Maintenance mutations (asset GC, hash backfill, favicon
+  collapse) keep their own short transactions and are flushed right after.
+  The pre-Empty-Trash backup moved to `Mutation::prepare` (before the
+  transaction).
+- **Replay rules as implemented:** duplicate `(origin, hlc)` ignored; every
+  new row is stored with its original origin/HLC (forwarding) and advances the
+  cursor and the local HLC; a purged entity drops the row whatever its HLC (a
+  purge is final; the "hlc ≥" comparison would have resurrected late edits);
+  registers win by HLC; no revision preconditions (revision still +1);
+  missing dependency (board, parent, asset) → `pending_changes`, retried in HLC
+  order until no progress; a card or board placed onto a purged board is
+  purged too; a board move forming a cycle keeps the local parent; an asset row
+  collected by local GC before its card arrived is restored from `changes`;
+  asset file names are validated (single safe component) before a row is
+  accepted.
+- **Conflict copy:** when a note body change and the local body are
+  *concurrent* (neither's `prev` clock is the other; different devices) and the
+  plain text differs, the losing text becomes a new note to the right of the
+  original, headed "Conflict copy". The id is derived from the losing change,
+  so every device creates the same copy; the copy is journaled. The ADR's
+  5-minute window was not used: causal `prev` detects concurrency exactly, and
+  a window would silently drop real offline conflicts older than 5 minutes
+  while flagging sequential edits made within 5 minutes.
+- **Not journaled / not synced:** `LOCAL_ONLY_TABLES` (device identity,
+  locators, viewport, device names, sync bookkeeping), `workspaces` (each
+  device owns its row), `favicon_cache` (per-device fetch cache), idempotency
+  receipts (`mutation_receipts`, `operation_receipts`: an agent retry is
+  deduplicated on the device it hit), asset row deletions (GC is per replica),
+  the search index and `change_seq` (derived). Everything else a mutation can
+  create is expressible and synced: boards, all seven card kinds, assets
+  (metadata; blobs by `sha256`), board covers, quick-board references.
+- **Backfill:** pre-journal data gets one `snapshot` row per entity (trashed
+  ones included) at the first start after 0025, in `db::open_and_bootstrap`
+  (after the device identity is final), guarded by
+  `local_meta.journal_snapshot_done`.
+- **Blobs:** `journal::missing_blobs` lists the `sha256` of asset rows whose
+  file is absent; loads never read files, so such cards render (the protocol
+  handler returns 404 until the blob arrives).
+- **UI notification:** the 0023 triggers bump `change_seq` for replayed
+  writes, but replay commits on the app's own writer, so the P1.6 poll (which
+  requires `data_version` to move) does not reload; `sync_apply_changes`
+  emits `sync-applied` with the touched board ids for the frontend (not wired
+  yet).
+- **Open for S3:** the transport (relay vs LAN vs shared folder); cursor
+  semantics require per-origin prefix delivery; journal compaction.

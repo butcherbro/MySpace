@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{Connection, Row, Transaction};
+use rusqlite::{Connection, Row};
 
 use super::{
     asset_at, asset_columns, card_frame, load_board_rows, load_one_row, required_asset_at,
@@ -77,7 +77,7 @@ impl CardKindHandler for FileHandler {
     /// The copy shares the original's file and thumbnail asset rows.
     fn copy_detail(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         from_id: &str,
         to_id: &str,
         _ctx: &CopyContext,
@@ -85,7 +85,7 @@ impl CardKindHandler for FileHandler {
         DETAIL.copy(tx, from_id, to_id)
     }
 
-    fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
+    fn delete_details(&self, tx: &Connection, ids: &[String]) -> Result<u64, WorkspaceError> {
         DETAIL.delete(tx, ids)
     }
 
@@ -145,7 +145,7 @@ impl CardKindHandler for FileHandler {
 
     fn from_payload(
         &self,
-        tx: &Transaction,
+        tx: &Connection,
         id: &str,
         payload: &serde_json::Value,
     ) -> Result<(), WorkspaceError> {
