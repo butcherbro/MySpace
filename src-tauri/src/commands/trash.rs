@@ -16,28 +16,34 @@ pub type DbState<'a> = State<'a, Mutex<Connection>>;
 /// Trashes a note card, returning its trash batch id.
 #[tauri::command]
 pub fn trash_note(db: DbState<'_>, card_id: String) -> Result<String, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::trash_note(&mut conn, &card_id)
+    crate::telemetry::instrument("trash_note", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        trash_service::trash_note(&mut conn, &card_id)
+    })
 }
 
 /// Trashes a board and its subtree, returning the trash batch id.
 #[tauri::command]
 pub fn trash_board(db: DbState<'_>, board_id: String) -> Result<String, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::trash_board(&mut conn, &board_id)
+    crate::telemetry::instrument("trash_board", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        trash_service::trash_board(&mut conn, &board_id)
+    })
 }
 
 /// Restores a trash batch.
 #[tauri::command]
 pub fn restore_trash_batch(db: DbState<'_>, batch_id: String) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::restore_trash_batch(&mut conn, &batch_id)
+    crate::telemetry::instrument("restore_trash_batch", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        trash_service::restore_trash_batch(&mut conn, &batch_id)
+    })
 }
 
 /// Atomically trashes a mixed selection (leaf cards + boards) in one
@@ -47,19 +53,23 @@ pub fn trash_selection(
     db: DbState<'_>,
     input: TrashSelectionInput,
 ) -> Result<String, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::trash_selection(&mut conn, &input)
+    crate::telemetry::instrument("trash_selection", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        trash_service::trash_selection(&mut conn, &input)
+    })
 }
 
 /// Lists recoverable Trash batches (newest first) without mutating data.
 #[tauri::command]
 pub fn list_trash(db: DbState<'_>) -> Result<TrashSummaryDto, WorkspaceError> {
-    let conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::list_trash(&conn)
+    crate::telemetry::instrument("list_trash", move || {
+        let conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        trash_service::list_trash(&conn)
+    })
 }
 
 /// Permanently empties the Trash. Requires the exact token `EMPTY`. A fresh
@@ -72,17 +82,23 @@ pub fn empty_trash(
     paths: State<'_, AppPaths>,
     confirmation: String,
 ) -> Result<EmptyTrashResult, WorkspaceError> {
-    let db_path = paths.data_dir.join("workspace.sqlite3");
-    let assets_dir = paths.data_dir.join("assets");
-    let backup_dir = paths.data_dir.join("backups");
+    crate::telemetry::instrument("empty_trash", move || {
+        let db_path = paths.data_dir.join("workspace.sqlite3");
+        let assets_dir = paths.data_dir.join("assets");
+        let backup_dir = paths.data_dir.join("backups");
 
-    // Mandatory pre-empty backup gate: refuse to mutate unless a fresh validated
-    // snapshot is on disk.
-    crate::db::backup::snapshot_before_destructive_operation(&db_path, &assets_dir, &backup_dir)
+        // Mandatory pre-empty backup gate: refuse to mutate unless a fresh validated
+        // snapshot is on disk.
+        crate::db::backup::snapshot_before_destructive_operation(
+            &db_path,
+            &assets_dir,
+            &backup_dir,
+        )
         .map_err(WorkspaceError::Database)?;
 
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::empty_trash(&mut conn, &confirmation)
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        trash_service::empty_trash(&mut conn, &confirmation)
+    })
 }

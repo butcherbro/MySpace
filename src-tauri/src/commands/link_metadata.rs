@@ -23,15 +23,17 @@ pub async fn enrich_embed_metadata(
     // independent from the UI command mutex and holds no transaction while the
     // network fetch is in flight.
     tauri::async_runtime::spawn_blocking(move || {
-        let fetcher = ReqwestMetadataFetcher::new()?;
-        let mut conn = db::open(&db_path)?;
-        enrich_embed_with_metadata(
-            &mut conn,
-            &asset_dir,
-            &fetcher,
-            &input.id,
-            input.expected_revision,
-        )
+        crate::telemetry::instrument("enrich_embed_metadata", move || {
+            let fetcher = ReqwestMetadataFetcher::new()?;
+            let mut conn = db::open(&db_path)?;
+            enrich_embed_with_metadata(
+                &mut conn,
+                &asset_dir,
+                &fetcher,
+                &input.id,
+                input.expected_revision,
+            )
+        })
     })
     .await
     .map_err(|e| WorkspaceError::Database(format!("metadata task failed: {e}")))?

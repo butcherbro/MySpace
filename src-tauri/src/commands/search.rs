@@ -19,8 +19,10 @@ pub fn search_workspace(
     db: DbState<'_>,
     query: String,
 ) -> Result<Vec<SearchResultDto>, WorkspaceError> {
-    let conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::search_workspace(&conn, &query)
+    crate::telemetry::instrument("search_workspace", move || {
+        let conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::search_workspace(&conn, &query)
+    })
 }

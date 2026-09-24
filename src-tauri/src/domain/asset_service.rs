@@ -410,6 +410,7 @@ pub fn read_text_preview(asset_dir: &Path, asset: &AssetDto, limit: usize) -> St
 /// tests — or when the QuickLook generator for the source file never replies.
 /// `Command::status()` blocks on that forever, so we poll `try_wait()` instead
 /// and kill the child once this deadline passes.
+#[cfg(target_os = "macos")]
 const QLMANAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Runs `qlmanage` with the given args, killing it if it does not exit within

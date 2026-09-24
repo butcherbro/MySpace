@@ -6,11 +6,11 @@
 //! 3. `list_trash` must sort batches newest-first *before* truncating to
 //!    `MAX_BATCHES`, so the newest batches are never dropped.
 
+use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::board_service;
 use myspace_lib::domain::errors::WorkspaceError;
 use myspace_lib::domain::models::{CreateChildBoardInput, CreateNoteInput, Frame};
 use myspace_lib::domain::trash_service;
-use myspace_lib::db::{bootstrap, open_in_memory};
 
 fn root_board_id(conn: &rusqlite::Connection) -> String {
     conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {

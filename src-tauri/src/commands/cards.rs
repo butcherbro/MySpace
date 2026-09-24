@@ -20,10 +20,12 @@ pub type DbState<'a> = State<'a, Mutex<Connection>>;
 /// Creates a note card on the given board in a single transaction.
 #[tauri::command]
 pub fn create_note(db: DbState<'_>, input: CreateNoteInput) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::create_note(&mut conn, &input)
+    crate::telemetry::instrument("create_note", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::create_note(&mut conn, &input)
+    })
 }
 
 /// Creates an image card referencing an already-imported asset.
@@ -32,10 +34,12 @@ pub fn create_image_card(
     db: DbState<'_>,
     input: CreateImageCardInput,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::create_image_card(&mut conn, &input)
+    crate::telemetry::instrument("create_image_card", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::create_image_card(&mut conn, &input)
+    })
 }
 
 /// Creates a board shortcut card (todo.md №17): "Create shortcut" on a Board
@@ -45,28 +49,34 @@ pub fn create_board_shortcut(
     db: DbState<'_>,
     input: CreateBoardShortcutInput,
 ) -> Result<CardDto, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::create_board_shortcut(&mut conn, &input)
+    crate::telemetry::instrument("create_board_shortcut", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::create_board_shortcut(&mut conn, &input)
+    })
 }
 
 /// Updates a note's content with an optimistic revision guard.
 #[tauri::command]
 pub fn update_note(db: DbState<'_>, input: UpdateNoteInput) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::update_note(&mut conn, &input)
+    crate::telemetry::instrument("update_note", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::update_note(&mut conn, &input)
+    })
 }
 
 /// Sets a note card's background color preset (does not bump revision).
 #[tauri::command]
 pub fn set_note_color(db: DbState<'_>, input: SetNoteColorInput) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::set_note_color(&mut conn, &input)
+    crate::telemetry::instrument("set_note_color", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::set_note_color(&mut conn, &input)
+    })
 }
 
 /// Updates an image card's caption, bumping its revision.
@@ -75,28 +85,34 @@ pub fn update_image_caption(
     db: DbState<'_>,
     input: UpdateImageCaptionInput,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::update_image_caption(&mut conn, &input)
+    crate::telemetry::instrument("update_image_caption", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::update_image_caption(&mut conn, &input)
+    })
 }
 
 /// Moves/resizes a card (note or portal) with an optimistic revision guard.
 #[tauri::command]
 pub fn move_card(db: DbState<'_>, input: UpdateCardFrameInput) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::update_card_frame(&mut conn, &input)
+    crate::telemetry::instrument("move_card", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::update_card_frame(&mut conn, &input)
+    })
 }
 
 /// Moves multiple cards atomically in a single transaction.
 #[tauri::command]
 pub fn move_cards(db: DbState<'_>, input: MoveCardsInput) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::move_cards(&mut conn, &input)
+    crate::telemetry::instrument("move_cards", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::move_cards(&mut conn, &input)
+    })
 }
 
 /// Moves a leaf card to a different board (drop onto a board portal).
@@ -105,10 +121,12 @@ pub fn move_card_to_board(
     db: DbState<'_>,
     input: MoveCardToBoardInput,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::move_card_to_board(&mut conn, &input)
+    crate::telemetry::instrument("move_card_to_board", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::move_card_to_board(&mut conn, &input)
+    })
 }
 
 /// Atomically moves a group of cards into a Board's Unsorted panel.
@@ -117,10 +135,12 @@ pub fn move_cards_to_board_unsorted(
     db: DbState<'_>,
     input: MoveCardsToUnsortedInput,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::move_cards_to_board_unsorted(&mut conn, &input)
+    crate::telemetry::instrument("move_cards_to_board_unsorted", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::move_cards_to_board_unsorted(&mut conn, &input)
+    })
 }
 
 /// Places one Unsorted card onto the board at an exact frame.
@@ -129,19 +149,23 @@ pub fn place_unsorted_card(
     db: DbState<'_>,
     input: PlaceUnsortedCardInput,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::place_unsorted_card(&mut conn, &input)
+    crate::telemetry::instrument("place_unsorted_card", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::place_unsorted_card(&mut conn, &input)
+    })
 }
 
 /// Reads a single card by id (any kind).
 #[tauri::command]
 pub fn read_card(db: DbState<'_>, card_id: String) -> Result<CardDto, WorkspaceError> {
-    let conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::load_card(&conn, &card_id)
+    crate::telemetry::instrument("read_card", move || {
+        let conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::load_card(&conn, &card_id)
+    })
 }
 
 /// Transactionally converts a Note into an Embed (Link) Card, preserving the
@@ -152,10 +176,12 @@ pub fn convert_note_to_embed(
     db: DbState<'_>,
     input: ConvertNoteToEmbedInput,
 ) -> Result<EmbedCardDto, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::convert_note_to_embed(&mut conn, &input)
+    crate::telemetry::instrument("convert_note_to_embed", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::convert_note_to_embed(&mut conn, &input)
+    })
 }
 
 /// Updates an embed (Link) card's description body, bumping its revision.
@@ -164,10 +190,12 @@ pub fn update_embed_description(
     db: DbState<'_>,
     input: UpdateEmbedDescriptionInput,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::update_embed_description(&mut conn, &input)
+    crate::telemetry::instrument("update_embed_description", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        workspace_repository::update_embed_description(&mut conn, &input)
+    })
 }
 
 /// Moves a whole selection — leaf cards and Board Portals together — onto one
@@ -177,10 +205,12 @@ pub fn move_selection_to_board(
     db: DbState<'_>,
     input: crate::domain::models::MoveSelectionToBoardInput,
 ) -> Result<crate::domain::models::MoveSelectionToBoardReceipt, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    crate::domain::move_selection::move_selection_to_board(&mut conn, &input)
+    crate::telemetry::instrument("move_selection_to_board", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        crate::domain::move_selection::move_selection_to_board(&mut conn, &input)
+    })
 }
 
 /// Reverses a mixed-selection move from the receipt the move returned (ADR-0007).
@@ -189,8 +219,10 @@ pub fn undo_move_selection(
     db: DbState<'_>,
     receipt: crate::domain::models::MoveSelectionToBoardReceipt,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    crate::domain::move_selection::undo_move_selection(&mut conn, &receipt)
+    crate::telemetry::instrument("undo_move_selection", move || {
+        let mut conn = db
+            .lock()
+            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
+        crate::domain::move_selection::undo_move_selection(&mut conn, &receipt)
+    })
 }

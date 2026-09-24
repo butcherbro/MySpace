@@ -3,6 +3,7 @@ pub mod db;
 pub mod domain;
 pub mod repositories;
 pub mod services;
+pub mod telemetry;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -100,6 +101,13 @@ pub fn run() {
                 .app_data_dir()
                 .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&data_dir).expect("failed to create app data dir");
+
+            // Installed before any other startup work (including the backup
+            // snapshot below) so that step is observable too. Never panics; a
+            // failed install just means no log output, and app startup proceeds.
+            let log_guard = telemetry::init(&data_dir);
+            app.manage(telemetry::LogGuard(log_guard));
+
             let db_path = data_dir.join("workspace.sqlite3");
             let assets_dir = data_dir.join("assets");
             let backup_dir = data_dir.join("backups");
@@ -117,10 +125,13 @@ pub fn run() {
             // but a failure is reported instead of silently swallowing the sweep.
             match domain::link_metadata::collapse_favicon_duplicates(&mut conn, &assets_dir) {
                 Ok(collapsed) if collapsed > 0 => {
-                    eprintln!("favicon-dedup: re-pointed {collapsed} card(s)");
+                    tracing::info!(collapsed, "favicon-dedup: re-pointed card(s)");
                 }
                 Ok(_) => {}
-                Err(err) => eprintln!("favicon-dedup: failed: {err}"),
+                Err(err) => tracing::warn!(
+                    error_code = domain::asset_service::gc_failure_summary(&err),
+                    "favicon-dedup: failed"
+                ),
             }
 
             // Converge any interrupted asset GC: delete orphaned files + rows.
@@ -128,9 +139,9 @@ pub fn run() {
             // a misbehaving sweep is observable instead of silently swallowed.
             if let Err(err) = domain::asset_service::collect_orphaned_assets(&mut conn, &assets_dir)
             {
-                eprintln!(
-                    "asset-gc: startup cleanup failed: {}",
-                    domain::asset_service::gc_failure_summary(&err)
+                tracing::warn!(
+                    error_code = domain::asset_service::gc_failure_summary(&err),
+                    "asset-gc: startup cleanup failed"
                 );
             }
 
