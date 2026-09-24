@@ -15,6 +15,10 @@ import { EmbedCard } from "./link/EmbedCard";
 import { FolderShortcutCard } from "./folder/FolderShortcutCard";
 import { FileCard } from "./file/FileCard";
 import { BoardShortcutCard } from "./board/BoardShortcutCard";
+// The single card-kind list and per-kind capability registry live in
+// ./card-kinds.ts (kept out of this JSX-heavy file so importing the plain
+// data doesn't pull in every card component, and so react-refresh's
+// components-only-exports rule stays happy here).
 
 export interface CardRenderContext {
   /** Whether the card (if a note) is currently being edited. */

@@ -2,11 +2,14 @@
 
 import type { WorkspaceGateway } from "../services/workspace-gateway";
 import type { WorkspaceCommand } from "./workspace-command";
+import type { TrashKind } from "../cards/card-kinds";
 
 export interface TrashItem {
   /** The card id for leaf cards, or the target board id for portals. */
   id: string;
-  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal" | "file" | "board_shortcut";
+  /** Derived from the card-kind registry (cards/card-kinds.ts): every kind
+   *  that has a Trash entry of its own trashes as itself. */
+  kind: TrashKind;
 }
 
 /**
