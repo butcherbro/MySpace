@@ -73,5 +73,14 @@ pub fn open_readonly_checked(path: &std::path::Path) -> Result<Connection> {
 pub fn open_and_bootstrap(path: &std::path::Path) -> Result<Connection> {
     let mut conn = open(path)?;
     bootstrap::bootstrap(&mut conn)?;
+    // Migration 0024 already minted the identity. This binds it to this
+    // machine's fingerprint (host + OS + data dir): a database copied to
+    // another machine gets a new identity here, so its shortcuts render as
+    // foreign. Also refreshes `known_devices.last_seen_at` (ADR-0012).
+    let data_dir = path.parent().unwrap_or(std::path::Path::new(""));
+    let fingerprint = crate::domain::device::current_machine_fingerprint(data_dir);
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    crate::repositories::devices::ensure_device_identity(&tx, Some(&fingerprint))?;
+    tx.commit()?;
     Ok(conn)
 }

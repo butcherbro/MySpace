@@ -20,6 +20,7 @@ import type {
   CardReceipt,
   CardsReceipt,
   CreateNoteInput,
+  DeviceIdentity,
   EmbedCardDto,
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
@@ -165,6 +166,22 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   openFolderInFinder(cardId: string): Promise<void> {
     return invoke<void>("open_folder_in_finder", { cardId });
+  }
+
+  async setFilesystemAliasLocalTarget(cardId: string, path: string): Promise<FilesystemAliasDto> {
+    const alias = await invoke<Omit<FilesystemAliasDto, "kind">>(
+      "set_filesystem_alias_local_target",
+      { cardId, path },
+    );
+    return { ...alias, kind: "filesystem_alias" };
+  }
+
+  getDeviceIdentity(): Promise<DeviceIdentity> {
+    return invoke<DeviceIdentity>("get_device_identity", {});
+  }
+
+  renameDevice(name: string): Promise<DeviceIdentity> {
+    return invoke<DeviceIdentity>("rename_device", { name });
   }
 
   async createFileCard(input: CreateFileCardInput): Promise<FileCardDto> {

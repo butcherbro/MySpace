@@ -336,6 +336,37 @@ describe("TauriWorkspaceGateway", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("open_folder_in_finder", { cardId: "folder-1" });
   });
 
+  it("points a foreign shortcut at a local folder and reads/renames the device (ADR-0012)", async () => {
+    const gw = new TauriWorkspaceGateway();
+    invokeMock.mockResolvedValueOnce({
+      id: "folder-1",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 280, height: 180 },
+      zIndex: 0,
+      revision: 3,
+      targetKind: "folder",
+      pathHint: "/Users/me/Research",
+      displayName: "Research",
+      originDeviceId: "mac",
+      originDeviceName: "Studio Mac",
+      local: true,
+    });
+    const alias = await gw.setFilesystemAliasLocalTarget("folder-1", "C:\\Research");
+    expect(invokeMock).toHaveBeenLastCalledWith("set_filesystem_alias_local_target", {
+      cardId: "folder-1",
+      path: "C:\\Research",
+    });
+    expect(alias).toMatchObject({ kind: "filesystem_alias", local: true, originDeviceName: "Studio Mac" });
+
+    invokeMock.mockResolvedValueOnce({ deviceId: "pc", deviceName: "DESKTOP-1" });
+    await expect(gw.getDeviceIdentity()).resolves.toEqual({ deviceId: "pc", deviceName: "DESKTOP-1" });
+    expect(invokeMock).toHaveBeenLastCalledWith("get_device_identity", {});
+
+    invokeMock.mockResolvedValueOnce({ deviceId: "pc", deviceName: "Gaming PC" });
+    await gw.renameDevice("Gaming PC");
+    expect(invokeMock).toHaveBeenLastCalledWith("rename_device", { name: "Gaming PC" });
+  });
+
   it("returns a file card with its generated thumbnail already attached", async () => {
     // The backend now answers create_file_card with the persisted projection, so a
     // generated thumbnail must survive the gateway hop instead of being dropped in

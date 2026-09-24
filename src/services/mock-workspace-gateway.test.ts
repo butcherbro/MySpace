@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockWorkspaceGateway } from "./mock-workspace-gateway";
+import type { CardDto } from "./workspace-gateway";
 import { plainTextToDocument } from "../editor/document-codec";
 
 const noteInput = (id: string, plainText: string) => ({
@@ -197,6 +198,34 @@ describe("MockWorkspaceGateway", () => {
     const images = await gateway.searchWorkspace("dashboard");
     expect(images).toHaveLength(1);
     expect(images[0].kind).toBe("image");
+  });
+
+  it("keeps a shortcut from another device closed until it is pointed at a folder here (ADR-0012)", async () => {
+    const gateway = new MockWorkspaceGateway();
+    const created = await gateway.createFolderAlias({
+      id: "f1",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 300, height: 220 },
+      zIndex: 0,
+      sourcePath: "/Users/me/Research",
+    });
+    const me = await gateway.getDeviceIdentity();
+    expect(created).toMatchObject({ local: true, originDeviceId: me.deviceId, originDeviceName: me.deviceName });
+
+    // Simulate the card arriving from another device (no locator here).
+    Object.assign(
+      (gateway as unknown as { snapshot: { cards: CardDto[] } }).snapshot.cards.find((c) => c.id === "f1")!,
+      { local: false, originDeviceId: "studio-mac", originDeviceName: "Studio Mac" },
+    );
+    await expect(gateway.listFolderPreview("f1", 50)).resolves.toMatchObject({ status: "foreign_device", entries: [] });
+    await expect(gateway.openFolderInFinder("f1")).rejects.toThrow(/another device/);
+
+    const pointed = await gateway.setFilesystemAliasLocalTarget("f1", "/mock/home/Research");
+    expect(pointed).toMatchObject({ local: true, originDeviceName: "Studio Mac", revision: 1, pathHint: "/Users/me/Research" });
+    await expect(gateway.listFolderPreview("f1", 50)).resolves.toMatchObject({ status: "ready" });
+    await expect(gateway.openFolderInFinder("f1")).resolves.toBeUndefined();
+
+    await expect(gateway.renameDevice("  Desk PC ")).resolves.toEqual({ deviceId: me.deviceId, deviceName: "Desk PC" });
   });
 
   it("creates a persistent folder alias with deterministic preview states", async () => {

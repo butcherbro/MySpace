@@ -5,6 +5,7 @@ pub mod backup;
 pub mod boards;
 pub mod cards;
 pub mod clipboard;
+pub mod device;
 pub mod filesystem_aliases;
 pub mod link_metadata;
 pub mod quick_boards;

@@ -64,7 +64,8 @@ impl WorkspaceService {
         input: &CreateFilesystemAliasInput,
     ) -> Result<(), WorkspaceError> {
         ws.apply_blocking(Mutation::CreateFilesystemAlias(input.clone()))?
-            .into_unit()
+            .into_card()
+            .map(|_| ())
     }
 
     /// Lists all active boards.

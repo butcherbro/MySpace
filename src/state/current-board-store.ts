@@ -7,7 +7,12 @@
 // Mutations are optimistic: actions apply immediately and the caller is
 // responsible for reconciliation on failure (see `rollback`/`reconcile`).
 
-import type { BoardSummary, CardDto, Breadcrumb } from "../services/workspace-gateway";
+import type {
+  BoardSummary,
+  CardDto,
+  Breadcrumb,
+  FilesystemAliasDto,
+} from "../services/workspace-gateway";
 import type { CanvasViewport } from "../canvas/canvas-types";
 
 export interface CurrentBoardState {
@@ -41,6 +46,8 @@ export type CurrentBoardAction =
   | { type: "imageCaptionUpdated"; id: string; revision: number; captionJson: unknown; captionPlainText: string }
   | { type: "embedDescriptionUpdated"; id: string; revision: number; descriptionJson: unknown; descriptionPlainText: string }
   | { type: "cardReplaced"; id: string; card: CardDto }
+  /** A shortcut's device-local state changed (ADR-0012: pointed at a local folder). */
+  | { type: "filesystemAliasUpdated"; alias: FilesystemAliasDto }
   | { type: "unsortedCardPlaced"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardMovedToUnsorted"; id: string; revision: number }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
@@ -190,6 +197,27 @@ export function reducer(
         cards: state.cards.map((c) => (c.id === action.id ? action.card : c)),
         editingCardId: state.editingCardId === action.id ? null : state.editingCardId,
       };
+
+    case "filesystemAliasUpdated": {
+      // Only the device-scoped fields move: the frame, z-order and revision
+      // the UI holds stay authoritative (a local re-point bumps no revision).
+      const update = (c: CardDto): CardDto =>
+        c.id === action.alias.id && c.kind === "filesystem_alias"
+          ? {
+              ...c,
+              local: action.alias.local,
+              originDeviceId: action.alias.originDeviceId,
+              originDeviceName: action.alias.originDeviceName,
+              pathHint: action.alias.pathHint,
+              displayName: action.alias.displayName,
+            }
+          : c;
+      return {
+        ...state,
+        cards: state.cards.map(update),
+        unsortedCards: state.unsortedCards.map(update),
+      };
+    }
 
     case "unsortedCardPlaced": {
       const card = state.unsortedCards.find((c) => c.id === action.id);

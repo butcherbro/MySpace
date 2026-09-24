@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { initialState, reducer, type CurrentBoardState } from "./current-board-store";
-import type { BoardSummary, EmbedCardDto, NoteCardDto } from "../services/workspace-gateway";
+import type {
+  BoardSummary,
+  EmbedCardDto,
+  FilesystemAliasDto,
+  NoteCardDto,
+} from "../services/workspace-gateway";
 
 const home: BoardSummary = {
   id: "home",
@@ -50,7 +55,47 @@ function embed(id: string): EmbedCardDto {
   };
 }
 
+function foreignAlias(id: string): FilesystemAliasDto {
+  return {
+    kind: "filesystem_alias",
+    id,
+    boardId: "home",
+    frame: { x: 10, y: 20, width: 300, height: 220 },
+    zIndex: 3,
+    revision: 4,
+    targetKind: "folder",
+    pathHint: "/Users/me/Research",
+    displayName: "Research",
+    originDeviceId: "studio-mac",
+    originDeviceName: "Studio Mac",
+    local: false,
+  };
+}
+
 describe("current board reducer", () => {
+  it("marks a shortcut local after it is pointed at a folder here (ADR-0012)", () => {
+    const onCanvas = foreignAlias("f1");
+    const inUnsorted = foreignAlias("f2");
+    const state: CurrentBoardState = {
+      ...initialState,
+      cards: [onCanvas, note("n1")],
+      unsortedCards: [inUnsorted],
+    };
+    // The backend answer carries a stale frame on purpose: only the
+    // device-scoped fields may move.
+    const answer = { ...onCanvas, local: true, frame: { x: 0, y: 0, width: 280, height: 180 } };
+    const next = reducer(state, { type: "filesystemAliasUpdated", alias: answer });
+    expect(next.cards[0]).toEqual({ ...onCanvas, local: true });
+    expect(next.cards[1]).toBe(state.cards[1]);
+    expect(next.unsortedCards[0]).toEqual(inUnsorted);
+
+    const unsorted = reducer(next, {
+      type: "filesystemAliasUpdated",
+      alias: { ...inUnsorted, local: true },
+    });
+    expect(unsorted.unsortedCards[0]).toMatchObject({ id: "f2", local: true });
+  });
+
   it("loads a snapshot and clears selection", () => {
     const state = reducer(
       { ...initialState, selection: ["x"] },

@@ -196,9 +196,28 @@ export interface FilesystemAliasDto {
   zIndex: number;
   revision: number;
   targetKind: "folder" | "file";
-  /** Last resolved display path only; bookmark bytes remain the authority in Rust. */
+  /**
+   * Display path only, as written by the origin device; bookmark bytes remain
+   * the authority in Rust.
+   */
   pathHint: string;
   displayName: string;
+  /** The device that created the shortcut (ADR-0012). */
+  originDeviceId: string;
+  /** That device's name when this device knows it; `null` shows "another device". */
+  originDeviceName: string | null;
+  /**
+   * True when this device holds a locator for the shortcut. `false`: the card
+   * was created on another device; it renders dimmed, cannot open, and offers
+   * "Point to a folder on this computer…".
+   */
+  local: boolean;
+}
+
+/** This installation's identity (ADR-0012). */
+export interface DeviceIdentity {
+  deviceId: string;
+  deviceName: string;
 }
 
 /** A File Card: a text-like file copied into the managed asset store. */
@@ -225,7 +244,14 @@ export interface CreateFileCardInput {
   fileName: string;
 }
 
-export type FolderPreviewStatus = "ready" | "empty" | "missing" | "permission_lost" | "io_error";
+export type FolderPreviewStatus =
+  | "ready"
+  | "empty"
+  | "missing"
+  | "permission_lost"
+  | "io_error"
+  /** No locator on this device (ADR-0012); the filesystem is not touched. */
+  | "foreign_device";
 
 export interface FolderEntryDto {
   name: string;
@@ -587,6 +613,14 @@ export interface WorkspaceGateway {
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]>;
   classifyPath(path: string): Promise<PathClassificationDto>;
   openFolderInFinder(cardId: string): Promise<void>;
+  /**
+   * "Point to a folder on this computer…" (ADR-0012): stores this device's
+   * locator for the shortcut and returns it with `local: true`. Device-local;
+   * the origin device's locator and the path hint are untouched.
+   */
+  setFilesystemAliasLocalTarget(cardId: string, path: string): Promise<FilesystemAliasDto>;
+  getDeviceIdentity(): Promise<DeviceIdentity>;
+  renameDevice(name: string): Promise<DeviceIdentity>;
   createFileCard(input: CreateFileCardInput): Promise<FileCardDto>;
   openFileCard(cardId: string): Promise<void>;
   revealFileCard(cardId: string): Promise<void>;

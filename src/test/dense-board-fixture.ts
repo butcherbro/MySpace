@@ -81,6 +81,9 @@ function folderAlias(id: string, x: number, y: number, pathHint: string, display
     targetKind: "folder",
     pathHint,
     displayName,
+    originDeviceId: "mock-device",
+    originDeviceName: "This Mac",
+    local: true,
   };
 }
 

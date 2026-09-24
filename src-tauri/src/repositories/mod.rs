@@ -4,6 +4,7 @@ pub mod assets;
 pub mod board_shortcuts;
 pub mod boards;
 pub mod cards;
+pub mod devices;
 pub mod move_selection;
 pub mod quick_boards;
 pub mod receipts;

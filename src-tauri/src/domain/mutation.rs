@@ -16,12 +16,22 @@
 //! visible here is deliberate.
 //!
 //! Adding a mutating command = adding a variant here + one match arm in
-//! `execute` + one `name` arm. Nothing else.
+//! `execute`, one `name` arm and one `is_local_only` arm. Nothing else.
+//!
+//! Local-only data (ADR-0011, ADR-0012). Some writes only touch state that
+//! belongs to this installation and must never leave it: the viewport, the
+//! device identity, and the per-device filesystem shortcut locators. They
+//! still go through this funnel (one writer, one telemetry path), but
+//! [`Mutation::is_local_only`] returns `true` for them and the journal (S1)
+//! skips them, and [`LOCAL_ONLY_TABLES`] lists the tables the journal and any
+//! row-level exchange must never read or write. The two are checked against
+//! each other by a test: a local-only mutation writes only local-only tables.
 
 use rusqlite::Connection;
 
 use crate::app::WorkspacePaths;
 use crate::domain::asset_service::{self, StagedAsset};
+use crate::domain::device::DeviceIdentity;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AddQuickBoardInput, AssetDto, CardDto, CardReceipt, CardsReceipt, ConvertNoteToEmbedInput,
@@ -35,7 +45,31 @@ use crate::domain::models::{
     UpdateViewportInput, ViewportReceipt,
 };
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
+use crate::repositories::devices;
 use crate::repositories::workspace_repository as repo;
+
+/// Tables that hold device-local state and are never synced: not journaled,
+/// not exchanged, not overwritten by a replay (ADR-0011 "what the data layer
+/// must prepare", ADR-0012 §1–2).
+///
+/// - `local_meta`: this installation's `device_id` / `device_name`.
+/// - `filesystem_alias_locators`: platform locators (macOS bookmarks,
+///   `path:v1:` blobs) per (card, device); meaningless on any other device.
+/// - `board_view_states`: the viewport, own-device UI state.
+/// - `known_devices`: this device's directory of device names. Other devices'
+///   names reach it through the sync handshake (each peer announces its
+///   `local_meta` identity), not through journaled rows, so a rename is a
+///   local write on every device and no two devices ever fight over a row.
+///
+/// Derived tables (`search_index`, `search_index_keys`, `boards.change_seq`)
+/// are rebuilt by triggers on each replica and are not listed: the journal
+/// never carries them either.
+pub const LOCAL_ONLY_TABLES: &[&str] = &[
+    "local_meta",
+    "filesystem_alias_locators",
+    "board_view_states",
+    "known_devices",
+];
 
 /// One write, as data. See the module docs.
 pub enum Mutation {
@@ -99,7 +133,13 @@ pub enum Mutation {
     /// Records an asset whose file was already staged by the caller. On error
     /// the caller discards the staged file.
     InsertAsset(AssetDto),
+    /// Creates the card with this device as origin and this device's
+    /// locator. Shared: the journal payload is the card + detail row (the
+    /// kind codec never includes locator bytes); the locator row stays here.
     CreateFilesystemAlias(CreateFilesystemAliasInput),
+    /// Renews this device's stale bookmark; on the origin device also the
+    /// synced display metadata. Shared for the same reason as
+    /// `CreateFilesystemAlias`.
     RefreshFilesystemAliasLocator {
         card_id: String,
         locator_blob: Vec<u8>,
@@ -111,6 +151,20 @@ pub enum Mutation {
     /// it is by far the largest payload and would otherwise size every
     /// `Mutation` that crosses the writer queue.
     CommitFileCard(Box<CommitFileCard>),
+    /// "Point to a folder on this computer…" (ADR-0012 §5): stores this
+    /// device's locator for a shortcut. LOCAL-ONLY (`is_local_only`).
+    SetFilesystemAliasLocalTarget {
+        card_id: String,
+        locator_blob: Vec<u8>,
+    },
+
+    // ---- device (local-only) ---------------------------------------------
+    /// Renames this device. LOCAL-ONLY: writes `local_meta` and this device's
+    /// `known_devices` row; other devices learn the name from the sync
+    /// handshake, not from the journal.
+    RenameDevice {
+        name: String,
+    },
 
     // ---- link cards (MCP + enrichment) -----------------------------------
     CreateLinkBatch(CreateLinkBatchInput),
@@ -166,6 +220,7 @@ pub enum MutationOutcome {
     TextReceipt(TextReceipt),
     CardsReceipt(CardsReceipt),
     ViewportReceipt(ViewportReceipt),
+    Device(DeviceIdentity),
 }
 
 fn unexpected(what: &str) -> WorkspaceError {
@@ -253,6 +308,12 @@ impl MutationOutcome {
             _ => Err(unexpected("viewport receipt")),
         }
     }
+    pub fn into_device(self) -> Result<DeviceIdentity, WorkspaceError> {
+        match self {
+            Self::Device(d) => Ok(d),
+            _ => Err(unexpected("device identity")),
+        }
+    }
 }
 
 impl Mutation {
@@ -293,12 +354,63 @@ impl Mutation {
             Self::CreateFilesystemAlias(_) => "card.create_filesystem_alias",
             Self::RefreshFilesystemAliasLocator { .. } => "card.refresh_alias_locator",
             Self::CommitFileCard(_) => "card.create_file",
+            Self::SetFilesystemAliasLocalTarget { .. } => "card.set_alias_local_target",
+            Self::RenameDevice { .. } => "device.rename",
             Self::CreateLinkBatch(_) => "link_batch.create",
             Self::TrashLinkBatch { .. } => "link_batch.trash",
             Self::ApplyEmbedMetadata(_) => "card.apply_embed_metadata",
             Self::CollapseFaviconDuplicates => "maintenance.collapse_favicons",
             Self::CollectOrphanedAssets => "maintenance.collect_orphaned_assets",
             Self::HashExistingAssets => "maintenance.hash_assets",
+        }
+    }
+
+    /// True for writes that touch only [`LOCAL_ONLY_TABLES`]: the journal (S1)
+    /// must not record them and a replay must never produce them. Exhaustive
+    /// on purpose: a new variant has to decide.
+    pub fn is_local_only(&self) -> bool {
+        match self {
+            Self::SaveViewport(_)
+            | Self::SetFilesystemAliasLocalTarget { .. }
+            | Self::RenameDevice { .. } => true,
+            Self::CreateNote(_)
+            | Self::CreateImageCard(_)
+            | Self::CreateBoardShortcut(_)
+            | Self::UpdateNote(_)
+            | Self::SetNoteColor(_)
+            | Self::UpdateImageCaption(_)
+            | Self::MoveCard(_)
+            | Self::MoveCards(_)
+            | Self::MoveCardToBoard(_)
+            | Self::MoveCardsToBoardUnsorted(_)
+            | Self::PlaceUnsortedCard(_)
+            | Self::ConvertNoteToEmbed(_)
+            | Self::UpdateEmbedDescription(_)
+            | Self::MoveSelectionToBoard(_)
+            | Self::UndoMoveSelection(_)
+            | Self::CreateChildBoard(_)
+            | Self::RenameBoard { .. }
+            | Self::MoveBoard(_)
+            | Self::SetBoardCover { .. }
+            | Self::DuplicateBoard(_)
+            | Self::TrashNote { .. }
+            | Self::TrashBoard { .. }
+            | Self::TrashSelection(_)
+            | Self::RestoreTrashBatch { .. }
+            | Self::EmptyTrash { .. }
+            | Self::AddQuickBoard(_)
+            | Self::RemoveQuickBoard { .. }
+            | Self::ReorderQuickBoards(_)
+            | Self::InsertAsset(_)
+            | Self::CreateFilesystemAlias(_)
+            | Self::RefreshFilesystemAliasLocator { .. }
+            | Self::CommitFileCard(_)
+            | Self::CreateLinkBatch(_)
+            | Self::TrashLinkBatch { .. }
+            | Self::ApplyEmbedMetadata(_)
+            | Self::CollapseFaviconDuplicates
+            | Self::CollectOrphanedAssets
+            | Self::HashExistingAssets => false,
         }
     }
 
@@ -398,8 +510,18 @@ impl Mutation {
                 asset_service::insert_asset_row(conn, asset).map(|_| Out::Unit)
             }
             Self::CreateFilesystemAlias(input) => {
-                repo::create_filesystem_alias(conn, input).map(|_| Out::Unit)
+                repo::create_filesystem_alias(conn, input)?;
+                // The persisted projection (origin device name, `local`).
+                repo::load_card(conn, &input.id).map(Out::Card)
             }
+            Self::SetFilesystemAliasLocalTarget {
+                card_id,
+                locator_blob,
+            } => {
+                repo::set_filesystem_alias_local_target(conn, card_id, locator_blob)?;
+                repo::load_card(conn, card_id).map(Out::Card)
+            }
+            Self::RenameDevice { name } => devices::rename_device(conn, name).map(Out::Device),
             Self::RefreshFilesystemAliasLocator {
                 card_id,
                 locator_blob,

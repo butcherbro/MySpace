@@ -62,7 +62,7 @@ fn stale_alias_refresh_replaces_authority_and_display_metadata_atomically() {
         .unwrap();
     assert_eq!(
         workspace_repository::load_filesystem_alias_locator(&conn, &id).unwrap(),
-        (b"new".to_vec(), "/new".into(), "New".into())
+        (Some(b"new".to_vec()), "/new".into(), "New".into())
     );
 }
 use myspace_lib::domain::asset_service;

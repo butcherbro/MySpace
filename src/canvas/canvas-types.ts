@@ -37,6 +37,11 @@ export interface CanvasCard {
   portalTitle?: string;
   /** For board portals: the id of the cover asset, if any (re-render key). */
   portalCoverAssetId?: string;
+  /**
+   * For folder shortcuts: whether this device holds a locator (ADR-0012).
+   * A re-render key: pointing a shortcut at a local folder bumps no revision.
+   */
+  aliasLocal?: boolean;
 }
 
 /** A point in board-space coordinates. */

@@ -42,6 +42,9 @@ sha2 = "0.10"
 # Canonical paths without the Windows `\\?\` verbatim prefix for the path
 # folder locator (already in the tree via tauri-plugin-opener).
 dunce = "1"
+# Default device name (ADR-0012). Apache-2.0; already in the tree via arboard.
+gethostname = "1"
+machine-uid = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

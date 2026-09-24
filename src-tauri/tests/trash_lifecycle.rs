@@ -65,7 +65,7 @@ fn trash_and_restore_folder_alias_preserves_detail_identity() {
         workspace_repository::load_filesystem_alias_locator(&conn, "folder-trash")
             .unwrap()
             .0,
-        vec![9, 8, 7],
+        Some(vec![9, 8, 7]),
     );
 }
 

@@ -77,7 +77,8 @@ export function canvasNodeInputsEqual(a: CanvasCard, b: CanvasCard): boolean {
     a.frame.height === b.frame.height &&
     a.targetBoardId === b.targetBoardId &&
     a.portalTitle === b.portalTitle &&
-    a.portalCoverAssetId === b.portalCoverAssetId
+    a.portalCoverAssetId === b.portalCoverAssetId &&
+    a.aliasLocal === b.aliasLocal
   );
 }
 

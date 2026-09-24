@@ -1,6 +1,6 @@
 //! Asset rows owned by other aggregates: the File Card's file and preview
-//! assets, and the folder shortcut's bookmark locator. Split out of
-//! `workspace_repository` without changing any SQL.
+//! assets, and the folder shortcut's device-scoped locators (ADR-0012). Split
+//! out of `workspace_repository`.
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
@@ -8,6 +8,7 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CreateFileCardInput, CreateFilesystemAliasInput};
 
 use super::super::db;
+use super::devices::current_device_id;
 use super::immediate_tx;
 
 pub fn create_filesystem_alias(
@@ -37,8 +38,51 @@ pub fn create_filesystem_alias(
         ));
     }
     let now = db::migrations::now_millis();
+    // ADR-0012: the shortcut's origin is this device, and the locator is
+    // stored for this device only.
+    let device_id = current_device_id(&tx)?;
     tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'filesystem_alias', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
-    tx.execute("INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES (?1, ?2, ?3, ?4, ?5)", params![input.id, input.target_kind, input.locator_blob, input.path_hint, input.display_name])?;
+    tx.execute("INSERT INTO filesystem_aliases (card_id, target_kind, path_hint, display_name, origin_device_id) VALUES (?1, ?2, ?3, ?4, ?5)", params![input.id, input.target_kind, input.path_hint, input.display_name, device_id])?;
+    upsert_locator(&tx, &input.id, &device_id, &input.locator_blob)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Writes (or replaces) `device_id`'s locator for `card_id`.
+fn upsert_locator(
+    conn: &Connection,
+    card_id: &str,
+    device_id: &str,
+    locator_blob: &[u8],
+) -> Result<(), WorkspaceError> {
+    conn.execute(
+        "INSERT INTO filesystem_alias_locators (card_id, device_id, locator_blob) VALUES (?1, ?2, ?3)
+         ON CONFLICT(card_id, device_id) DO UPDATE SET locator_blob = excluded.locator_blob",
+        params![card_id, device_id, locator_blob],
+    )?;
+    Ok(())
+}
+
+/// "Point to a folder on this computer…" (ADR-0012 §5): stores this device's
+/// locator for a live shortcut, leaving every other device's locator, the
+/// origin device and the synced display metadata untouched. Device-local: it
+/// changes no synced row, so it bumps no revision.
+pub fn set_filesystem_alias_local_target(
+    conn: &mut Connection,
+    card_id: &str,
+    locator_blob: &[u8],
+) -> Result<(), WorkspaceError> {
+    let tx = immediate_tx(conn)?;
+    let live: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM filesystem_aliases a JOIN cards c ON c.id = a.card_id WHERE a.card_id = ?1 AND c.deleted_at IS NULL)",
+        [card_id],
+        |r| r.get(0),
+    )?;
+    if !live {
+        return Err(WorkspaceError::NotFound(card_id.to_owned()));
+    }
+    let device_id = current_device_id(&tx)?;
+    upsert_locator(&tx, card_id, &device_id, locator_blob)?;
     tx.commit()?;
     Ok(())
 }
@@ -75,14 +119,25 @@ pub fn insert_file_card_rows(
 }
 
 /// Internal-only authority lookup for Rust commands. No locator bytes appear in DTOs.
+///
+/// The locator is THIS device's (ADR-0012); `None` means the shortcut exists
+/// but this device holds no locator for it (it was created elsewhere).
 pub fn load_filesystem_alias_locator(
     conn: &Connection,
     card_id: &str,
-) -> Result<(Vec<u8>, String, String), WorkspaceError> {
+) -> Result<(Option<Vec<u8>>, String, String), WorkspaceError> {
     conn.query_row(
-        "SELECT a.locator_blob, a.path_hint, a.display_name FROM filesystem_aliases a JOIN cards c ON c.id = a.card_id WHERE a.card_id = ?1 AND c.deleted_at IS NULL",
-        [card_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    ).map_err(WorkspaceError::from)
+        "SELECT l.locator_blob, a.path_hint, a.display_name
+         FROM filesystem_aliases a
+         JOIN cards c ON c.id = a.card_id
+         LEFT JOIN filesystem_alias_locators l
+             ON l.card_id = a.card_id
+            AND l.device_id = (SELECT value FROM local_meta WHERE key = 'device_id')
+         WHERE a.card_id = ?1 AND c.deleted_at IS NULL",
+        [card_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .map_err(WorkspaceError::from)
 }
 
 /// Returns the stored asset `file_path` for a File Card (for open-in-app).
@@ -96,6 +151,10 @@ pub fn load_file_card_asset(conn: &Connection, card_id: &str) -> Result<String, 
 
 /// Stale bookmark renewal is one durable transition: locator authority and
 /// display diagnostics advance together, never from a path-hint fallback.
+///
+/// The locator renewed is this device's. The display metadata is synced board
+/// content written by the origin device (ADR-0012 §6), so it only follows the
+/// renewal when this device is the shortcut's origin.
 pub fn refresh_filesystem_alias_locator(
     conn: &mut Connection,
     card_id: &str,
@@ -103,13 +162,26 @@ pub fn refresh_filesystem_alias_locator(
     path_hint: &str,
     display_name: &str,
 ) -> Result<(), WorkspaceError> {
-    let updated = conn.execute(
-        "UPDATE filesystem_aliases SET locator_blob = ?1, path_hint = ?2, display_name = ?3 WHERE card_id = ?4",
-        params![locator_blob, path_hint, display_name, card_id],
-    )?;
-    if updated == 0 {
+    let tx = immediate_tx(conn)?;
+    let device_id = current_device_id(&tx)?;
+    let origin: Option<Option<String>> = tx
+        .query_row(
+            "SELECT origin_device_id FROM filesystem_aliases WHERE card_id = ?1",
+            [card_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(origin) = origin else {
         return Err(WorkspaceError::NotFound(card_id.to_owned()));
+    };
+    upsert_locator(&tx, card_id, &device_id, locator_blob)?;
+    if origin.as_deref() == Some(device_id.as_str()) {
+        tx.execute(
+            "UPDATE filesystem_aliases SET path_hint = ?1, display_name = ?2 WHERE card_id = ?3",
+            params![path_hint, display_name, card_id],
+        )?;
     }
+    tx.commit()?;
     Ok(())
 }
 

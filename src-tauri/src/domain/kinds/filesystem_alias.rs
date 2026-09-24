@@ -1,6 +1,11 @@
-//! `filesystem_alias` cards: a folder/file shortcut backed by a security-
-//! scoped bookmark (`filesystem_aliases`). The projection never exposes the
-//! locator bytes; the journal payload carries them as `{"$blob": hex}`.
+//! `filesystem_alias` cards: a folder/file shortcut (`filesystem_aliases`).
+//!
+//! Device scope (ADR-0012): the detail row (target kind, path hint, display
+//! name, origin device) is board content and is what the journal payload
+//! carries. The locators that make a shortcut open live in
+//! `filesystem_alias_locators`, one per (card, device); they are local-only,
+//! never part of the payload, and never exposed by the projection. The
+//! projection reports `local` (this device holds a locator) instead.
 
 use std::collections::HashMap;
 
@@ -18,14 +23,25 @@ pub struct FilesystemAliasHandler;
 
 const DETAIL: DetailTable = DetailTable {
     table: "filesystem_aliases",
-    columns: &["target_kind", "locator_blob", "path_hint", "display_name"],
+    columns: &[
+        "target_kind",
+        "path_hint",
+        "display_name",
+        "origin_device_id",
+    ],
 };
 
 const SELECT_FROM: &str =
     "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-        a.target_kind, a.path_hint, a.display_name
+        a.target_kind, a.path_hint, a.display_name, COALESCE(a.origin_device_id, ''), d.name,
+        EXISTS (
+            SELECT 1 FROM filesystem_alias_locators l
+            WHERE l.card_id = c.id
+              AND l.device_id = (SELECT value FROM local_meta WHERE key = 'device_id')
+        )
  FROM cards c
- JOIN filesystem_aliases a ON a.card_id = c.id";
+ JOIN filesystem_aliases a ON a.card_id = c.id
+ LEFT JOIN known_devices d ON d.device_id = a.origin_device_id";
 
 fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
     Ok(CardDto::FilesystemAlias(FilesystemAliasDto {
@@ -37,6 +53,9 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
         target_kind: row.get(AFTER_CARD)?,
         path_hint: row.get(AFTER_CARD + 1)?,
         display_name: row.get(AFTER_CARD + 2)?,
+        origin_device_id: row.get(AFTER_CARD + 3)?,
+        origin_device_name: row.get(AFTER_CARD + 4)?,
+        local: row.get(AFTER_CARD + 5)?,
     }))
 }
 
@@ -65,9 +84,20 @@ impl CardKindHandler for FilesystemAliasHandler {
         to_id: &str,
         _ctx: &CopyContext,
     ) -> Result<(), WorkspaceError> {
-        DETAIL.copy(tx, from_id, to_id)
+        DETAIL.copy(tx, from_id, to_id)?;
+        // A duplicate opens wherever the original did: copy the locators this
+        // database holds (they stay local; the new card row already exists).
+        tx.execute(
+            "INSERT OR IGNORE INTO filesystem_alias_locators (card_id, device_id, locator_blob)
+             SELECT ?2, device_id, locator_blob FROM filesystem_alias_locators WHERE card_id = ?1",
+            rusqlite::params![from_id, to_id],
+        )?;
+        Ok(())
     }
 
+    /// Deletes the detail rows only. Locators are tied to the `cards` row
+    /// (`ON DELETE CASCADE`, migration 0024), so they go when the card is
+    /// hard-deleted, and survive a journal codec drop/re-apply of this row.
     fn delete_details(&self, tx: &Transaction, ids: &[String]) -> Result<u64, WorkspaceError> {
         DETAIL.delete(tx, ids)
     }

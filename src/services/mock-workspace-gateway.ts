@@ -18,6 +18,7 @@ import type {
   CreateFolderAliasInput,
   CreateImageCardInput,
   CreateNoteInput,
+  DeviceIdentity,
   DuplicateBoardInput,
   DuplicateBoardReceipt,
   EmbedCardDto,
@@ -93,6 +94,12 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   /** Seeded once by the `?fixture=corrupt-note` fixture (P1.7). */
   private corruptFixtureSeeded = false;
 
+  /** Seeded once by the `?fixture=foreign-shortcut` fixture (ADR-0012). */
+  private foreignShortcutFixtureSeeded = false;
+
+  /** This (mock) installation's identity (ADR-0012). */
+  private device: DeviceIdentity = { deviceId: MOCK_DEVICE_ID, deviceName: "This Mac" };
+
   /**
    * P1.7 recovery mode: tests set this directly; the browser harness sets it
    * with `?fixture=startup-failure`.
@@ -164,6 +171,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         targetKind: "folder",
         pathHint: "/Users/me/Research",
         displayName: "Research",
+        originDeviceId: MOCK_DEVICE_ID,
+        originDeviceName: this.device.deviceName,
+        local: true,
       };
       this.snapshot.cards = [structuredClone(alias)];
       return Promise.resolve({
@@ -180,6 +190,13 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (boardId === "home" && !this.corruptFixtureSeeded && fixtureParam() === "corrupt-note") {
       this.corruptFixtureSeeded = true;
       this.snapshot.cards = corruptNoteFixtureCards();
+    }
+    // Test-only foreign-shortcut fixture (ADR-0012): one shortcut created on
+    // another device (no locator here) next to one local shortcut. Seeded
+    // once, so "Point to a folder on this computer…" survives reloads.
+    if (boardId === "home" && !this.foreignShortcutFixtureSeeded && fixtureParam() === "foreign-shortcut") {
+      this.foreignShortcutFixtureSeeded = true;
+      this.snapshot.cards = foreignShortcutFixtureCards(this.device.deviceName);
     }
     // Test-only dense fixture activated by a query parameter.
     if (
@@ -614,6 +631,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       targetKind: "folder",
       pathHint: input.sourcePath,
       displayName,
+      originDeviceId: this.device.deviceId,
+      originDeviceName: this.device.deviceName,
+      local: true,
     };
     this.snapshot.cards.push(card);
     return Promise.resolve(structuredClone(card));
@@ -625,6 +645,16 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         candidate.kind === "filesystem_alias" && candidate.id === cardId,
     );
     if (!card) return Promise.reject(new Error(`folder alias not found: ${cardId}`));
+    if (!card.local) {
+      // Like the backend: no locator on this device, no filesystem access.
+      return Promise.resolve({
+        status: "foreign_device",
+        entries: [],
+        hasMore: false,
+        displayName: card.displayName,
+        pathHint: card.pathHint,
+      });
+    }
 
     const status = card.pathHint.endsWith("/empty")
       ? "empty"
@@ -693,9 +723,46 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   openFolderInFinder(cardId: string): Promise<void> {
     const card = this.snapshot.cards.find(
-      (candidate) => candidate.kind === "filesystem_alias" && candidate.id === cardId,
+      (candidate): candidate is FilesystemAliasDto =>
+        candidate.kind === "filesystem_alias" && candidate.id === cardId,
     );
-    return card ? Promise.resolve() : Promise.reject(new Error(`folder alias not found: ${cardId}`));
+    if (!card) return Promise.reject(new Error(`folder alias not found: ${cardId}`));
+    if (!card.local) {
+      return Promise.reject(
+        new Error(
+          "constraint violation: this folder shortcut was created on another device; point it to a folder on this computer first",
+        ),
+      );
+    }
+    return Promise.resolve();
+  }
+
+  setFilesystemAliasLocalTarget(cardId: string, path: string): Promise<FilesystemAliasDto> {
+    const card = [...this.snapshot.cards, ...this.snapshot.unsortedCards].find(
+      (candidate): candidate is FilesystemAliasDto =>
+        candidate.kind === "filesystem_alias" && candidate.id === cardId,
+    );
+    if (!card) return Promise.reject(new Error(`not found: ${cardId}`));
+    if (!path) return Promise.reject(new Error("constraint violation: folder alias target must be an existing directory"));
+    // Device-local: no revision bump, the origin's path hint is kept.
+    card.local = true;
+    return Promise.resolve(structuredClone(card));
+  }
+
+  getDeviceIdentity(): Promise<DeviceIdentity> {
+    return Promise.resolve({ ...this.device });
+  }
+
+  renameDevice(name: string): Promise<DeviceIdentity> {
+    const trimmed = name.trim();
+    if (!trimmed) return Promise.reject(new Error("constraint violation: device name must not be empty"));
+    this.device = { ...this.device, deviceName: trimmed };
+    for (const card of this.snapshot.cards) {
+      if (card.kind === "filesystem_alias" && card.originDeviceId === this.device.deviceId) {
+        card.originDeviceName = trimmed;
+      }
+    }
+    return Promise.resolve({ ...this.device });
   }
 
   async createFileCard(input: CreateFileCardInput): Promise<FileCardDto> {
@@ -1449,6 +1516,47 @@ const CORRUPT_REJECTION = "constraint violation: document is corrupt; open it to
 function fixtureParam(): string | null {
   if (typeof window === "undefined") return null;
   return new URLSearchParams(window.location.search).get("fixture");
+}
+
+/** The mock installation's device id (ADR-0012). */
+const MOCK_DEVICE_ID = "mock-device";
+
+/** Cards of the `?fixture=foreign-shortcut` board (ADR-0012). */
+function foreignShortcutFixtureCards(thisDeviceName: string): CardDto[] {
+  const shortcut = (
+    id: string,
+    x: number,
+    displayName: string,
+    pathHint: string,
+    origin: { id: string; name: string | null },
+    local: boolean,
+  ): FilesystemAliasDto => ({
+    kind: "filesystem_alias",
+    id,
+    boardId: "home",
+    frame: { x, y: 60, width: 300, height: 220 },
+    zIndex: 0,
+    revision: 1,
+    targetKind: "folder",
+    pathHint,
+    displayName,
+    originDeviceId: origin.id,
+    originDeviceName: origin.name,
+    local,
+  });
+  return [
+    shortcut("foreign-folder", 60, "Research", "/Users/me/Research", { id: "studio-mac", name: "Studio Mac" }, false),
+    shortcut("local-folder", 420, "Footage", "/mock/home/Footage", { id: MOCK_DEVICE_ID, name: thisDeviceName }, true),
+  ];
+}
+
+/**
+ * The folder the browser harness "picks" in place of the native dialog: set
+ * by the `?fixture=foreign-shortcut` fixture so e2e can drive "Point to a
+ * folder on this computer…"; `null` (cancelled) otherwise.
+ */
+export function fixturePickedFolder(): string | null {
+  return fixtureParam() === "foreign-shortcut" ? "/mock/home/Research" : null;
 }
 
 /** Cards of the `?fixture=corrupt-note` board (P1.7). */

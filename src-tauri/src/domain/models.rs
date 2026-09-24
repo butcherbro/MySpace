@@ -187,6 +187,10 @@ pub struct EmbedCardDto {
 
 /// A durable shortcut to an external filesystem item. The stored bookmark
 /// bytes remain server-side; this projection intentionally exposes only display identity.
+///
+/// Device scope (ADR-0012): the card is board content and syncs; the locator
+/// that makes it open belongs to one device. `local` says whether THIS device
+/// holds a locator for it; `path_hint` stays as the origin device wrote it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilesystemAliasDto {
@@ -198,6 +202,12 @@ pub struct FilesystemAliasDto {
     pub target_kind: String,
     pub path_hint: String,
     pub display_name: String,
+    /// The device that created the shortcut (and wrote `path_hint`).
+    pub origin_device_id: String,
+    /// Its human name from `known_devices`, when this device knows it.
+    pub origin_device_name: Option<String>,
+    /// True when this device holds a locator for the card.
+    pub local: bool,
 }
 
 /// The target board's identity, as seen through a shortcut. `None` when the
@@ -260,6 +270,9 @@ pub enum FolderPreviewStatus {
     Missing,
     PermissionLost,
     IoError,
+    /// The shortcut has no locator on this device (created on another one,
+    /// ADR-0012). Returned without touching the filesystem.
+    ForeignDevice,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -639,6 +652,9 @@ pub struct CreateFilesystemAliasInput {
     pub frame: Frame,
     pub z_index: i64,
     pub target_kind: String,
+    /// This device's locator for the new shortcut; stored in
+    /// `filesystem_alias_locators` under the current device id, never in the
+    /// synced `filesystem_aliases` row.
     #[serde(skip_serializing, skip_deserializing, default)]
     pub locator_blob: Vec<u8>,
     pub path_hint: String,

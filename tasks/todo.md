@@ -468,6 +468,12 @@ P2 / platform:
 - [x] Windows: build + CI + path locator + opener + clipboard (done 2026-09-24);
       thumbnails on Windows pending. Подробности: README → «Platforms».
       Проверить на живом Windows: см. список «Needs a human on Windows» там же.
+- [x] Device identity + device-scoped shortcut locators (ADR-0012), migration 0024
+      (done 2026-09-24). Проверить на Mac: старые ярлыки папок открываются после
+      миграции; на Windows: ярлык с Mac показан «On <Mac>», «Point to a folder on
+      this computer…» делает его рабочим. UI для имени устройства нет (только
+      команды `get_device_identity` / `rename_device`). Скопированная на другую
+      машину база получает новый device_id (отпечаток машины в `local_meta`).
 
 Известные флейки e2e (не регрессия, воспроизводится на `f819aee`):
 - [ ] `group-tab-drop.spec.ts:40` — на медленном кадре рамка выделения захватывает

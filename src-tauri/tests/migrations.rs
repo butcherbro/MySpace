@@ -105,7 +105,7 @@ fn filesystem_alias_migration_adds_detail_table_and_kind_without_fk_debt() {
         [],
     ).unwrap();
     conn.execute(
-        "INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES ('alias-card', 'folder', X'0102', '/display-only', 'Folder')",
+        "INSERT INTO filesystem_aliases (card_id, target_kind, path_hint, display_name) VALUES ('alias-card', 'folder', '/display-only', 'Folder')",
         [],
     ).unwrap();
     let preserved: (i64, i64) = conn
@@ -286,7 +286,7 @@ fn cards_accept_filesystem_alias_kind_and_foreign_keys_stay_clean() {
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES ('fa1', 'folder', X'0102', '/tmp/demo', 'demo')",
+        "INSERT INTO filesystem_aliases (card_id, target_kind, path_hint, display_name) VALUES ('fa1', 'folder', '/tmp/demo', 'demo')",
         [],
     )
     .unwrap();

@@ -52,3 +52,48 @@
 - Moving a data folder between machines (or restoring a backup on another
   machine) is the same case as sync: the shortcuts show as foreign until
   re-pointed. This is testable today without a sync implementation.
+
+## Status
+
+Implemented 2026-09-24 in migration **0024** (`0024_device_scoped_locators.sql`
+plus its Rust step `repositories::devices::migrate_0024`, run in the same
+transaction).
+
+- Schema: `local_meta(key, value)`, `known_devices(device_id, name,
+  last_seen_at)`, `filesystem_alias_locators(card_id → cards(id) ON DELETE
+  CASCADE, device_id, locator_blob, PRIMARY KEY(card_id, device_id))`,
+  `filesystem_aliases.origin_device_id`; `filesystem_aliases.locator_blob` is
+  dropped with `ALTER TABLE … DROP COLUMN` after the backfill (no trigger,
+  index or constraint references it, so no rebuild was needed).
+- Backfill: the device running 0024 mints its identity (UUIDv7, host name or
+  "This computer"), becomes the origin of every legacy alias, and receives its
+  locator bytes verbatim. Idempotent and atomic with the migration.
+- Commands: `get_device_identity` → `{ deviceId, deviceName }`,
+  `rename_device(name)`, `set_filesystem_alias_local_target(cardId, path)` →
+  the updated alias. `list_folder_preview` returns status `foreign_device` and
+  `open_folder_in_finder` refuses when this device holds no locator.
+- DTO: `originDeviceId`, `originDeviceName` (null when unknown; the UI shows
+  "another device"), `local`.
+- Sync exclusion: `domain::mutation::LOCAL_ONLY_TABLES` (`local_meta`,
+  `filesystem_alias_locators`, `board_view_states`, `known_devices`) and
+  `Mutation::is_local_only()` (`SaveViewport`, `SetFilesystemAliasLocalTarget`,
+  `RenameDevice`). `known_devices` is local too: other devices' names arrive in
+  the sync handshake, not as journaled rows. The alias kind's journal payload
+  carries `origin_device_id` and never locator bytes.
+- Not done: a settings surface for the device name (none exists yet).
+- Moved databases: `local_meta.machine_fingerprint` is a SHA-256 over the OS
+  machine id (`machine-uid`: `IOPlatformUUID` on macOS, `MachineGuid` on
+  Windows, `/etc/machine-id` on Linux), the OS and the data directory path.
+  Only if the machine id cannot be read does the short host name stand in for
+  it (logged as `machine_id_unavailable`). Bootstrap compares it on every
+  start. A database opened under another fingerprint (copied to another
+  machine or user account, or a backup restored there) mints a new
+  `device_id` and name, adds it to `known_devices` and keeps the previous
+  device's row. Existing shortcuts keep their origin and the old device's
+  locators, so they render "On <old name>" with "Point to…", as the
+  Consequences above promise. The first fingerprinted start of an existing
+  install only records the fingerprint.
+- Renaming the host (or a DHCP-assigned host name) no longer rotates the
+  identity; the host name is only the default `device_name`. Moving the data
+  directory still does, and this device's own shortcuts then read as foreign
+  until re-pointed.

@@ -1014,6 +1014,7 @@ function App() {
     targetBoardId: c.kind === "board_portal" ? c.target.id : undefined,
     portalTitle: c.kind === "board_portal" ? c.target.title : undefined,
     portalCoverAssetId: c.kind === "board_portal" ? c.target.coverAsset?.id ?? undefined : undefined,
+    aliasLocal: c.kind === "filesystem_alias" ? c.local : undefined,
   })), [state.cards]);
   const cardsById = useMemo(() => new Map(state.cards.map((c) => [c.id, c])), [state.cards]);
 
@@ -1376,6 +1377,17 @@ function App() {
   const handleLoadFolderPreview = useCallback((id: string) => gateway.listFolderPreview(id, 50), [gateway]);
   const handleOpenFolderInFinder = useCallback((id: string) => {
     void gateway.openFolderInFinder(id).catch((error) => dispatch({ type: "failed", message: errorMessage(error) }));
+  }, [gateway]);
+  // ADR-0012 "Point to a folder on this computer…": a shortcut created on
+  // another device gets this device's own locator; the card turns local and
+  // its preview loads.
+  const handlePointFolderShortcutHere = useCallback((id: string) => {
+    void (async () => {
+      const picked = await pickFolder();
+      if (!picked) return;
+      const alias = await gateway.setFilesystemAliasLocalTarget(id, picked);
+      dispatch({ type: "filesystemAliasUpdated", alias });
+    })().catch((error) => dispatch({ type: "failed", message: errorMessage(error) }));
   }, [gateway]);
 
   const handleContextDelete = useCallback(() => {
@@ -2231,6 +2243,7 @@ function App() {
     onResizeFilesystemAlias: handleResizeNote,
     onLoadFolderPreview: handleLoadFolderPreview,
     onOpenFolderInFinder: handleOpenFolderInFinder,
+    onPointFolderShortcutHere: handlePointFolderShortcutHere,
     onOpenFileCard: openFileCard,
     onRevealFileCard: revealFileCard,
     onResizeFileCard: handleResizeNote,
@@ -2266,6 +2279,7 @@ function App() {
       onResizeFilesystemAlias: (id: string, w: number, h: number) => latest().onResizeFilesystemAlias(id, w, h),
       onLoadFolderPreview: (id: string) => latest().onLoadFolderPreview(id),
       onOpenFolderInFinder: (id: string) => latest().onOpenFolderInFinder(id),
+      onPointFolderShortcutHere: (id: string) => latest().onPointFolderShortcutHere(id),
       onOpenFileCard: (id: string) => latest().onOpenFileCard(id),
       onRevealFileCard: (id: string) => latest().onRevealFileCard(id),
       onResizeFileCard: (id: string, w: number, h: number) => latest().onResizeFileCard(id, w, h),
@@ -2376,11 +2390,18 @@ function App() {
                 { id: "copy-image", label: "Copy Image", onSelect: handleCopySelectionImages },
               );
             }
-            if (isFolderAlias) {
+            if (isFolderAlias && card.local) {
               actions.push({
                 id: "show-in-finder",
                 label: "Show in Finder",
                 onSelect: () => handleOpenFolderInFinder(card.id),
+              });
+            }
+            if (isFolderAlias && !card.local) {
+              actions.push({
+                id: "point-to-local-folder",
+                label: "Point to a folder on this computer…",
+                onSelect: () => handlePointFolderShortcutHere(card.id),
               });
             }
             if (isFileCard) {

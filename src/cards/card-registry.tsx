@@ -54,6 +54,8 @@ export interface CardRenderContext {
   onLoadFolderPreview: (id: string) => Promise<import("../services/workspace-gateway").FolderPreviewDto>;
   /** Reveal the resolved bookmark in Finder without exposing its path to JS. */
   onOpenFolderInFinder: (id: string) => void;
+  /** Pick a folder on this computer for a shortcut made on another device (ADR-0012). */
+  onPointFolderShortcutHere: (id: string) => void;
   /** Open a File Card's stored copy in the default external app. */
   onOpenFileCard: (id: string) => void;
   /** Reveal a File Card's original source in Finder (selected). */
@@ -124,7 +126,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
   }
 
   if (card.kind === "filesystem_alias") {
-    return <FolderShortcutCard alias={card} loadPreview={ctx.onLoadFolderPreview} onOpenFinder={ctx.onOpenFolderInFinder} onResize={ctx.onResizeFilesystemAlias} onContextMenu={ctx.onContextMenu} />;
+    return <FolderShortcutCard alias={card} loadPreview={ctx.onLoadFolderPreview} onOpenFinder={ctx.onOpenFolderInFinder} onResize={ctx.onResizeFilesystemAlias} onContextMenu={ctx.onContextMenu} onPointToLocalFolder={ctx.onPointFolderShortcutHere} />;
   }
 
   if (card.kind === "board_shortcut") {

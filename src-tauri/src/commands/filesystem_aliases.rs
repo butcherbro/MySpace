@@ -15,7 +15,7 @@ use crate::{
         filesystem_alias_service::{self, FolderLocator, LocatorError},
         models::{
             CardDto, CreateFileCardInput, CreateFilesystemAliasInput, FileCardDto,
-            FilesystemAliasDto, FolderPreviewDto,
+            FilesystemAliasDto, FolderPreviewDto, FolderPreviewStatus,
         },
         mutation::{CommitFileCard, Mutation},
     },
@@ -66,29 +66,7 @@ pub async fn create_folder_alias(
 ) -> Result<FilesystemAliasDto, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("create_folder_alias", async move {
-        let source_path = input.source_path.clone();
-        let (path, locator_blob, display_name) = tokio::task::spawn_blocking(move || {
-            let path = PathBuf::from(&source_path);
-            if !path.is_dir() {
-                return Err(WorkspaceError::ConstraintViolation(
-                    "folder alias target must be an existing directory".into(),
-                ));
-            }
-            let display_name = path
-                .file_name()
-                .and_then(|v| v.to_str())
-                .unwrap_or("Folder")
-                .to_string();
-            let locator = PlatformLocator::default();
-            let locator_blob = locator.create(&path).map_err(|error| {
-                WorkspaceError::ConstraintViolation(format!(
-                    "could not create folder locator: {error}"
-                ))
-            })?;
-            Ok((path, locator_blob, display_name))
-        })
-        .await
-        .map_err(|e| WorkspaceError::Database(format!("locator task failed: {e}")))??;
+        let (path, locator_blob, display_name) = create_folder_locator(input.source_path).await?;
 
         let model = CreateFilesystemAliasInput {
             id: input.id,
@@ -100,22 +78,88 @@ pub async fn create_folder_alias(
             path_hint: path.to_string_lossy().into_owned(),
             display_name,
         };
-        let dto = FilesystemAliasDto {
-            id: model.id.clone(),
-            board_id: model.board_id.clone(),
-            frame: model.frame,
-            z_index: model.z_index,
-            revision: 1,
-            target_kind: model.target_kind.clone(),
-            path_hint: model.path_hint.clone(),
-            display_name: model.display_name.clone(),
-        };
-        ws.apply(Mutation::CreateFilesystemAlias(model))
+        let card = ws
+            .apply(Mutation::CreateFilesystemAlias(model))
             .await?
-            .into_unit()?;
-        Ok(dto)
+            .into_card()?;
+        into_alias(card)
     })
     .await
+}
+
+/// Validates `source_path` as an existing directory and creates this
+/// platform's locator for it, off the async runtime. Returns the path, the
+/// locator bytes and the folder's display name.
+async fn create_folder_locator(
+    source_path: String,
+) -> Result<(PathBuf, Vec<u8>, String), WorkspaceError> {
+    tokio::task::spawn_blocking(move || {
+        let path = PathBuf::from(&source_path);
+        if !path.is_dir() {
+            return Err(WorkspaceError::ConstraintViolation(
+                "folder alias target must be an existing directory".into(),
+            ));
+        }
+        let display_name = path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("Folder")
+            .to_string();
+        let locator = PlatformLocator::default();
+        let locator_blob = locator.create(&path).map_err(|error| {
+            WorkspaceError::ConstraintViolation(format!("could not create folder locator: {error}"))
+        })?;
+        Ok((path, locator_blob, display_name))
+    })
+    .await
+    .map_err(|e| WorkspaceError::Database(format!("locator task failed: {e}")))?
+}
+
+fn into_alias(card: CardDto) -> Result<FilesystemAliasDto, WorkspaceError> {
+    match card {
+        CardDto::FilesystemAlias(alias) => Ok(alias),
+        _ => Err(WorkspaceError::Database(
+            "card is not a folder shortcut".into(),
+        )),
+    }
+}
+
+/// "Point to a folder on this computer…" (ADR-0012 §5). Creates THIS device's
+/// locator for `path` and stores it for the shortcut; the origin device's
+/// locator, the path hint and the display name are left as they are. A
+/// device-local write (`Mutation::is_local_only`), so it bumps no revision
+/// and will never be journaled. Returns the updated projection (`local: true`).
+#[tauri::command]
+pub async fn set_filesystem_alias_local_target(
+    ws: State<'_, Workspace>,
+    card_id: String,
+    path: String,
+) -> Result<FilesystemAliasDto, WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("set_filesystem_alias_local_target", async move {
+        let (_, locator_blob, _) = create_folder_locator(path).await?;
+        let card = ws
+            .apply(Mutation::SetFilesystemAliasLocalTarget {
+                card_id,
+                locator_blob,
+            })
+            .await?
+            .into_card()?;
+        into_alias(card)
+    })
+    .await
+}
+
+/// Preview for a shortcut this device holds no locator for: shown as
+/// belonging to another device, without touching the filesystem.
+fn foreign_device_preview(path_hint: String, display_name: String) -> FolderPreviewDto {
+    FolderPreviewDto {
+        status: FolderPreviewStatus::ForeignDevice,
+        entries: vec![],
+        has_more: false,
+        display_name,
+        path_hint,
+    }
 }
 #[tauri::command]
 pub async fn list_folder_preview(
@@ -132,6 +176,9 @@ pub async fn list_folder_preview(
         let (blob, hint, name) = ws
             .read(move |conn| workspace_repository::load_filesystem_alias_locator(conn, &lookup_id))
             .await?;
+        let Some(blob) = blob else {
+            return Ok(foreign_device_preview(hint, name));
+        };
 
         let name_fallback = name.clone();
         let (preview, refreshed, path) = tokio::task::spawn_blocking(move || {
@@ -243,6 +290,11 @@ pub async fn open_folder_in_finder(
                 Ok(blob)
             })
             .await?;
+        let Some(blob) = blob else {
+            return Err(WorkspaceError::ConstraintViolation(
+                "this folder shortcut was created on another device; point it to a folder on this computer first".into(),
+            ));
+        };
 
         tokio::task::spawn_blocking(move || {
             let locator = PlatformLocator::default();
