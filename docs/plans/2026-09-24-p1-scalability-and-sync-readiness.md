@@ -22,6 +22,19 @@ Every P1 task below states how it serves sync, because the user's rule is:
 
 ## P1.1 — Database off the main thread; one mutation funnel
 
+**Status: done 2026-09-24.** Implemented as `src-tauri/src/app/workspace.rs`
+(`Workspace`: writer thread + 2-connection read pool, `apply`/`read`,
+blocking variants for MCP and tests, `inspect_writer` for `data_version`),
+`src-tauri/src/domain/mutation.rs` (`Mutation` / `MutationOutcome`), every
+command module `async`, MCP binary on `Workspace::open_existing`, all write
+transactions `BEGIN IMMEDIATE` with the guards inside (`tests/write_transactions.rs`),
+startup maintenance deferred 2 s onto the writer thread, enrichment split into
+`plan_embed_enrichment` (reader + network) and `Mutation::ApplyEmbedMetadata`
+(writer, one transaction). Acceptance test: `tests/workspace_actor.rs`.
+Known leftovers: enrichment holds one pooled reader for the fetch duration
+(TODO in `link_metadata.rs`); `import_asset` check-then-copy-then-insert stays
+outside the lock by design (file I/O never runs on the writer).
+
 **Why first.** Sync commands (K1 in the audit): every command is a sync
 `#[tauri::command]` and therefore runs on the main thread under one
 `Mutex<Connection>`. Every later task (FTS, background backup, journal)

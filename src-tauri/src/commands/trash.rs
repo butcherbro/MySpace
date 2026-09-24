@@ -74,7 +74,7 @@ pub async fn trash_selection(
 pub async fn list_trash(ws: State<'_, Workspace>) -> Result<TrashSummaryDto, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("list_trash", async move {
-        ws.read(|conn| trash_service::list_trash(conn)).await
+        ws.read(trash_service::list_trash).await
     })
     .await
 }

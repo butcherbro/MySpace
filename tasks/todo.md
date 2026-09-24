@@ -420,8 +420,15 @@ P0 — закрыто в этой сессии (ветка `claude/awesome-gooda
       сбрасывает viewport/редактирование.
 
 P1 (до серьёзного роста), в порядке выполнения:
-- [ ] БД и диск с main thread → writer-actor + async-команды, `IMMEDIATE`-транзакции,
-      единый retry на BUSY. Единая точка мутаций — заготовка под журнал синхронизации (ADR-0011).
+- [x] P1.1 БД и диск с main thread: `app::Workspace` (writer-поток + пул из 2
+      читателей), все команды `async`, единая воронка `domain::Mutation`
+      (Tauri, MCP и стартовое обслуживание), `BEGIN IMMEDIATE` везде,
+      check-then-act внутри транзакций, bounded retry на BUSY, `queue_ms`/`exec_ms`
+      в логе. Тесты: `workspace_actor.rs`, `write_transactions.rs`.
+      Хвосты (не блокируют): enrichment держит одно pooled-соединение на время
+      сетевого запроса (TODO в `link_metadata.rs`); `import_asset` при повторном
+      использовании одного UUID из двух процессов может удалить чужой файл
+      (только при коллизии id — практически невозможно).
 - [ ] Бэкап 2.0: фоновой, content-addressed ассеты (`assets.sha256`), ретеншн по объёму,
       кнопка Restore.
 - [ ] Реестр kind на бэкенде, снятие `CHECK(kind IN …)`.

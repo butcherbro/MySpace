@@ -232,6 +232,17 @@ fn verify_schema_integrity(conn: &Connection, version: i64) -> Result<()> {
 /// Reports how the database's applied migrations compare to this build's
 /// `MIGRATIONS`, without applying anything or creating the bookkeeping
 /// table.
+/// [`schema_status`] for a database file, on a throwaway connection that
+/// applies no pragmas and runs no migration. Used at startup to decide whether
+/// the pre-upgrade backup snapshot must run synchronously.
+pub fn schema_status_at(path: &std::path::Path) -> Result<SchemaStatus> {
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    schema_status(&conn)
+}
+
 pub fn schema_status(conn: &Connection) -> Result<SchemaStatus> {
     let table_exists: bool = conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')",

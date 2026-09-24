@@ -6,20 +6,14 @@ pub mod repositories;
 pub mod services;
 pub mod telemetry;
 
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::time::Duration;
 
-use rusqlite::Connection;
 use tauri::Manager;
 
-type DbHandle = Mutex<Connection>;
-
-/// Application data paths, managed so commands can reach the DB/assets/backup
-/// locations for destructive operations (e.g. the pre-empty backup gate).
-#[derive(Clone)]
-pub struct AppPaths {
-    pub data_dir: PathBuf,
-}
+/// How long after setup the startup maintenance (backup snapshot, favicon
+/// collapse, asset GC) waits before it is queued, so the first board load and
+/// the user's first edits are never behind it.
+const STARTUP_MAINTENANCE_DELAY: Duration = Duration::from_secs(2);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -103,62 +97,52 @@ pub fn run() {
                 .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&data_dir).expect("failed to create app data dir");
 
-            // Installed before any other startup work (including the backup
-            // snapshot below) so that step is observable too. Never panics; a
-            // failed install just means no log output, and app startup proceeds.
+            // Installed before any other startup work so every step is
+            // observable. Never panics; a failed install just means no log
+            // output, and app startup proceeds.
             let log_guard = telemetry::init(&data_dir);
             app.manage(telemetry::LogGuard(log_guard));
 
-            let db_path = data_dir.join("workspace.sqlite3");
-            let assets_dir = data_dir.join("assets");
-            let backup_dir = data_dir.join("backups");
+            let paths = app::WorkspacePaths::new(data_dir);
+            let db_path = paths.db_path();
+            let assets_dir = paths.assets_dir();
+            let backup_dir = paths.backups_dir();
 
-            // Take a recoverable snapshot BEFORE migrations/mutations run, so the
-            // pre-upgrade state is always inspectable even if a future migration
-            // misbehaves. Best-effort: it never blocks startup.
-            db::backup::snapshot_on_startup(&db_path, &assets_dir, &backup_dir);
+            // The pre-upgrade snapshot only matters when this build is about to
+            // migrate the schema: then it runs synchronously, before
+            // migrations, so the pre-upgrade state is always recoverable. On
+            // an ordinary start it is deferred to a background thread so the
+            // window is not held back by copying the database and assets.
+            let upgrade_pending = db_path.exists()
+                && db::migrations::schema_status_at(&db_path)
+                    .map(|status| matches!(status, db::migrations::SchemaStatus::Pending(_)))
+                    .unwrap_or(false);
+            if upgrade_pending {
+                db::backup::snapshot_on_startup(&db_path, &assets_dir, &backup_dir);
+            }
 
-            let mut conn = db::open_and_bootstrap(&db_path)
+            let conn = db::open_and_bootstrap(&db_path)
                 .expect("failed to open and bootstrap workspace database");
-
-            // Collapse duplicate favicons (10 YouTube links -> 1 asset), then
-            // GC can remove the orphaned copies. Best-effort; never blocks startup,
-            // but a failure is reported instead of silently swallowing the sweep.
-            match domain::link_metadata::collapse_favicon_duplicates(&mut conn, &assets_dir) {
-                Ok(collapsed) if collapsed > 0 => {
-                    tracing::info!(collapsed, "favicon-dedup: re-pointed card(s)");
-                }
-                Ok(_) => {}
-                Err(err) => tracing::warn!(
-                    error_code = domain::asset_service::gc_failure_summary(&err),
-                    "favicon-dedup: failed"
-                ),
-            }
-
-            // Converge any interrupted asset GC: delete orphaned files + rows.
-            // Best-effort; a failure never blocks startup, but it is reported so
-            // a misbehaving sweep is observable instead of silently swallowed.
-            if let Err(err) = domain::asset_service::collect_orphaned_assets(&mut conn, &assets_dir)
-            {
-                tracing::warn!(
-                    error_code = domain::asset_service::gc_failure_summary(&err),
-                    "asset-gc: startup cleanup failed"
-                );
-            }
-
-            // TRANSITIONAL (P1.1 in progress): the writer thread owns the
-            // bootstrapped connection; not-yet-converted commands still use the
-            // legacy mutex on a second connection. Removed once every command
-            // module goes through `Workspace`.
-            let paths = app::WorkspacePaths::new(data_dir.clone());
             let workspace = app::Workspace::from_connection(conn, paths)
                 .expect("failed to start workspace writer");
-            app.manage(workspace);
-            let legacy = db::open_readonly_checked(&db_path).expect("legacy connection");
-            app.manage(DbHandle::new(legacy));
-            app.manage(AppPaths {
-                data_dir: data_dir.clone(),
-            });
+            app.manage(workspace.clone());
+
+            // Startup maintenance runs after the window is up, on the writer
+            // thread (so it can never race a user write) and the backup
+            // thread. Failures are logged by the writer with their error code.
+            std::thread::Builder::new()
+                .name("myspace-startup".into())
+                .spawn(move || {
+                    std::thread::sleep(STARTUP_MAINTENANCE_DELAY);
+                    if !upgrade_pending {
+                        db::backup::snapshot_on_startup(&db_path, &assets_dir, &backup_dir);
+                    }
+                    // Collapse duplicate favicons (10 YouTube links -> 1 asset)
+                    // first, so the GC can then remove the orphaned copies.
+                    workspace.apply_detached(domain::mutation::Mutation::CollapseFaviconDuplicates);
+                    workspace.apply_detached(domain::mutation::Mutation::CollectOrphanedAssets);
+                })
+                .expect("failed to spawn startup maintenance thread");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

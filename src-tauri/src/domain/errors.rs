@@ -42,7 +42,8 @@ impl WorkspaceError {
     pub fn is_busy(&self) -> bool {
         match self {
             WorkspaceError::Database(message) => {
-                message.contains("database is locked") || message.contains("database table is locked")
+                message.contains("database is locked")
+                    || message.contains("database table is locked")
             }
             _ => false,
         }

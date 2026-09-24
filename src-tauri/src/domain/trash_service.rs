@@ -11,6 +11,7 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AssetDto, EmptyTrashResult, TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto,
 };
+use crate::repositories::immediate_tx;
 
 use super::super::db;
 
@@ -34,7 +35,14 @@ pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, Worksp
 /// card, in one transaction. Returns the trash batch id. The root cannot be
 /// trashed.
 pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, WorkspaceError> {
-    let is_root: i64 = conn.query_row(
+    let now = db::migrations::now_millis();
+    let batch_id = uuid::Uuid::now_v7().to_string();
+
+    // BEGIN IMMEDIATE before the root guard so the check and the trash are
+    // atomic against another writer process.
+    let tx = immediate_tx(conn)?;
+
+    let is_root: i64 = tx.query_row(
         "SELECT COUNT(*) FROM workspaces WHERE root_board_id = ?1",
         [board_id],
         |r| r.get(0),
@@ -42,11 +50,6 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
     if is_root > 0 {
         return Err(WorkspaceError::RootBoardProtected);
     }
-
-    let now = db::migrations::now_millis();
-    let batch_id = uuid::Uuid::now_v7().to_string();
-
-    let tx = conn.transaction()?;
 
     // Collect the board subtree (target + descendants) via recursive CTE.
     let collected: i64 = tx.query_row(
@@ -205,7 +208,7 @@ pub fn trash_selection(
     let now = db::migrations::now_millis();
     let batch_id = uuid::Uuid::now_v7().to_string();
 
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     for item in &input.items {
         match item.kind.as_str() {
@@ -249,7 +252,7 @@ pub fn trash_selection(
 /// Restores a trash batch: clears `deleted_at`/`trash_batch_id` on all boards,
 /// cards in the batch, restoring original placement.
 pub fn restore_trash_batch(conn: &mut Connection, batch_id: &str) -> Result<(), WorkspaceError> {
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     // Refuse when restoring this batch would surface a card or board whose
     // parent is still trashed in a *different* batch: the card would become an
@@ -316,9 +319,14 @@ pub fn empty_trash(
         ));
     }
 
+    // BEGIN IMMEDIATE before the guard and the counts so the reported counts
+    // match exactly what is deleted, even with another writer process.
+    let tx = immediate_tx(conn)?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
+
     // Never repair a broken root invariant inside a destructive command: if the
     // root board is somehow trashed, refuse to empty.
-    let root_trashed: i64 = conn.query_row(
+    let root_trashed: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards b
          JOIN workspaces w ON w.root_board_id = b.id
          WHERE b.deleted_at IS NOT NULL",
@@ -329,19 +337,16 @@ pub fn empty_trash(
         return Err(WorkspaceError::RootBoardProtected);
     }
 
-    let board_count: i64 = conn.query_row(
+    let board_count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards WHERE deleted_at IS NOT NULL",
         [],
         |r| r.get(0),
     )?;
-    let card_count: i64 = conn.query_row(
+    let card_count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM cards WHERE deleted_at IS NOT NULL",
         [],
         |r| r.get(0),
     )?;
-
-    let tx = conn.transaction()?;
-    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
 
     // Detail rows for trashed cards, leaves -> roots.
     tx.execute(

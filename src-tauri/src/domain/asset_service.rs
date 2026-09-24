@@ -12,6 +12,7 @@ use rusqlite::{params, Connection};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{AssetDto, CreateFileCardInput, ImportAssetInput};
+use crate::repositories::immediate_tx;
 
 use super::super::db;
 
@@ -180,21 +181,24 @@ fn extension_for_mime(mime_type: &str) -> &'static str {
 /// blocks collection before any bytes are removed. A missing physical file counts
 /// as success so an interrupted sweep converges on the next run.
 /// Returns the number of assets collected.
+/// SQL predicate (over alias `a` for `assets`) that is true when no durable
+/// owner references the asset. Shared by the GC scan and its in-transaction
+/// re-check.
+const ORPHAN_PREDICATE: &str = "NOT EXISTS (SELECT 1 FROM image_cards i WHERE i.asset_id = a.id)
+       AND NOT EXISTS (SELECT 1 FROM embed_cards e WHERE e.asset_id = a.id)
+       AND NOT EXISTS (SELECT 1 FROM embed_cards e WHERE e.favicon_asset_id = a.id)
+       AND NOT EXISTS (SELECT 1 FROM boards b WHERE b.cover_asset_id = a.id)
+       AND NOT EXISTS (SELECT 1 FROM file_cards f WHERE f.asset_id = a.id)
+       AND NOT EXISTS (SELECT 1 FROM file_cards f WHERE f.preview_asset_id = a.id)";
+
 pub fn collect_orphaned_assets(
     conn: &mut Connection,
     asset_dir: &Path,
 ) -> Result<i64, WorkspaceError> {
     let orphans: Vec<(String, String)> = {
-        let mut stmt = conn.prepare(
-            "SELECT a.id, a.file_path
-             FROM assets a
-             WHERE NOT EXISTS (SELECT 1 FROM image_cards i WHERE i.asset_id = a.id)
-               AND NOT EXISTS (SELECT 1 FROM embed_cards e WHERE e.asset_id = a.id)
-               AND NOT EXISTS (SELECT 1 FROM embed_cards e WHERE e.favicon_asset_id = a.id)
-               AND NOT EXISTS (SELECT 1 FROM boards b WHERE b.cover_asset_id = a.id)
-               AND NOT EXISTS (SELECT 1 FROM file_cards f WHERE f.asset_id = a.id)
-               AND NOT EXISTS (SELECT 1 FROM file_cards f WHERE f.preview_asset_id = a.id)",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT a.id, a.file_path FROM assets a WHERE {ORPHAN_PREDICATE}"
+        ))?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -211,7 +215,19 @@ pub fn collect_orphaned_assets(
         // Delete the cache index and the metadata row transactionally FIRST, so a
         // surviving durable FK blocks before any physical file is removed. Then
         // remove the file; NotFound is success (converged cleanup).
-        let tx = conn.transaction()?;
+        //
+        // The scan above ran outside any transaction, so another writer process
+        // may have referenced this asset since. Re-check inside the IMMEDIATE
+        // transaction and skip the asset if it is no longer an orphan.
+        let tx = immediate_tx(conn)?;
+        let still_orphan: i64 = tx.query_row(
+            &format!("SELECT COUNT(*) FROM assets a WHERE a.id = ?1 AND {ORPHAN_PREDICATE}"),
+            params![id],
+            |r| r.get(0),
+        )?;
+        if still_orphan == 0 {
+            continue;
+        }
         tx.execute("DELETE FROM favicon_cache WHERE asset_id = ?1", params![id])?;
         tx.execute("DELETE FROM assets WHERE id = ?1", params![id])?;
         tx.commit()?;
@@ -399,7 +415,7 @@ fn commit_file_card_rows(
     preview_text: &str,
     thumbnail: Option<&StagedAsset>,
 ) -> Result<(), WorkspaceError> {
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
     if new_asset.is_some() {
         insert_asset_row(&tx, asset)?;
     }

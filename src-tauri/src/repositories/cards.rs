@@ -2,7 +2,7 @@
 //! the moves that change the board a card belongs to. Split out of
 //! `workspace_repository` without changing any SQL.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
@@ -15,6 +15,7 @@ use crate::domain::models::{
 };
 
 use super::super::db;
+use super::immediate_tx;
 
 /// Loads active cards of a board. When `include_subtree_counts` is true, portal
 /// targets carry child board/card counts. `unsorted` selects either the placed
@@ -625,7 +626,7 @@ pub fn create_note(conn: &mut Connection, input: &CreateNoteInput) -> Result<(),
     let document_json = serde_json::to_string(&input.document_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
 
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
     tx.execute(
         "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
          VALUES (?1, ?2, 'note', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
@@ -659,7 +660,7 @@ pub fn update_note(conn: &mut Connection, input: &UpdateNoteInput) -> Result<(),
     let document_json = serde_json::to_string(&input.document_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
 
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     let changed = tx.execute(
         "UPDATE cards SET revision = revision + 1, updated_at = ?1
@@ -724,7 +725,7 @@ pub fn update_image_caption(
     let caption_json = serde_json::to_string(&input.caption_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
 
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     let changed = tx.execute(
         "UPDATE cards SET revision = revision + 1, updated_at = ?1
@@ -769,7 +770,10 @@ pub fn update_card_frame(
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
 
-    let changed = conn.execute(
+    // One IMMEDIATE transaction so the stale-revision diagnosis reads the same
+    // state the guarded UPDATE saw.
+    let tx = immediate_tx(conn)?;
+    let changed = tx.execute(
         "UPDATE cards
          SET x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
          WHERE id = ?6 AND revision = ?7",
@@ -785,7 +789,7 @@ pub fn update_card_frame(
     )?;
 
     if changed == 0 {
-        let exists: i64 = conn.query_row(
+        let exists: i64 = tx.query_row(
             "SELECT COUNT(*) FROM cards WHERE id = ?1",
             [input.id.clone()],
             |r| r.get(0),
@@ -793,7 +797,7 @@ pub fn update_card_frame(
         if exists == 0 {
             return Err(WorkspaceError::NotFound(input.id.clone()));
         }
-        let actual: i64 = conn.query_row(
+        let actual: i64 = tx.query_row(
             "SELECT revision FROM cards WHERE id = ?1",
             [input.id.clone()],
             |r| r.get(0),
@@ -804,6 +808,7 @@ pub fn update_card_frame(
         });
     }
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -811,7 +816,7 @@ pub fn update_card_frame(
 /// must match its expected revision, or the whole batch is rejected and rolled
 /// back.
 pub fn move_cards(conn: &mut Connection, input: &MoveCardsInput) -> Result<(), WorkspaceError> {
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     for item in &input.cards {
         let changed = tx.execute(
@@ -865,8 +870,10 @@ pub fn create_image_card(
     let caption_json = serde_json::to_string(&input.caption_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
 
+    let tx = immediate_tx(conn)?;
+
     // The referenced asset must exist.
-    let asset_exists: i64 = conn.query_row(
+    let asset_exists: i64 = tx.query_row(
         "SELECT COUNT(*) FROM assets WHERE id = ?1",
         [input.asset_id.as_str()],
         |r| r.get(0),
@@ -875,7 +882,6 @@ pub fn create_image_card(
         return Err(WorkspaceError::NotFound(input.asset_id.clone()));
     }
 
-    let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
          VALUES (?1, ?2, 'image', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)",
@@ -921,7 +927,7 @@ pub fn convert_note_to_embed(
     let description_json = serde_json::to_string(&input.description_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
 
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     // Guard: the card must be a live note at the expected revision.
     let kind_and_revision: Option<(String, i64)> = tx
@@ -984,7 +990,7 @@ pub fn convert_note_to_embed(
 }
 
 /// Loads a single embed card (with its optional asset joins) into a DTO.
-fn load_embed_card(conn: &Connection, card_id: &str) -> Result<EmbedCardDto, WorkspaceError> {
+pub fn load_embed_card(conn: &Connection, card_id: &str) -> Result<EmbedCardDto, WorkspaceError> {
     let row = conn.query_row(
         "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                 e.source_url, e.display_url, e.site_name, e.title, e.provider,
@@ -1072,7 +1078,7 @@ pub fn update_embed_description(
     let description_json = serde_json::to_string(&input.description_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
 
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     let changed = tx.execute(
         "UPDATE cards SET revision = revision + 1, updated_at = ?1
@@ -1160,11 +1166,22 @@ pub fn apply_embed_metadata(
     conn: &mut Connection,
     input: &ApplyEmbedMetadataInput,
 ) -> Result<EmbedCardDto, WorkspaceError> {
+    let tx = immediate_tx(conn)?;
+    apply_embed_metadata_in_tx(&tx, input)?;
+    tx.commit()?;
+    load_embed_card(conn, &input.id)
+}
+
+/// The body of [`apply_embed_metadata`] for callers that already hold the
+/// write transaction (link enrichment records its asset rows, favicon-cache
+/// rows and the card update atomically). Does not commit and does not reload.
+pub fn apply_embed_metadata_in_tx(
+    tx: &Transaction<'_>,
+    input: &ApplyEmbedMetadataInput,
+) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
     let description_json = serde_json::to_string(&input.description_json)
         .map_err(|e| WorkspaceError::Database(e.to_string()))?;
-
-    let tx = conn.transaction()?;
 
     let current_preview_origin: Option<String> = tx
         .query_row(
@@ -1247,8 +1264,7 @@ pub fn apply_embed_metadata(
         )?;
     }
 
-    tx.commit()?;
-    load_embed_card(conn, &input.id)
+    Ok(())
 }
 
 /// Moves a leaf card (note/image/embed) to a different board, resetting its
@@ -1260,8 +1276,10 @@ pub fn move_card_to_board(
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
 
+    let tx = immediate_tx(conn)?;
+
     // The target board must exist and not be trashed.
-    let target_exists: i64 = conn.query_row(
+    let target_exists: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
         [input.target_board_id.as_str()],
         |r| r.get(0),
@@ -1274,8 +1292,6 @@ pub fn move_card_to_board(
         Some(f) => (f.x, f.y),
         None => (40.0, 40.0),
     };
-
-    let tx = conn.transaction()?;
 
     let changed = tx.execute(
         "UPDATE cards
@@ -1326,8 +1342,10 @@ pub fn move_cards_to_board_unsorted(
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
 
+    let tx = immediate_tx(conn)?;
+
     // The target board must exist and not be trashed.
-    let target_exists: i64 = conn.query_row(
+    let target_exists: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
         [input.target_board_id.as_str()],
         |r| r.get(0),
@@ -1335,8 +1353,6 @@ pub fn move_cards_to_board_unsorted(
     if target_exists == 0 {
         return Err(WorkspaceError::NotFound(input.target_board_id.clone()));
     }
-
-    let tx = conn.transaction()?;
 
     // Validate every card revision up front so a stale one rolls back the batch.
     for item in &input.cards {
@@ -1373,7 +1389,10 @@ pub fn place_unsorted_card(
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
 
-    let changed = conn.execute(
+    // One IMMEDIATE transaction so the stale-revision diagnosis reads the same
+    // state the guarded UPDATE saw.
+    let tx = immediate_tx(conn)?;
+    let changed = tx.execute(
         "UPDATE cards
          SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
          WHERE id = ?6 AND revision = ?7 AND kind IN ('note','image','embed','filesystem_alias','file','board_shortcut')",
@@ -1389,7 +1408,7 @@ pub fn place_unsorted_card(
     )?;
 
     if changed == 0 {
-        let exists: i64 = conn.query_row(
+        let exists: i64 = tx.query_row(
             "SELECT COUNT(*) FROM cards WHERE id = ?1",
             [input.id.clone()],
             |r| r.get(0),
@@ -1397,7 +1416,7 @@ pub fn place_unsorted_card(
         if exists == 0 {
             return Err(WorkspaceError::NotFound(input.id.clone()));
         }
-        let actual: i64 = conn.query_row(
+        let actual: i64 = tx.query_row(
             "SELECT revision FROM cards WHERE id = ?1",
             [input.id.clone()],
             |r| r.get(0),
@@ -1408,6 +1427,7 @@ pub fn place_unsorted_card(
         });
     }
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -1421,8 +1441,12 @@ pub fn create_link_batch(
 ) -> Result<CreateLinkBatchResult, WorkspaceError> {
     let now = db::migrations::now_millis();
 
+    // BEGIN IMMEDIATE before the replay check: two writers replaying the same
+    // idempotency key must not both miss the receipt and both insert cards.
+    let tx = immediate_tx(conn)?;
+
     // Idempotent replay: return the recorded result for a seen key.
-    if let Some((batch_id, card_ids_json)) = conn
+    if let Some((batch_id, card_ids_json)) = tx
         .query_row(
             "SELECT batch_id, card_ids FROM mutation_receipts WHERE idempotency_key = ?1",
             [input.idempotency_key.as_str()],
@@ -1435,7 +1459,7 @@ pub fn create_link_batch(
     }
 
     // The target board must exist and be active.
-    let board_exists: i64 = conn.query_row(
+    let board_exists: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
         [input.board_id.as_str()],
         |r| r.get(0),
@@ -1446,9 +1470,8 @@ pub fn create_link_batch(
 
     let batch_id = uuid::Uuid::now_v7().to_string();
     let mut card_ids = Vec::with_capacity(input.links.len());
-    let mut next_y = next_card_y(conn, &input.board_id);
+    let mut next_y = next_card_y(&tx, &input.board_id);
 
-    let tx = conn.transaction()?;
     for link in &input.links {
         let display_url = link.source_url.clone(); // enriched later if needed
                                                    // A user comment becomes the link's description body (authoritative).

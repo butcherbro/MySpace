@@ -1,62 +1,121 @@
 use std::fs;
+use std::path::PathBuf;
 
+use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::asset_service;
 use myspace_lib::domain::link_metadata::{
-    enrich_embed_with_metadata, extract_html_metadata, extract_youtube_feed_metadata,
-    validate_public_http_url, youtube_channel_feed_url, FetchError, FetchResponse, MetadataFetcher,
+    enrich_embed_blocking, extract_html_metadata, extract_youtube_feed_metadata,
+    plan_embed_enrichment, validate_public_http_url, youtube_channel_feed_url, FetchError,
+    FetchResponse, MetadataFetcher,
 };
 use myspace_lib::domain::models::{
     ConvertNoteToEmbedInput, CreateNoteInput, Frame, UpdateEmbedDescriptionInput,
 };
-use myspace_lib::repositories::workspace_repository;
+use myspace_lib::domain::mutation::Mutation;
 
-fn root_board_id(conn: &rusqlite::Connection) -> String {
-    conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
-        r.get(0)
-    })
-    .unwrap()
+/// A file-backed workspace in a unique temp dir, removed on drop.
+struct TestWorkspace {
+    ws: Workspace,
+    root: PathBuf,
 }
 
-fn create_pending_embed(conn: &mut rusqlite::Connection, url: &str) -> i64 {
-    bootstrap::bootstrap(conn).unwrap();
-    let board_id = root_board_id(conn);
-    workspace_repository::create_note(
-        conn,
-        &CreateNoteInput {
-            id: "link-card".to_string(),
-            board_id,
-            frame: Frame {
-                x: 0.0,
-                y: 0.0,
-                width: 320.0,
-                height: 180.0,
-            },
-            z_index: 1,
-            document_json: serde_json::json!({"type":"doc"}),
-            plain_text: url.to_string(),
-        },
-    )
-    .unwrap();
-    let embed = workspace_repository::convert_note_to_embed(
-        conn,
-        &ConvertNoteToEmbedInput {
-            id: "link-card".to_string(),
-            expected_revision: 1,
-            source_url: url.to_string(),
-            display_url: url.to_string(),
-            title: url.to_string(),
-            description_json: serde_json::json!({"type":"doc","content":[{"type":"paragraph"}]}),
-            description_plain_text: String::new(),
-        },
-    )
-    .unwrap();
-    embed.revision
+impl TestWorkspace {
+    fn new(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "myspace-link-metadata-{tag}-{}",
+            uuid::Uuid::now_v7()
+        ));
+        let ws = Workspace::open(WorkspacePaths::new(&root)).unwrap();
+        Self { ws, root }
+    }
+
+    fn asset_dir(&self) -> PathBuf {
+        self.ws.paths().assets_dir()
+    }
+
+    /// Creates a Note `id` holding `url` and converts it to a pending Embed.
+    /// Returns the Embed's revision.
+    fn create_pending_embed(&self, id: &str, url: &str) -> i64 {
+        let board_id: String = self
+            .ws
+            .read_blocking(|conn| {
+                Ok(
+                    conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
+        self.ws
+            .apply_blocking(Mutation::CreateNote(CreateNoteInput {
+                id: id.to_string(),
+                board_id,
+                frame: Frame {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 320.0,
+                    height: 180.0,
+                },
+                z_index: 1,
+                document_json: serde_json::json!({"type":"doc"}),
+                plain_text: url.to_string(),
+            }))
+            .unwrap();
+        let embed = self
+            .ws
+            .apply_blocking(Mutation::ConvertNoteToEmbed(ConvertNoteToEmbedInput {
+                id: id.to_string(),
+                expected_revision: 1,
+                source_url: url.to_string(),
+                display_url: url.to_string(),
+                title: url.to_string(),
+                description_json: serde_json::json!({"type":"doc","content":[{"type":"paragraph"}]}),
+                description_plain_text: String::new(),
+            }))
+            .unwrap()
+            .into_embed()
+            .unwrap();
+        embed.revision
+    }
+
+    fn count(&self, sql: &'static str) -> i64 {
+        self.ws
+            .read_blocking(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?))
+            .unwrap()
+    }
+
+    fn asset_files(&self) -> usize {
+        fs::read_dir(self.asset_dir())
+            .map(|entries| entries.count())
+            .unwrap_or(0)
+    }
+}
+
+impl Drop for TestWorkspace {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.root).ok();
+    }
 }
 
 struct StubFetcher {
     page: Result<FetchResponse, FetchError>,
     image: Option<FetchResponse>,
+    image_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl StubFetcher {
+    fn new(page: Result<FetchResponse, FetchError>, image: Option<FetchResponse>) -> Self {
+        Self {
+            page,
+            image,
+            image_calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn image_calls(&self) -> usize {
+        self.image_calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 impl MetadataFetcher for StubFetcher {
@@ -65,11 +124,37 @@ impl MetadataFetcher for StubFetcher {
     }
 
     fn fetch_image(&self, _url: &str) -> Result<FetchResponse, FetchError> {
+        self.image_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.image
             .clone()
             .ok_or_else(|| FetchError::Network("missing image".to_string()))
     }
 }
+
+fn html_page(body: &[u8]) -> Result<FetchResponse, FetchError> {
+    Ok(FetchResponse {
+        final_url: "https://example.com/page".to_string(),
+        mime_type: "text/html".to_string(),
+        bytes: body.to_vec(),
+    })
+}
+
+fn png(bytes: &[u8]) -> Option<FetchResponse> {
+    Some(FetchResponse {
+        final_url: "https://example.com/preview.png".to_string(),
+        mime_type: "image/png".to_string(),
+        bytes: bytes.to_vec(),
+    })
+}
+
+const FULL_PAGE: &[u8] = br#"
+  <meta property="og:site_name" content="Example">
+  <meta property="og:title" content="Example Title">
+  <meta property="og:description" content="Example Description">
+  <meta property="og:image" content="https://example.com/preview.png">
+  <link rel="icon" href="https://example.com/favicon.png">
+"#;
 
 #[test]
 fn extract_html_metadata_prefers_open_graph_and_resolves_assets() {
@@ -146,34 +231,11 @@ fn youtube_channel_feed_provides_channel_title_and_preview() {
 
 #[test]
 fn enrich_embed_with_html_metadata_persists_ready_card_and_assets() {
-    let mut conn = open_in_memory().unwrap();
-    let revision = create_pending_embed(&mut conn, "https://example.com/page");
-    let tmp = std::env::temp_dir().join(format!("myspace-link-metadata-{}", uuid::Uuid::now_v7()));
-    let asset_dir = tmp.join("assets");
-    fs::create_dir_all(&asset_dir).unwrap();
+    let t = TestWorkspace::new("ready");
+    let revision = t.create_pending_embed("link-card", "https://example.com/page");
+    let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"image-bytes"));
 
-    let fetcher = StubFetcher {
-        page: Ok(FetchResponse {
-            final_url: "https://example.com/page".to_string(),
-            mime_type: "text/html".to_string(),
-            bytes: br#"
-              <meta property="og:site_name" content="Example">
-              <meta property="og:title" content="Example Title">
-              <meta property="og:description" content="Example Description">
-              <meta property="og:image" content="https://example.com/preview.png">
-              <link rel="icon" href="https://example.com/favicon.png">
-            "#
-            .to_vec(),
-        }),
-        image: Some(FetchResponse {
-            final_url: "https://example.com/preview.png".to_string(),
-            mime_type: "image/png".to_string(),
-            bytes: b"image-bytes".to_vec(),
-        }),
-    };
-
-    let embed =
-        enrich_embed_with_metadata(&mut conn, &asset_dir, &fetcher, "link-card", revision).unwrap();
+    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card", revision).unwrap();
 
     assert_eq!(embed.metadata_status, "ready");
     assert_eq!(embed.title, "Example Title");
@@ -185,114 +247,169 @@ fn enrich_embed_with_html_metadata_persists_ready_card_and_assets() {
 
     let preview = embed.preview_asset.unwrap();
     assert_eq!(
-        fs::read(asset_dir.join(preview.file_path)).unwrap(),
+        fs::read(t.asset_dir().join(preview.file_path)).unwrap(),
         b"image-bytes"
     );
-
-    fs::remove_dir_all(&tmp).ok();
+    // Both staged images got their rows, and the favicon is cached by its URL.
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 2);
+    let cached: String = t
+        .ws
+        .read_blocking(|conn| {
+            Ok(conn.query_row(
+                "SELECT asset_id FROM favicon_cache WHERE source_url = 'https://example.com/favicon.png'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(Some(cached), embed.favicon_asset.map(|a| a.id));
 }
 
 #[test]
 fn enrich_embed_persists_failed_status_without_losing_source() {
-    let mut conn = open_in_memory().unwrap();
-    let revision = create_pending_embed(&mut conn, "https://example.com/page");
-    let tmp = std::env::temp_dir().join(format!("myspace-link-failed-{}", uuid::Uuid::now_v7()));
-    let asset_dir = tmp.join("assets");
+    let t = TestWorkspace::new("failed");
+    let revision = t.create_pending_embed("link-card", "https://example.com/page");
+    let fetcher = StubFetcher::new(Err(FetchError::Network("offline".to_string())), None);
 
-    let fetcher = StubFetcher {
-        page: Err(FetchError::Network("offline".to_string())),
-        image: None,
-    };
-
-    let embed =
-        enrich_embed_with_metadata(&mut conn, &asset_dir, &fetcher, "link-card", revision).unwrap();
+    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card", revision).unwrap();
 
     assert_eq!(embed.metadata_status, "failed");
     assert_eq!(embed.source_url, "https://example.com/page");
     assert_eq!(embed.title, "https://example.com/page");
     assert!(embed.metadata_error.unwrap().contains("offline"));
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 0);
+    assert_eq!(t.asset_files(), 0, "a failed fetch stages nothing");
+}
+
+#[test]
+fn enrich_reuses_a_cached_favicon_without_fetching_it_again() {
+    let t = TestWorkspace::new("favicon-cache");
+    let first_rev = t.create_pending_embed("first", "https://example.com/page");
+    let second_rev = t.create_pending_embed("second", "https://example.com/page");
+    let page = br#"<meta property="og:title" content="T"><link rel="icon" href="https://example.com/favicon.png">"#;
+
+    let fetcher = StubFetcher::new(html_page(page), png(b"ICON"));
+    let first = enrich_embed_blocking(&t.ws, &fetcher, "first", first_rev).unwrap();
+    assert_eq!(fetcher.image_calls(), 1);
+
+    // The second card hits the cache: nothing is fetched or staged.
+    let plan =
+        t.ws.read_blocking(|conn| {
+            plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "second", second_rev)
+        })
+        .unwrap();
+    assert!(plan.staged_assets.is_empty());
+    assert!(plan.favicon_cache_entries.is_empty());
+    assert_eq!(fetcher.image_calls(), 1, "a cache hit does not fetch");
+    let second =
+        t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))
+            .unwrap()
+            .into_embed()
+            .unwrap();
+
+    let first_icon = first.favicon_asset.expect("first favicon").id;
+    assert_eq!(second.favicon_asset.map(|a| a.id), Some(first_icon));
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 1);
+    assert_eq!(t.count("SELECT COUNT(*) FROM favicon_cache"), 1);
+}
+
+#[test]
+fn a_stale_apply_discards_staged_files_and_records_no_rows() {
+    let t = TestWorkspace::new("stale");
+    let revision = t.create_pending_embed("link-card", "https://example.com/page");
+    let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"image-bytes"));
+
+    let plan =
+        t.ws.read_blocking(|conn| {
+            plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "link-card", revision)
+        })
+        .unwrap();
+    assert_eq!(plan.staged_assets.len(), 2);
+    assert!(plan.staged_assets.iter().all(|s| s.file_abs.exists()));
+    let staged: Vec<PathBuf> = plan
+        .staged_assets
+        .iter()
+        .map(|s| s.file_abs.clone())
+        .collect();
+
+    // The user edits the card while the fetch is in flight.
+    t.ws.apply_blocking(Mutation::UpdateEmbedDescription(
+        UpdateEmbedDescriptionInput {
+            id: "link-card".to_string(),
+            expected_revision: revision,
+            description_json: serde_json::json!({"type":"doc"}),
+            description_plain_text: "edited".to_string(),
+        },
+    ))
+    .unwrap();
+
+    let result =
+        t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)));
+    assert!(result.is_err(), "a stale plan must not apply");
+    assert!(staged.iter().all(|p| !p.exists()), "staged files discarded");
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 0);
+    assert_eq!(t.count("SELECT COUNT(*) FROM favicon_cache"), 0);
 }
 
 #[test]
 fn enrich_preserves_a_user_authored_description() {
-    let mut conn = open_in_memory().unwrap();
-    let revision = create_pending_embed(&mut conn, "https://example.com/page");
-    let tmp = std::env::temp_dir().join(format!("myspace-user-desc-{}", uuid::Uuid::now_v7()));
-    let asset_dir = tmp.join("assets");
-    fs::create_dir_all(&asset_dir).unwrap();
+    let t = TestWorkspace::new("user-desc");
+    let revision = t.create_pending_embed("link-card", "https://example.com/page");
 
     // A user-authored comment is set before enrichment.
-    workspace_repository::update_embed_description(
-        &mut conn,
-        &UpdateEmbedDescriptionInput {
+    t.ws
+        .apply_blocking(Mutation::UpdateEmbedDescription(UpdateEmbedDescriptionInput {
             id: "link-card".to_string(),
             expected_revision: revision,
             description_json: serde_json::json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"мой комментарий"}]}]}),
             description_plain_text: "мой комментарий".to_string(),
-        },
-    )
-    .unwrap();
+        }))
+        .unwrap();
 
-    let fetcher = StubFetcher {
-        page: Ok(FetchResponse {
-            final_url: "https://example.com/page".to_string(),
-            mime_type: "text/html".to_string(),
-            bytes: br#"
+    let fetcher = StubFetcher::new(
+        html_page(
+            br#"
               <html><head>
                 <meta property="og:title" content="Site Title">
                 <meta property="og:description" content="Site Description">
               </head></html>
-            "#
-            .to_vec(),
-        }),
-        image: None,
-    };
+            "#,
+        ),
+        None,
+    );
 
     // Enrichment runs against revision 2 (the description bump).
-    let embed =
-        enrich_embed_with_metadata(&mut conn, &asset_dir, &fetcher, "link-card", revision + 1)
-            .unwrap();
+    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card", revision + 1).unwrap();
 
     assert_eq!(embed.metadata_status, "ready");
     assert_eq!(embed.title, "Site Title");
     // The user's comment wins over the fetched site description.
     assert_eq!(embed.description_plain_text, "мой комментарий");
     assert_eq!(embed.description_origin.as_deref(), Some("user"));
-
-    fs::remove_dir_all(&tmp).ok();
 }
 
 #[test]
 fn enrich_marks_a_fetched_description_as_site_origin() {
-    let mut conn = open_in_memory().unwrap();
-    let revision = create_pending_embed(&mut conn, "https://example.com/page");
-    let tmp = std::env::temp_dir().join(format!("myspace-site-desc-{}", uuid::Uuid::now_v7()));
-    let asset_dir = tmp.join("assets");
-    fs::create_dir_all(&asset_dir).unwrap();
+    let t = TestWorkspace::new("site-desc");
+    let revision = t.create_pending_embed("link-card", "https://example.com/page");
 
     // No user comment: enrichment fills the description from the site.
-    let fetcher = StubFetcher {
-        page: Ok(FetchResponse {
-            final_url: "https://example.com/page".to_string(),
-            mime_type: "text/html".to_string(),
-            bytes: br#"
+    let fetcher = StubFetcher::new(
+        html_page(
+            br#"
               <html><head>
                 <meta property="og:title" content="Site Title">
                 <meta property="og:description" content="Site Description">
               </head></html>
-            "#
-            .to_vec(),
-        }),
-        image: None,
-    };
+            "#,
+        ),
+        None,
+    );
 
-    let embed =
-        enrich_embed_with_metadata(&mut conn, &asset_dir, &fetcher, "link-card", revision).unwrap();
+    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card", revision).unwrap();
 
     assert_eq!(embed.description_plain_text, "Site Description");
     assert_eq!(embed.description_origin.as_deref(), Some("site"));
-
-    fs::remove_dir_all(&tmp).ok();
 }
 
 #[test]

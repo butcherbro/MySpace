@@ -36,8 +36,7 @@ pub async fn load_board_snapshot(
 pub async fn get_home_board(ws: State<'_, Workspace>) -> Result<BoardSummary, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("get_home_board", async move {
-        ws.read(|conn| workspace_repository::load_home_board(conn))
-            .await
+        ws.read(workspace_repository::load_home_board).await
     })
     .await
 }

@@ -24,15 +24,14 @@ use crate::app::WorkspacePaths;
 use crate::domain::asset_service::{self, StagedAsset};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    AddQuickBoardInput, ApplyEmbedMetadataInput, AssetDto, CardDto, ConvertNoteToEmbedInput,
-    CreateBoardShortcutInput, CreateChildBoardInput, CreateFileCardInput,
-    CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput,
-    CreateLinkBatchResult, CreateNoteInput, DuplicateBoardInput, DuplicateBoardReceipt,
-    EmbedCardDto, EmptyTrashResult, MoveBoardInput, MoveCardToBoardInput, MoveCardsInput,
-    MoveCardsToUnsortedInput, MoveSelectionToBoardInput, MoveSelectionToBoardReceipt,
-    PlaceUnsortedCardInput, ReorderQuickBoardsInput, SetNoteColorInput, TrashSelectionInput,
-    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
-    UpdateViewportInput,
+    AddQuickBoardInput, AssetDto, CardDto, ConvertNoteToEmbedInput, CreateBoardShortcutInput,
+    CreateChildBoardInput, CreateFileCardInput, CreateFilesystemAliasInput, CreateImageCardInput,
+    CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, DuplicateBoardInput,
+    DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult, MoveBoardInput, MoveCardToBoardInput,
+    MoveCardsInput, MoveCardsToUnsortedInput, MoveSelectionToBoardInput,
+    MoveSelectionToBoardReceipt, PlaceUnsortedCardInput, ReorderQuickBoardsInput,
+    SetNoteColorInput, TrashSelectionInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
+    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput,
 };
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::workspace_repository as repo;
@@ -107,14 +106,10 @@ pub enum Mutation {
         display_name: String,
     },
     /// Asset rows + card rows for a dropped file, in one transaction. All file
-    /// I/O (copy, preview, Quick Look) happened before this was queued.
-    CommitFileCard {
-        input: CreateFileCardInput,
-        asset: AssetDto,
-        new_asset: Option<StagedAsset>,
-        preview_text: String,
-        thumbnail: Option<StagedAsset>,
-    },
+    /// I/O (copy, preview, Quick Look) happened before this was queued. Boxed:
+    /// it is by far the largest payload and would otherwise size every
+    /// `Mutation` that crosses the writer queue.
+    CommitFileCard(Box<CommitFileCard>),
 
     // ---- link cards (MCP + enrichment) -----------------------------------
     CreateLinkBatch(CreateLinkBatchInput),
@@ -122,12 +117,24 @@ pub enum Mutation {
     TrashLinkBatch {
         agent_batch_id: String,
     },
-    /// The write half of link enrichment: the network phase ran elsewhere.
-    ApplyEmbedMetadata(ApplyEmbedMetadataInput),
+    /// The write half of link enrichment: the network phase ran elsewhere
+    /// (`link_metadata::plan_embed_enrichment`) and staged the images. Records
+    /// the staged asset rows, the favicon-cache rows and the card update; on
+    /// error the staged files are discarded here (the writer owns the plan).
+    ApplyEmbedMetadata(Box<link_metadata::EmbedEnrichmentPlan>),
 
     // ---- maintenance (startup, background) -------------------------------
     CollapseFaviconDuplicates,
     CollectOrphanedAssets,
+}
+
+/// Payload of [`Mutation::CommitFileCard`].
+pub struct CommitFileCard {
+    pub input: CreateFileCardInput,
+    pub asset: AssetDto,
+    pub new_asset: Option<StagedAsset>,
+    pub preview_text: String,
+    pub thumbnail: Option<StagedAsset>,
 }
 
 /// What a mutation produced. Callers use the `into_*` accessors; a mismatch is
@@ -138,7 +145,8 @@ pub enum MutationOutcome {
     Id(String),
     Count(i64),
     Card(CardDto),
-    Embed(EmbedCardDto),
+    /// Boxed: the embed projection is the largest outcome by far.
+    Embed(Box<EmbedCardDto>),
     MoveSelectionReceipt(MoveSelectionToBoardReceipt),
     DuplicateBoardReceipt(DuplicateBoardReceipt),
     EmptyTrash(EmptyTrashResult),
@@ -176,11 +184,13 @@ impl MutationOutcome {
     }
     pub fn into_embed(self) -> Result<EmbedCardDto, WorkspaceError> {
         match self {
-            Self::Embed(card) => Ok(card),
+            Self::Embed(card) => Ok(*card),
             _ => Err(unexpected("embed card")),
         }
     }
-    pub fn into_move_selection_receipt(self) -> Result<MoveSelectionToBoardReceipt, WorkspaceError> {
+    pub fn into_move_selection_receipt(
+        self,
+    ) -> Result<MoveSelectionToBoardReceipt, WorkspaceError> {
         match self {
             Self::MoveSelectionReceipt(r) => Ok(r),
             _ => Err(unexpected("move-selection receipt")),
@@ -243,7 +253,7 @@ impl Mutation {
             Self::InsertAsset(_) => "asset.insert",
             Self::CreateFilesystemAlias(_) => "card.create_filesystem_alias",
             Self::RefreshFilesystemAliasLocator { .. } => "card.refresh_alias_locator",
-            Self::CommitFileCard { .. } => "card.create_file",
+            Self::CommitFileCard(_) => "card.create_file",
             Self::CreateLinkBatch(_) => "link_batch.create",
             Self::TrashLinkBatch { .. } => "link_batch.trash",
             Self::ApplyEmbedMetadata(_) => "card.apply_embed_metadata",
@@ -284,7 +294,7 @@ impl Mutation {
                 repo::place_unsorted_card(conn, input).map(|_| Out::Unit)
             }
             Self::ConvertNoteToEmbed(input) => {
-                repo::convert_note_to_embed(conn, input).map(Out::Embed)
+                repo::convert_note_to_embed(conn, input).map(|c| Out::Embed(Box::new(c)))
             }
             Self::UpdateEmbedDescription(input) => {
                 repo::update_embed_description(conn, input).map(|_| Out::Unit)
@@ -316,9 +326,7 @@ impl Mutation {
             Self::TrashBoard { board_id } => {
                 trash_service::trash_board(conn, board_id).map(Out::Id)
             }
-            Self::TrashSelection(input) => {
-                trash_service::trash_selection(conn, input).map(Out::Id)
-            }
+            Self::TrashSelection(input) => trash_service::trash_selection(conn, input).map(Out::Id),
             Self::RestoreTrashBatch { batch_id } => {
                 trash_service::restore_trash_batch(conn, batch_id).map(|_| Out::Unit)
             }
@@ -344,7 +352,9 @@ impl Mutation {
                 repo::reorder_quick_boards(conn, input).map(|_| Out::Unit)
             }
 
-            Self::InsertAsset(asset) => asset_service::insert_asset_row(conn, asset).map(|_| Out::Unit),
+            Self::InsertAsset(asset) => {
+                asset_service::insert_asset_row(conn, asset).map(|_| Out::Unit)
+            }
             Self::CreateFilesystemAlias(input) => {
                 repo::create_filesystem_alias(conn, input).map(|_| Out::Unit)
             }
@@ -361,32 +371,28 @@ impl Mutation {
                 display_name,
             )
             .map(|_| Out::Unit),
-            Self::CommitFileCard {
-                input,
-                asset,
-                new_asset,
-                preview_text,
-                thumbnail,
-            } => {
+            Self::CommitFileCard(job) => {
                 asset_service::commit_file_card(
                     conn,
-                    input,
-                    asset,
-                    new_asset.as_ref(),
-                    preview_text,
-                    thumbnail.as_ref(),
+                    &job.input,
+                    &job.asset,
+                    job.new_asset.as_ref(),
+                    &job.preview_text,
+                    job.thumbnail.as_ref(),
                 )?;
                 // Return the persisted projection so the caller sees exactly
                 // what was stored (thumbnail included) without a reload.
-                repo::load_card(conn, &input.id).map(Out::Card)
+                repo::load_card(conn, &job.input.id).map(Out::Card)
             }
 
-            Self::CreateLinkBatch(input) => repo::create_link_batch(conn, input).map(Out::LinkBatch),
+            Self::CreateLinkBatch(input) => {
+                repo::create_link_batch(conn, input).map(Out::LinkBatch)
+            }
             Self::TrashLinkBatch { agent_batch_id } => {
                 trash_link_batch(conn, agent_batch_id).map(Out::Id)
             }
-            Self::ApplyEmbedMetadata(input) => {
-                repo::apply_embed_metadata(conn, input).map(Out::Embed)
+            Self::ApplyEmbedMetadata(plan) => {
+                link_metadata::commit_embed_enrichment(conn, plan).map(|c| Out::Embed(Box::new(c)))
             }
 
             Self::CollapseFaviconDuplicates => {

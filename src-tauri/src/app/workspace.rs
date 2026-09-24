@@ -87,7 +87,7 @@ impl WorkspacePaths {
 enum WriterJob {
     /// A domain mutation: executed with bounded busy-retry, instrumented.
     Mutate {
-        mutation: Mutation,
+        mutation: Box<Mutation>,
         reply: oneshot::Sender<Result<MutationOutcome, WorkspaceError>>,
         enqueued: Instant,
     },
@@ -246,7 +246,7 @@ impl Workspace {
     ) -> Result<oneshot::Receiver<Result<MutationOutcome, WorkspaceError>>, WorkspaceError> {
         let (reply, rx) = oneshot::channel();
         let job = WriterJob::Mutate {
-            mutation,
+            mutation: Box::new(mutation),
             reply,
             enqueued: Instant::now(),
         };
@@ -363,7 +363,12 @@ fn run_mutation(
             Err(err) if err.is_busy() && attempt < BUSY_RETRIES => {
                 attempt += 1;
                 let backoff = busy_backoff(attempt);
-                tracing::warn!(op = name, attempt, backoff_ms = backoff.as_millis() as u64, "mutation: database busy, retrying");
+                tracing::warn!(
+                    op = name,
+                    attempt,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "mutation: database busy, retrying"
+                );
                 thread::sleep(backoff);
             }
             other => break other,
@@ -374,9 +379,22 @@ fn run_mutation(
     let slow = started.elapsed() > crate::telemetry::SLOW_COMMAND_THRESHOLD;
     match &result {
         Ok(_) if slow => {
-            tracing::warn!(op = name, queue_ms, exec_ms, retries = attempt, outcome = "ok", slow = true)
+            tracing::warn!(
+                op = name,
+                queue_ms,
+                exec_ms,
+                retries = attempt,
+                outcome = "ok",
+                slow = true
+            )
         }
-        Ok(_) => tracing::info!(op = name, queue_ms, exec_ms, retries = attempt, outcome = "ok"),
+        Ok(_) => tracing::info!(
+            op = name,
+            queue_ms,
+            exec_ms,
+            retries = attempt,
+            outcome = "ok"
+        ),
         Err(err) => tracing::warn!(
             op = name,
             queue_ms,

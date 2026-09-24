@@ -9,6 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CreateChildBoardInput, MoveBoardInput};
+use crate::repositories::immediate_tx;
 
 use super::super::db;
 
@@ -41,9 +42,13 @@ pub fn create_child_board(
     let now = db::migrations::now_millis();
     let color = deterministic_color_token(&input.board_id);
 
+    // BEGIN IMMEDIATE before the guards so the replay/parent checks and the
+    // inserts are atomic against another writer process.
+    let tx = immediate_tx(conn)?;
+
     // Idempotent replay: if the board id already exists, verify it matches the
     // same parent and return without creating anything new.
-    let existing_parent: Option<String> = conn
+    let existing_parent: Option<String> = tx
         .query_row(
             "SELECT parent_board_id FROM boards WHERE id = ?1",
             [input.board_id.as_str()],
@@ -61,7 +66,7 @@ pub fn create_child_board(
     }
 
     // The parent must exist and not be trashed.
-    let parent_exists: i64 = conn.query_row(
+    let parent_exists: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
         [input.parent_board_id.as_str()],
         |r| r.get(0),
@@ -70,7 +75,6 @@ pub fn create_child_board(
         return Err(WorkspaceError::NotFound(input.parent_board_id.clone()));
     }
 
-    let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at)
          VALUES (?1, (SELECT workspace_id FROM boards WHERE id = ?2), ?2, ?3, ?4, NULL, 1, ?5, ?5)",
@@ -141,8 +145,12 @@ pub fn rename_board(
 pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
 
+    // BEGIN IMMEDIATE before the guards so every validation below and the
+    // updates are atomic against another writer process.
+    let tx = immediate_tx(conn)?;
+
     // Source board must exist and be a non-root (movable) board.
-    let (src_parent, src_workspace, src_revision): (Option<String>, String, i64) = conn
+    let (src_parent, src_workspace, src_revision): (Option<String>, String, i64) = tx
         .query_row(
             "SELECT parent_board_id, workspace_id, revision FROM boards WHERE id = ?1 AND deleted_at IS NULL",
             [input.board_id.as_str()],
@@ -164,7 +172,7 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
     }
 
     // Target parent must be a live board in the same workspace.
-    let target_workspace: String = conn
+    let target_workspace: String = tx
         .query_row(
             "SELECT workspace_id FROM boards WHERE id = ?1 AND deleted_at IS NULL",
             [input.target_parent_board_id.as_str()],
@@ -179,7 +187,7 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
     }
 
     // Cycle guard: reject if the target parent lies inside the source subtree.
-    let is_descendant: i64 = conn.query_row(
+    let is_descendant: i64 = tx.query_row(
         "WITH RECURSIVE subtree(id, parent_board_id) AS (
             SELECT id, parent_board_id FROM boards WHERE id = ?1
             UNION ALL
@@ -199,7 +207,7 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
 
     // Resolve the unique portal card by its target board id (do not trust a
     // frontend-supplied portal id).
-    let (portal_card_id, portal_revision): (String, i64) = conn
+    let (portal_card_id, portal_revision): (String, i64) = tx
         .query_row(
             "SELECT c.id, c.revision
              FROM board_portal_cards p JOIN cards c ON c.id = p.card_id
@@ -228,8 +236,6 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
     // (The upcoming atomic mixed-selection move, ADR-0007, chooses the free slot
     // itself and records it in its receipt instead.)
     let (dest_x, dest_y) = (input.frame.x, input.frame.y);
-
-    let tx = conn.transaction()?;
 
     let board_changed = tx.execute(
         "UPDATE boards SET parent_board_id = ?1, revision = revision + 1, updated_at = ?2 WHERE id = ?3 AND revision = ?4",
@@ -309,9 +315,10 @@ pub fn set_board_cover(
     board_id: &str,
     asset_id: Option<&str>,
 ) -> Result<(), WorkspaceError> {
+    let tx = immediate_tx(conn)?;
     let changed = match asset_id {
         Some(asset_id) => {
-            let asset_exists: i64 = conn.query_row(
+            let asset_exists: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM assets WHERE id = ?1",
                 [asset_id],
                 |r| r.get(0),
@@ -319,12 +326,12 @@ pub fn set_board_cover(
             if asset_exists == 0 {
                 return Err(WorkspaceError::NotFound(asset_id.to_string()));
             }
-            conn.execute(
+            tx.execute(
                 "UPDATE boards SET cover_asset_id = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
                 params![asset_id, db::migrations::now_millis(), board_id],
             )?
         }
-        None => conn.execute(
+        None => tx.execute(
             "UPDATE boards SET cover_asset_id = NULL, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
             params![db::migrations::now_millis(), board_id],
         )?,
@@ -333,5 +340,6 @@ pub fn set_board_cover(
     if changed == 0 {
         return Err(WorkspaceError::NotFound(board_id.to_string()));
     }
+    tx.commit()?;
     Ok(())
 }

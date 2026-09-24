@@ -1,40 +1,28 @@
 //! Tauri command for asynchronous Link Card metadata enrichment.
+//!
+//! The network phase runs on a blocking task with a pooled reader; the result
+//! is applied as `Mutation::ApplyEmbedMetadata` on the writer thread (see
+//! `domain::link_metadata::enrich_embed`). The command opens no connection.
 
-use tauri::{AppHandle, Manager};
+use std::sync::Arc;
 
-use crate::db;
+use tauri::State;
+
+use crate::app::Workspace;
 use crate::domain::errors::WorkspaceError;
-use crate::domain::link_metadata::{enrich_embed_with_metadata, ReqwestMetadataFetcher};
+use crate::domain::link_metadata::{enrich_embed, ReqwestMetadataFetcher};
 use crate::domain::models::{EmbedCardDto, EnrichEmbedMetadataInput};
+use crate::telemetry::instrument_async;
 
 #[tauri::command]
 pub async fn enrich_embed_metadata(
-    app: AppHandle,
+    ws: State<'_, Workspace>,
     input: EnrichEmbedMetadataInput,
 ) -> Result<EmbedCardDto, WorkspaceError> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| WorkspaceError::Database(format!("failed to resolve app data dir: {e}")))?;
-    let db_path = data_dir.join("workspace.sqlite3");
-    let asset_dir = data_dir.join("assets");
-
-    // reqwest blocking runs outside Tauri's async executor. This connection is
-    // independent from the UI command mutex and holds no transaction while the
-    // network fetch is in flight.
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::telemetry::instrument("enrich_embed_metadata", move || {
-            let fetcher = ReqwestMetadataFetcher::new()?;
-            let mut conn = db::open(&db_path)?;
-            enrich_embed_with_metadata(
-                &mut conn,
-                &asset_dir,
-                &fetcher,
-                &input.id,
-                input.expected_revision,
-            )
-        })
+    let ws = ws.inner().clone();
+    instrument_async("enrich_embed_metadata", async move {
+        let fetcher = Arc::new(ReqwestMetadataFetcher::new()?);
+        enrich_embed(&ws, fetcher, input.id, input.expected_revision).await
     })
     .await
-    .map_err(|e| WorkspaceError::Database(format!("metadata task failed: {e}")))?
 }

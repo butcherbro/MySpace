@@ -13,9 +13,9 @@
 
 use std::io::{BufRead, Write};
 
-use myspace_lib::db;
+use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::domain::errors::WorkspaceError;
-use myspace_lib::domain::link_metadata::{enrich_embed_with_metadata, ReqwestMetadataFetcher};
+use myspace_lib::domain::link_metadata::{enrich_embed_blocking, ReqwestMetadataFetcher};
 use myspace_lib::domain::models::{CreateLinkBatchInput, LinkBatchItem};
 use myspace_lib::services::workspace_service::{parse_address, WorkspaceService};
 
@@ -24,8 +24,9 @@ const SERVER_NAME: &str = "myspace-mcp";
 const SERVER_VERSION: &str = "0.1.0";
 
 /// Reads a DB path from `--db <path>` or falls back to the default macOS
-/// Application Support location. Returns (db_path, asset_dir).
-fn resolve_paths() -> (String, String) {
+/// Application Support location. Returns the workspace data dir (the DB
+/// path's parent), which is what `WorkspacePaths::new` expects.
+fn resolve_data_dir() -> std::path::PathBuf {
     let mut db_path = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -39,12 +40,10 @@ fn resolve_paths() -> (String, String) {
         let home = std::env::var("HOME").unwrap_or_default();
         format!("{home}/Library/Application Support/com.bro.myspace/workspace.sqlite3")
     });
-    // Assets live next to the DB in `<data_dir>/assets`.
-    let asset_dir = std::path::Path::new(&db_path)
+    std::path::Path::new(&db_path)
         .parent()
-        .map(|p| p.join("assets").to_string_lossy().to_string())
-        .unwrap_or_default();
-    (db_path, asset_dir)
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default()
 }
 
 fn send_response(w: &mut impl Write, id: &serde_json::Value, result: serde_json::Value) {
@@ -157,11 +156,15 @@ fn resolve_board_id(board_arg: &str) -> Result<String, WorkspaceError> {
 }
 
 fn main() {
-    let (db_path, asset_dir) = resolve_paths();
-    let mut conn = match db::open_readonly_checked(std::path::Path::new(&db_path)) {
-        Ok(conn) => conn,
+    let data_dir = resolve_data_dir();
+    let db_path = WorkspacePaths::new(&data_dir).db_path();
+    let ws = match Workspace::open_existing(WorkspacePaths::new(&data_dir)) {
+        Ok(ws) => ws,
         Err(err) => {
-            eprintln!("myspace-mcp: failed to open workspace db at {db_path}: {err}");
+            eprintln!(
+                "myspace-mcp: failed to open workspace db at {}: {err}",
+                db_path.display()
+            );
             std::process::exit(1);
         }
     };
@@ -214,7 +217,7 @@ fn main() {
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
 
-                match handle_tool_call(&mut conn, &asset_dir, name, &arguments) {
+                match handle_tool_call(&ws, name, &arguments) {
                     Ok(result) => {
                         send_response(
                             &mut out,
@@ -242,14 +245,13 @@ fn main() {
 }
 
 fn handle_tool_call(
-    conn: &mut rusqlite::Connection,
-    asset_dir: &str,
+    ws: &Workspace,
     name: &str,
     arguments: &serde_json::Value,
 ) -> Result<String, String> {
     match name {
         "list_boards" => {
-            let boards = WorkspaceService::list_boards(conn).map_err(|e| e.to_string())?;
+            let boards = WorkspaceService::list_boards(ws).map_err(|e| e.to_string())?;
             let items: Vec<serde_json::Value> = boards
                 .into_iter()
                 .map(|b| {
@@ -273,17 +275,17 @@ fn handle_tool_call(
                 .ok_or_else(|| "missing 'title' argument".to_string())?;
             let parent_id = match arguments.get("parentBoardId").and_then(|v| v.as_str()) {
                 Some(p) => resolve_board_id(p).map_err(|e| e.to_string())?,
-                None => {
-                    let root: String = conn
-                        .query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+                None => ws
+                    .read_blocking(|conn| {
+                        conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
                             r.get(0)
                         })
-                        .map_err(|e| e.to_string())?;
-                    root
-                }
+                        .map_err(myspace_lib::domain::errors::WorkspaceError::from)
+                    })
+                    .map_err(|e| e.to_string())?,
             };
-            let board_id = WorkspaceService::create_board(conn, &parent_id, title)
-                .map_err(|e| e.to_string())?;
+            let board_id =
+                WorkspaceService::create_board(ws, &parent_id, title).map_err(|e| e.to_string())?;
             Ok(serde_json::to_string_pretty(&serde_json::json!(
                 { "boardId": board_id, "address": format!("myspace://board/{}", board_id) }
             ))
@@ -295,7 +297,7 @@ fn handle_tool_call(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing 'board' argument".to_string())?;
             let id = resolve_board_id(board_arg).map_err(|e| e.to_string())?;
-            let snapshot = WorkspaceService::read_board(conn, &id).map_err(|e| e.to_string())?;
+            let snapshot = WorkspaceService::read_board(ws, &id).map_err(|e| e.to_string())?;
             Ok(serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?)
         }
         "read_card" => {
@@ -311,7 +313,7 @@ fn handle_tool_call(
             } else {
                 card_arg.to_string()
             };
-            let card = WorkspaceService::read_card(conn, &id).map_err(|e| e.to_string())?;
+            let card = WorkspaceService::read_card(ws, &id).map_err(|e| e.to_string())?;
             Ok(serde_json::to_string_pretty(&card).map_err(|e| e.to_string())?)
         }
         "add_links" => {
@@ -359,7 +361,7 @@ fn handle_tool_call(
                 .collect::<Result<Vec<_>, String>>()?;
 
             let result = WorkspaceService::create_link_batch(
-                conn,
+                ws,
                 &CreateLinkBatchInput {
                     idempotency_key: idempotency_key.to_string(),
                     board_id,
@@ -400,7 +402,7 @@ fn handle_tool_call(
                 // Resolve the card's current revision first: enrichment is guarded
                 // by an optimistic revision, and agent-created cards may already
                 // have been enriched/edited (revision > 1).
-                let revision = match WorkspaceService::read_card(conn, id) {
+                let revision = match WorkspaceService::read_card(ws, id) {
                     Ok(card) => match &card {
                         myspace_lib::domain::models::CardDto::Note(n) => n.revision,
                         myspace_lib::domain::models::CardDto::BoardPortal(p) => p.revision,
@@ -415,13 +417,7 @@ fn handle_tool_call(
                         continue;
                     }
                 };
-                match enrich_embed_with_metadata(
-                    conn,
-                    std::path::Path::new(asset_dir),
-                    &fetcher,
-                    id,
-                    revision,
-                ) {
+                match enrich_embed_blocking(ws, &fetcher, id, revision) {
                     Ok(embed) => results.push(
                         serde_json::json!({ "id": id, "status": "ready", "title": embed.title }),
                     ),
@@ -441,7 +437,7 @@ fn handle_tool_call(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing 'batchId' argument".to_string())?;
             let trash_batch_id =
-                WorkspaceService::trash_link_batch(conn, batch_id).map_err(|e| e.to_string())?;
+                WorkspaceService::trash_link_batch(ws, batch_id).map_err(|e| e.to_string())?;
             Ok(
                 serde_json::to_string_pretty(
                     &serde_json::json!({ "trashBatchId": trash_batch_id }),

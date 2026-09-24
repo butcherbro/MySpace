@@ -1,60 +1,65 @@
 //! Quick Boards Tauri commands: persisted, ordered references to Boards.
 
-use std::sync::Mutex;
-
-use rusqlite::Connection;
 use tauri::State;
 
+use crate::app::Workspace;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{AddQuickBoardInput, QuickBoardDto, ReorderQuickBoardsInput};
-use crate::services::workspace_service::WorkspaceService;
-
-/// The application-wide SQLite connection, guarded so commands can share it.
-pub type DbState<'a> = State<'a, Mutex<Connection>>;
+use crate::domain::mutation::Mutation;
+use crate::repositories::workspace_repository;
+use crate::telemetry::instrument_async;
 
 /// Lists Quick Boards in persisted order.
 #[tauri::command]
-pub fn list_quick_boards(db: DbState<'_>) -> Result<Vec<QuickBoardDto>, WorkspaceError> {
-    crate::telemetry::instrument("list_quick_boards", move || {
-        let conn = db
-            .lock()
-            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-        WorkspaceService::list_quick_boards(&conn)
+pub async fn list_quick_boards(
+    ws: State<'_, Workspace>,
+) -> Result<Vec<QuickBoardDto>, WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("list_quick_boards", async move {
+        ws.read(workspace_repository::list_quick_boards).await
     })
+    .await
 }
 
 /// Adds a Quick Board reference idempotently (non-Home, active Board only).
 #[tauri::command]
-pub fn add_quick_board(db: DbState<'_>, input: AddQuickBoardInput) -> Result<(), WorkspaceError> {
-    crate::telemetry::instrument("add_quick_board", move || {
-        let mut conn = db
-            .lock()
-            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-        WorkspaceService::add_quick_board(&mut conn, &input)
+pub async fn add_quick_board(
+    ws: State<'_, Workspace>,
+    input: AddQuickBoardInput,
+) -> Result<(), WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("add_quick_board", async move {
+        ws.apply(Mutation::AddQuickBoard(input)).await?.into_unit()
     })
+    .await
 }
 
 /// Removes a Quick Board reference.
 #[tauri::command]
-pub fn remove_quick_board(db: DbState<'_>, board_id: String) -> Result<(), WorkspaceError> {
-    crate::telemetry::instrument("remove_quick_board", move || {
-        let mut conn = db
-            .lock()
-            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-        WorkspaceService::remove_quick_board(&mut conn, &board_id)
+pub async fn remove_quick_board(
+    ws: State<'_, Workspace>,
+    board_id: String,
+) -> Result<(), WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("remove_quick_board", async move {
+        ws.apply(Mutation::RemoveQuickBoard { board_id })
+            .await?
+            .into_unit()
     })
+    .await
 }
 
 /// Reorders Quick Board references transactionally.
 #[tauri::command]
-pub fn reorder_quick_boards(
-    db: DbState<'_>,
+pub async fn reorder_quick_boards(
+    ws: State<'_, Workspace>,
     input: ReorderQuickBoardsInput,
 ) -> Result<(), WorkspaceError> {
-    crate::telemetry::instrument("reorder_quick_boards", move || {
-        let mut conn = db
-            .lock()
-            .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-        WorkspaceService::reorder_quick_boards(&mut conn, &input)
+    let ws = ws.inner().clone();
+    instrument_async("reorder_quick_boards", async move {
+        ws.apply(Mutation::ReorderQuickBoards(input))
+            .await?
+            .into_unit()
     })
+    .await
 }

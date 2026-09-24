@@ -3,6 +3,7 @@
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{MoveSelectionToBoardInput, MoveSelectionToBoardReceipt};
+use crate::repositories::immediate_tx;
 use std::collections::HashSet;
 
 /// Canonical fingerprint of a mixed-selection request.
@@ -185,14 +186,19 @@ pub fn move_selection_to_board(
         Frame, MoveSelectionToBoardReceipt, MovedBoardReceipt, MovedCardReceipt,
     };
     use crate::repositories::workspace_repository as repo;
-    use rusqlite::{params, TransactionBehavior};
+    use rusqlite::params;
 
     validate_selection_shape(input)?;
     let fingerprint = request_fingerprint(input)?;
 
+    let now = crate::db::migrations::now_millis();
+    // BEGIN IMMEDIATE before the replay guard: two writers replaying the same
+    // key must not both miss the receipt and both apply the move.
+    let tx = immediate_tx(conn)?;
+
     // Replay guard: the same key returns the receipt the first call produced.
     if let Some(stored) =
-        repo::find_operation_receipt(conn, MOVE_SELECTION_OPERATION_KIND, &input.idempotency_key)?
+        repo::find_operation_receipt(&tx, MOVE_SELECTION_OPERATION_KIND, &input.idempotency_key)?
     {
         if stored.request_fingerprint != fingerprint {
             return Err(WorkspaceError::ConstraintViolation(
@@ -201,9 +207,6 @@ pub fn move_selection_to_board(
         }
         return decode_receipt(&stored.receipt_json);
     }
-
-    let now = crate::db::migrations::now_millis();
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     // Read and validate everything before the first write.
     let state = repo::read_selection_pre_state(&tx, input)?;
@@ -341,10 +344,10 @@ pub fn undo_move_selection(
     conn: &mut rusqlite::Connection,
     receipt: &MoveSelectionToBoardReceipt,
 ) -> Result<(), WorkspaceError> {
-    use rusqlite::{params, TransactionBehavior};
+    use rusqlite::params;
 
     let now = crate::db::migrations::now_millis();
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = immediate_tx(conn)?;
 
     for card in &receipt.cards {
         let restored = tx.execute(

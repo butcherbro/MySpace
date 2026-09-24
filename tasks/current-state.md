@@ -14,8 +14,12 @@ heading describes 2026-09-13 and is kept for history. Current work is on
 `claude/awesome-goodall-4tfsko`: the architecture audit
 (`docs/audits/2026-09-24-architecture-audit.md`) and its P0 fixes are done with
 every gate green (cargo fmt / clippy `-D warnings` / test, vitest 451, e2e 57).
-Next is P1 per `docs/plans/2026-09-24-p1-scalability-and-sync-readiness.md`,
-shaped for device sync (ADR-0011, accepted). Backlog status lives in
+P1.1 (database off the main thread) is done: `src-tauri/src/app/workspace.rs`
+is the only owner of SQLite connections, every write is a `domain::Mutation`
+applied on one writer thread, every Tauri command is `async`, and the MCP
+binary goes through the same handle. Next is P1.2 ∥ P1.3 per
+`docs/plans/2026-09-24-p1-scalability-and-sync-readiness.md`, shaped for
+device sync (ADR-0011, accepted). Backlog status lives in
 `tasks/todo.md` → «Архитектурный аудит 2026-09-24».
 
 ## Where V1 stands

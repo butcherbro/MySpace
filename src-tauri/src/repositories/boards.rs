@@ -11,6 +11,7 @@ use crate::domain::models::{
 
 use super::super::db;
 use super::cards::load_cards;
+use super::immediate_tx;
 
 /// Persists a board's viewport, bumping its revision with an optimistic guard.
 pub fn update_viewport(
@@ -19,7 +20,10 @@ pub fn update_viewport(
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
 
-    let changed = conn.execute(
+    // One IMMEDIATE transaction so the stale-revision diagnosis below reads the
+    // same state the guarded UPDATE saw.
+    let tx = immediate_tx(conn)?;
+    let changed = tx.execute(
         "UPDATE board_view_states
          SET viewport_x = ?1, viewport_y = ?2, zoom = ?3, revision = revision + 1, updated_at = ?4
          WHERE board_id = ?5 AND revision = ?6",
@@ -34,7 +38,7 @@ pub fn update_viewport(
     )?;
 
     if changed == 0 {
-        let exists: i64 = conn.query_row(
+        let exists: i64 = tx.query_row(
             "SELECT COUNT(*) FROM board_view_states WHERE board_id = ?1",
             [input.board_id.clone()],
             |r| r.get(0),
@@ -42,7 +46,7 @@ pub fn update_viewport(
         if exists == 0 {
             return Err(WorkspaceError::NotFound(input.board_id.clone()));
         }
-        let actual: i64 = conn.query_row(
+        let actual: i64 = tx.query_row(
             "SELECT revision FROM board_view_states WHERE board_id = ?1",
             [input.board_id.clone()],
             |r| r.get(0),
@@ -53,6 +57,7 @@ pub fn update_viewport(
         });
     }
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -79,7 +84,9 @@ pub fn load_board_snapshot(
 /// Loads the Home (root) board summary.
 pub fn load_home_board(conn: &Connection) -> Result<BoardSummary, WorkspaceError> {
     let root_id: String =
-        conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| r.get(0))?;
+        conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+            r.get(0)
+        })?;
     conn.query_row(
         "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
                 ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path

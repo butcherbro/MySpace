@@ -20,6 +20,7 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AssetDto, BoardPortalDto, DuplicateBoardInput, DuplicateBoardReceipt, Frame, PortalTarget,
 };
+use crate::repositories::immediate_tx;
 
 /// The deepest a duplicated portal chain may nest before the copy is refused.
 /// A board can in principle contain itself-shaped cycles of portals only
@@ -408,10 +409,8 @@ pub fn duplicate_board(
     conn: &mut rusqlite::Connection,
     input: &DuplicateBoardInput,
 ) -> Result<DuplicateBoardReceipt, WorkspaceError> {
-    use rusqlite::TransactionBehavior;
-
     let now = crate::db::migrations::now_millis();
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = immediate_tx(conn)?;
 
     let (workspace_id, source_title, source_color, source_symbol, source_cover): (
         String,

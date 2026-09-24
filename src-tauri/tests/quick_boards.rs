@@ -1,5 +1,7 @@
 //! Quick Boards persistence tests: list / add (idempotent, non-Home) / remove /
-//! reorder, against a real UUIDv7 Home id produced by bootstrap.
+//! reorder, against a real UUIDv7 Home id produced by bootstrap. Exercises the
+//! repository directly; the service-through-Workspace path is covered by
+//! `tests/workspace_service.rs`.
 
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::board_service;
@@ -7,7 +9,6 @@ use myspace_lib::domain::models::{
     AddQuickBoardInput, CreateChildBoardInput, Frame, ReorderQuickBoardsInput,
 };
 use myspace_lib::repositories::workspace_repository;
-use myspace_lib::services::workspace_service::WorkspaceService;
 
 fn root_board_id(conn: &rusqlite::Connection) -> String {
     conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
@@ -45,7 +46,7 @@ fn home_is_a_real_uuid_v7_id() {
 fn list_starts_empty() {
     let mut conn = open_in_memory().unwrap();
     bootstrap::bootstrap(&mut conn).unwrap();
-    let quick = WorkspaceService::list_quick_boards(&conn).unwrap();
+    let quick = workspace_repository::list_quick_boards(&conn).unwrap();
     assert!(quick.is_empty());
 }
 
@@ -59,14 +60,14 @@ fn add_then_list_ordered() {
     conn.execute("UPDATE boards SET symbol = 'B!' WHERE id = 'b'", [])
         .unwrap();
 
-    WorkspaceService::add_quick_board(
+    workspace_repository::add_quick_board(
         &mut conn,
         &AddQuickBoardInput {
             board_id: "b".into(),
         },
     )
     .unwrap();
-    WorkspaceService::add_quick_board(
+    workspace_repository::add_quick_board(
         &mut conn,
         &AddQuickBoardInput {
             board_id: "a".into(),
@@ -74,7 +75,7 @@ fn add_then_list_ordered() {
     )
     .unwrap();
 
-    let quick = WorkspaceService::list_quick_boards(&conn).unwrap();
+    let quick = workspace_repository::list_quick_boards(&conn).unwrap();
     assert_eq!(
         quick
             .iter()
@@ -102,7 +103,7 @@ fn list_projects_the_board_cover_asset() {
     )
     .unwrap();
     board_service::set_board_cover(&mut conn, "a", Some("asset-a")).unwrap();
-    WorkspaceService::add_quick_board(
+    workspace_repository::add_quick_board(
         &mut conn,
         &AddQuickBoardInput {
             board_id: "a".into(),
@@ -110,7 +111,7 @@ fn list_projects_the_board_cover_asset() {
     )
     .unwrap();
 
-    let quick = WorkspaceService::list_quick_boards(&conn).unwrap();
+    let quick = workspace_repository::list_quick_boards(&conn).unwrap();
     let cover = quick[0].cover_asset.as_ref().expect("cover projection");
     assert_eq!(cover.id, "asset-a");
     assert_eq!(cover.file_path, "asset-a.png");
@@ -126,14 +127,14 @@ fn add_is_idempotent() {
     let home = root_board_id(&conn);
     board_service::create_child_board(&mut conn, &child(&home, "a", "pa", "A")).unwrap();
 
-    WorkspaceService::add_quick_board(
+    workspace_repository::add_quick_board(
         &mut conn,
         &AddQuickBoardInput {
             board_id: "a".into(),
         },
     )
     .unwrap();
-    WorkspaceService::add_quick_board(
+    workspace_repository::add_quick_board(
         &mut conn,
         &AddQuickBoardInput {
             board_id: "a".into(),
@@ -141,7 +142,7 @@ fn add_is_idempotent() {
     )
     .unwrap();
 
-    let quick = WorkspaceService::list_quick_boards(&conn).unwrap();
+    let quick = workspace_repository::list_quick_boards(&conn).unwrap();
     assert_eq!(quick.len(), 1);
 }
 
@@ -152,7 +153,7 @@ fn add_home_is_rejected() {
     let home = root_board_id(&conn);
 
     let result =
-        WorkspaceService::add_quick_board(&mut conn, &AddQuickBoardInput { board_id: home });
+        workspace_repository::add_quick_board(&mut conn, &AddQuickBoardInput { board_id: home });
     assert!(matches!(
         result,
         Err(myspace_lib::domain::errors::WorkspaceError::RootBoardProtected)
@@ -164,7 +165,7 @@ fn add_missing_board_is_not_found() {
     let mut conn = open_in_memory().unwrap();
     bootstrap::bootstrap(&mut conn).unwrap();
 
-    let result = WorkspaceService::add_quick_board(
+    let result = workspace_repository::add_quick_board(
         &mut conn,
         &AddQuickBoardInput {
             board_id: "no-such-board".into(),
@@ -186,7 +187,7 @@ fn remove_reduces_list_and_densifies_order() {
     board_service::create_child_board(&mut conn, &child(&home, "c", "pc", "C")).unwrap();
 
     for id in ["a", "b", "c"] {
-        WorkspaceService::add_quick_board(
+        workspace_repository::add_quick_board(
             &mut conn,
             &AddQuickBoardInput {
                 board_id: id.into(),
@@ -195,9 +196,9 @@ fn remove_reduces_list_and_densifies_order() {
         .unwrap();
     }
 
-    WorkspaceService::remove_quick_board(&mut conn, "b").unwrap();
+    workspace_repository::remove_quick_board(&mut conn, "b").unwrap();
 
-    let quick = WorkspaceService::list_quick_boards(&conn).unwrap();
+    let quick = workspace_repository::list_quick_boards(&conn).unwrap();
     assert_eq!(
         quick
             .iter()
@@ -214,7 +215,7 @@ fn remove_reduces_list_and_densifies_order() {
 fn remove_unknown_board_is_noop() {
     let mut conn = open_in_memory().unwrap();
     bootstrap::bootstrap(&mut conn).unwrap();
-    WorkspaceService::remove_quick_board(&mut conn, "missing").unwrap();
+    workspace_repository::remove_quick_board(&mut conn, "missing").unwrap();
 }
 
 #[test]
@@ -227,7 +228,7 @@ fn reorder_applies_full_new_order() {
     board_service::create_child_board(&mut conn, &child(&home, "c", "pc", "C")).unwrap();
 
     for id in ["a", "b", "c"] {
-        WorkspaceService::add_quick_board(
+        workspace_repository::add_quick_board(
             &mut conn,
             &AddQuickBoardInput {
                 board_id: id.into(),
@@ -236,7 +237,7 @@ fn reorder_applies_full_new_order() {
         .unwrap();
     }
 
-    WorkspaceService::reorder_quick_boards(
+    workspace_repository::reorder_quick_boards(
         &mut conn,
         &ReorderQuickBoardsInput {
             board_ids: vec!["c".into(), "a".into(), "b".into()],
@@ -244,7 +245,7 @@ fn reorder_applies_full_new_order() {
     )
     .unwrap();
 
-    let quick = WorkspaceService::list_quick_boards(&conn).unwrap();
+    let quick = workspace_repository::list_quick_boards(&conn).unwrap();
     assert_eq!(
         quick
             .iter()
@@ -263,7 +264,7 @@ fn reorder_rejects_incomplete_or_extra_ids_without_partial_writes() {
     board_service::create_child_board(&mut conn, &child(&home, "b", "pb", "B")).unwrap();
     board_service::create_child_board(&mut conn, &child(&home, "c", "pc", "C")).unwrap();
     for id in ["a", "b", "c"] {
-        WorkspaceService::add_quick_board(
+        workspace_repository::add_quick_board(
             &mut conn,
             &AddQuickBoardInput {
                 board_id: id.into(),
@@ -273,7 +274,7 @@ fn reorder_rejects_incomplete_or_extra_ids_without_partial_writes() {
     }
 
     // Wrong count (only two of three) must be rejected and leave order unchanged.
-    let result = WorkspaceService::reorder_quick_boards(
+    let result = workspace_repository::reorder_quick_boards(
         &mut conn,
         &ReorderQuickBoardsInput {
             board_ids: vec!["a".into(), "b".into()],
@@ -281,7 +282,7 @@ fn reorder_rejects_incomplete_or_extra_ids_without_partial_writes() {
     );
     assert!(result.is_err());
 
-    let quick = WorkspaceService::list_quick_boards(&conn).unwrap();
+    let quick = workspace_repository::list_quick_boards(&conn).unwrap();
     assert_eq!(
         quick
             .iter()
@@ -297,7 +298,7 @@ fn trashed_board_does_not_render_as_quick_board() {
     bootstrap::bootstrap(&mut conn).unwrap();
     let home = root_board_id(&conn);
     board_service::create_child_board(&mut conn, &child(&home, "a", "pa", "A")).unwrap();
-    WorkspaceService::add_quick_board(
+    workspace_repository::add_quick_board(
         &mut conn,
         &AddQuickBoardInput {
             board_id: "a".into(),

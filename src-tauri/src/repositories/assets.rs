@@ -8,6 +8,7 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CreateFileCardInput, CreateFilesystemAliasInput};
 
 use super::super::db;
+use super::immediate_tx;
 
 pub fn create_filesystem_alias(
     conn: &mut Connection,
@@ -18,9 +19,10 @@ pub fn create_filesystem_alias(
             "invalid alias target kind".into(),
         ));
     }
+    let tx = immediate_tx(conn)?;
     // Idempotent replay: a compatible existing alias returns unchanged; a
     // conflicting reuse of the card id is rejected (no partial rows).
-    let existing_kind: Option<String> = conn
+    let existing_kind: Option<String> = tx
         .query_row("SELECT kind FROM cards WHERE id = ?1", [&input.id], |r| {
             r.get(0)
         })
@@ -34,7 +36,6 @@ pub fn create_filesystem_alias(
         ));
     }
     let now = db::migrations::now_millis();
-    let tx = conn.transaction()?;
     tx.execute("INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at) VALUES (?1, ?2, 'filesystem_alias', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![input.id, input.board_id, input.frame.x, input.frame.y, input.frame.width, input.frame.height, input.z_index, now])?;
     tx.execute("INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES (?1, ?2, ?3, ?4, ?5)", params![input.id, input.target_kind, input.locator_blob, input.path_hint, input.display_name])?;
     tx.commit()?;
