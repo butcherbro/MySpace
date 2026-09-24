@@ -14,6 +14,8 @@ use crate::domain::models::{
     MoveBoardInput, UpdateViewportInput, ViewportReceipt,
 };
 use crate::domain::mutation::Mutation;
+use crate::repositories::boards as boards_repository;
+use crate::repositories::boards::BoardChangeSeq;
 use crate::repositories::workspace_repository;
 use crate::telemetry::instrument_async;
 
@@ -56,21 +58,30 @@ pub async fn save_viewport(
     .await
 }
 
-/// Returns SQLite's `PRAGMA data_version` as seen by the writer connection: it
-/// changes whenever *another* connection commits (the MCP server, a second app
-/// instance), never on this process's own writes. The frontend polls it to
-/// detect external writes. Runs on the writer connection on purpose; a pooled
-/// reader would report every own commit as external (P1.6 replaces this with
-/// targeted invalidation).
+/// Returns what the frontend polls to detect external writes to the open
+/// board (P1.6): `PRAGMA data_version` and the board's `change_seq`, both read
+/// on the *writer* connection in one job.
+///
+/// `data_version` changes whenever *another* connection commits (the MCP
+/// server, a second app instance), never on this process's own writes. It must
+/// run on the writer connection on purpose: a pooled reader would report every
+/// own commit as external. `change_seq` is bumped by triggers (migration 0023)
+/// for every write that touches what the board renders, whoever made it. The
+/// frontend reloads the open board only when BOTH moved since its last poll:
+/// someone else wrote, and what they wrote touched this board. Own writes
+/// (same `data_version`) never trigger a reload even though they bump
+/// `change_seq`. Reading both in one closure keeps them a consistent pair.
+///
+/// `NotFound` if the board does not exist.
 #[tauri::command]
-pub async fn get_data_version(ws: State<'_, Workspace>) -> Result<i64, WorkspaceError> {
+pub async fn get_board_change_seq(
+    ws: State<'_, Workspace>,
+    board_id: String,
+) -> Result<BoardChangeSeq, WorkspaceError> {
     let ws = ws.inner().clone();
-    instrument_async("get_data_version", async move {
-        ws.inspect_writer(|conn| {
-            conn.query_row("PRAGMA data_version", [], |r| r.get(0))
-                .map_err(WorkspaceError::from)
-        })
-        .await
+    instrument_async("get_board_change_seq", async move {
+        ws.inspect_writer(move |conn| boards_repository::get_board_change_seq(conn, &board_id))
+            .await
     })
     .await
 }

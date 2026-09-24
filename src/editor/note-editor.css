@@ -90,3 +90,18 @@
 .text-color--gray {
   color: var(--text-gray);
 }
+
+/* P1.8: idle cards render their document as static HTML (StaticDocument.tsx)
+   instead of mounting an editor. Tiptap injects its base `.ProseMirror` rules
+   only once an editor exists, and a board where nothing is being edited has
+   none — so the static root carries the text-layout part of those rules
+   itself, keeping line wrapping and whitespace identical to the editor. */
+.note-editor__static {
+  position: relative;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  -webkit-font-variant-ligatures: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0;
+}

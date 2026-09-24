@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { EmptyBoardHint } from "./app/EmptyBoardHint";
 import {
@@ -12,7 +12,7 @@ import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import { moveSelectionOntoBoard } from "./canvas/move-selection-onto-board";
 import type { CanvasCard } from "./canvas/canvas-types";
-import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
+import { renderCard as renderCardFromRegistry, type CardRenderContext } from "./cards/card-registry";
 import {
   MoveCardsCommand,
   CreateNoteCommand,
@@ -42,6 +42,7 @@ import { ContextMenu, type ContextMenuAction } from "./components/context-menu/C
 import { SearchBar } from "./search/SearchBar";
 import { useSearchController } from "./search/use-search-controller";
 import { useViewportController } from "./state/use-viewport-controller";
+import { shouldReload, type ChangeSample } from "./state/external-change-detector";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -993,8 +994,10 @@ function App() {
     [gateway],
   );
 
-  // Build the canvas projection from all cards (notes + portals).
-  const canvasCards: CanvasCard[] = state.cards.map((c) => ({
+  // Build the canvas projection from all cards (notes + portals). Memoised on
+  // `state.cards` (P1.8): the canvas diffs this array per card, and an App
+  // re-render that didn't touch the cards must hand it the same array.
+  const canvasCards: CanvasCard[] = useMemo(() => state.cards.map((c) => ({
     id: c.id,
     boardId: c.boardId,
     kind: c.kind,
@@ -1004,7 +1007,9 @@ function App() {
     targetBoardId: c.kind === "board_portal" ? c.target.id : undefined,
     portalTitle: c.kind === "board_portal" ? c.target.title : undefined,
     portalCoverAssetId: c.kind === "board_portal" ? c.target.coverAsset?.id ?? undefined : undefined,
-  }));
+  })), [state.cards]);
+  const cardsById = useMemo(() => new Map(state.cards.map((c) => [c.id, c])), [state.cards]);
+
 
   const handleCardsMoved = useCallback(
     (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
@@ -2045,30 +2050,41 @@ function App() {
     [navigateTo],
   );
 
-  // Detect external (agent) writes by polling SQLite's PRAGMA data_version. Any
-  // commit from another connection changes it; then reload the open Board so the
-  // UI reflects the external change without a manual refresh.
-  const dataVersionRef = useRef<number>(0);
+  // Detect external (agent / second instance) writes (P1.6). Every 3 s poll the
+  // open board's `get_board_change_seq`: reload the board only when another
+  // process committed (dataVersion) AND the commit touched this board
+  // (changeSeq); refresh the trash on any external commit. The decision lives
+  // in `shouldReload`; a sample for a different board just re-primes it. The
+  // same-board `snapshotLoaded` merge keeps pan, editing and selection.
+  const changeSampleRef = useRef<ChangeSample | null>(null);
+  const openBoardId = board?.id ?? null;
   useEffect(() => {
+    if (openBoardId === null) return;
     let cancelled = false;
-    // Prime the baseline once.
-    void gateway.getDataVersion().then((v) => {
-      if (!cancelled) dataVersionRef.current = v;
-    });
-    const id = setInterval(() => {
-      void gateway.getDataVersion().then((v) => {
-        if (!cancelled && v !== dataVersionRef.current && board) {
-          dataVersionRef.current = v;
-          void navigateTo(board.id);
-          void refreshTrash();
-        }
-      });
-    }, 3000);
+    const poll = () => {
+      gateway.getBoardChangeSeq(openBoardId).then(
+        (v) => {
+          if (cancelled) return;
+          const next: ChangeSample = { boardId: openBoardId, ...v };
+          const decision = shouldReload(changeSampleRef.current, next);
+          changeSampleRef.current = next;
+          if (decision.reloadBoard) void navigateTo(openBoardId);
+          if (decision.refreshTrash) void refreshTrash();
+        },
+        () => {
+          // The board may have been removed externally; the next navigation
+          // re-primes. Polling never surfaces an error.
+        },
+      );
+    };
+    // Prime (or re-prime after a board switch) immediately.
+    poll();
+    const id = setInterval(poll, 3000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [gateway, board, navigateTo, refreshTrash]);
+  }, [gateway, openBoardId, navigateTo, refreshTrash]);
 
   const handleRenameBoard = useCallback(
     (boardId: string, title: string) => {
@@ -2185,6 +2201,70 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelection, trashOpen, closeTrashDrawer]);
+
+  // Card callbacks handed to the canvas, as stable wrappers over the latest
+  // handlers (P1.8). The canvas keeps a card's rendered element until that card
+  // itself changes, so a handler captured at build time must never go stale
+  // (several close over `state`), and stable identities let the memoised card
+  // components skip re-rendering. Values (editing flag, highlight) are not
+  // here: they are read when a card is (re)built.
+  const cardHandlers = {
+    onDeactivate: handleEditDeactivate,
+    onUpdateNote: handleUpdateNote,
+    onFinalizeNote: handleFinalizeNote,
+    onUpdateImageCaption: handleUpdateImageCaption,
+    onUpdateEmbedDescription: handleUpdateEmbedDescription,
+    onRetryEmbedMetadata: handleRetryEmbedMetadata,
+    onOpenBoard: handleOpenBoard,
+    onRenameBoard: handleRenameBoard,
+    onContextMenu: handleRequestContextMenu,
+    onResizeNote: handleResizeNote,
+    onResizeImage: handleResizeNote,
+    onResizeEmbed: handleResizeNote,
+    onResizeFilesystemAlias: handleResizeNote,
+    onLoadFolderPreview: handleLoadFolderPreview,
+    onOpenFolderInFinder: handleOpenFolderInFinder,
+    onOpenFileCard: openFileCard,
+    onRevealFileCard: revealFileCard,
+    onResizeFileCard: handleResizeNote,
+    onNoteCommands: handleNoteCommands,
+    onNoteBoldStateChange: handleNoteBoldStateChange,
+    onNoteItalicStateChange: handleNoteItalicStateChange,
+    onNoteStrikeStateChange: handleNoteStrikeStateChange,
+    onNoteTextColorChange: handleNoteTextColorChange,
+  } satisfies Partial<CardRenderContext>;
+  const cardHandlersRef = useRef(cardHandlers);
+  useLayoutEffect(() => {
+    cardHandlersRef.current = cardHandlers;
+  });
+  const stableCardHandlers = useMemo(() => {
+    const latest = () => cardHandlersRef.current;
+    return {
+      onDeactivate: () => latest().onDeactivate(),
+      onUpdateNote: (id: string, document: unknown) => latest().onUpdateNote(id, document),
+      onFinalizeNote: (id: string, document: unknown) => latest().onFinalizeNote(id, document),
+      onUpdateImageCaption: (id: string, document: unknown) => latest().onUpdateImageCaption(id, document),
+      onUpdateEmbedDescription: (id: string, document: unknown) => latest().onUpdateEmbedDescription(id, document),
+      onRetryEmbedMetadata: (id: string) => latest().onRetryEmbedMetadata(id),
+      onOpenBoard: (boardId: string) => latest().onOpenBoard(boardId),
+      onRenameBoard: (boardId: string, title: string) => latest().onRenameBoard(boardId, title),
+      onContextMenu: (cardId: string, x: number, y: number) => latest().onContextMenu(cardId, x, y),
+      onResizeNote: (id: string, w: number, h: number) => latest().onResizeNote(id, w, h),
+      onResizeImage: (id: string, w: number, h: number) => latest().onResizeImage(id, w, h),
+      onResizeEmbed: (id: string, w: number, h: number) => latest().onResizeEmbed(id, w, h),
+      onResizeFilesystemAlias: (id: string, w: number, h: number) => latest().onResizeFilesystemAlias(id, w, h),
+      onLoadFolderPreview: (id: string) => latest().onLoadFolderPreview(id),
+      onOpenFolderInFinder: (id: string) => latest().onOpenFolderInFinder(id),
+      onOpenFileCard: (id: string) => latest().onOpenFileCard(id),
+      onRevealFileCard: (id: string) => latest().onRevealFileCard(id),
+      onResizeFileCard: (id: string, w: number, h: number) => latest().onResizeFileCard(id, w, h),
+      onNoteCommands: (commands: NoteEditorCommands | null) => latest().onNoteCommands(commands),
+      onNoteBoldStateChange: (active: boolean) => latest().onNoteBoldStateChange(active),
+      onNoteItalicStateChange: (active: boolean) => latest().onNoteItalicStateChange(active),
+      onNoteStrikeStateChange: (active: boolean) => latest().onNoteStrikeStateChange(active),
+      onNoteTextColorChange: (color: TextColorId) => latest().onNoteTextColorChange(color),
+    } satisfies Partial<CardRenderContext>;
+  }, []);
 
   return (
     <AppShell
@@ -2484,35 +2564,13 @@ function App() {
               },
             }}
             renderCard={(card) => {
-              const full = state.cards.find((c) => c.id === card.id);
+              const full = cardsById.get(card.id);
               if (!full) return null;
               return renderCardFromRegistry(full, {
+                ...stableCardHandlers,
                 editing: state.editingCardId === full.id,
-                onDeactivate: handleEditDeactivate,
-                onUpdateNote: handleUpdateNote,
-                onFinalizeNote: handleFinalizeNote,
-                onUpdateImageCaption: handleUpdateImageCaption,
-                onUpdateEmbedDescription: handleUpdateEmbedDescription,
-                onRetryEmbedMetadata: handleRetryEmbedMetadata,
-                onOpenBoard: handleOpenBoard,
-                onRenameBoard: handleRenameBoard,
-                onContextMenu: handleRequestContextMenu,
-                onResizeNote: handleResizeNote,
-                onResizeImage: handleResizeNote,
-                onResizeEmbed: handleResizeNote,
-                onResizeFilesystemAlias: handleResizeNote,
-                onLoadFolderPreview: handleLoadFolderPreview,
-                onOpenFolderInFinder: handleOpenFolderInFinder,
-                onOpenFileCard: openFileCard,
-                onRevealFileCard: revealFileCard,
-                onResizeFileCard: handleResizeNote,
                 highlightedPortalId,
                 highlightQuery: search.highlightQuery,
-                onNoteCommands: handleNoteCommands,
-                onNoteBoldStateChange: handleNoteBoldStateChange,
-                onNoteItalicStateChange: handleNoteItalicStateChange,
-                onNoteStrikeStateChange: handleNoteStrikeStateChange,
-                onNoteTextColorChange: handleNoteTextColorChange,
               });
             }}
           />

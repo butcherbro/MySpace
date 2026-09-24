@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { CSSProperties } from "react";
 import type { BoardShortcutDto } from "../../services/workspace-gateway";
 import { BoardIdentityThumbnail } from "../../boards/BoardIdentityThumbnail";
@@ -28,7 +29,7 @@ const COLOR_VARS: Record<string, string> = {
  * not the board's real place. A target that is gone or trashed (`target:
  * null`) renders as a grey, inert "broken" tile instead of crashing.
  */
-export function BoardShortcutCard({ shortcut, onOpen, onContextMenu }: BoardShortcutCardProps) {
+export const BoardShortcutCard = memo(function BoardShortcutCard({ shortcut, onOpen, onContextMenu }: BoardShortcutCardProps) {
   const broken = shortcut.target === null;
   const color = broken ? COLOR_VARS.ink : COLOR_VARS[shortcut.target!.colorToken] ?? COLOR_VARS.ink;
 
@@ -82,4 +83,4 @@ export function BoardShortcutCard({ shortcut, onOpen, onContextMenu }: BoardShor
       </div>
     </div>
   );
-}
+});

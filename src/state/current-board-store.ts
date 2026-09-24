@@ -79,7 +79,7 @@ export function reducer(
 
     case "snapshotLoaded": {
       // A reload of the board that is already open (undo/redo, rename, the
-      // `data_version` poll after a link enrichment or an agent write) is not a
+      // `change_seq` poll after an agent write) is not a
       // board switch: the user's pan, the note being edited and the selection
       // must survive it. Bumping `boardOpenRevision` here is what made the
       // canvas snap back to the origin "at random" (todo.md №26, second cause):

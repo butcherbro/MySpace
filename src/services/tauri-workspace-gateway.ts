@@ -3,6 +3,7 @@ import type {
   AddQuickBoardInput,
   AssetDto,
   BackupSummary,
+  BoardChangeSeq,
   BoardShortcutDto,
   BoardSnapshot,
   BoardSummary,
@@ -68,8 +69,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<CardDto>("read_card", { cardId });
   }
 
-  getDataVersion(): Promise<number> {
-    return invoke<number>("get_data_version", {});
+  getBoardChangeSeq(boardId: string): Promise<BoardChangeSeq> {
+    return invoke<BoardChangeSeq>("get_board_change_seq", { boardId });
   }
 
   createNote(input: CreateNoteInput): Promise<CardReceipt> {

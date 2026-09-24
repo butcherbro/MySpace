@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { memo, useState, type CSSProperties } from "react";
 import type { BoardPortalDto } from "../../services/workspace-gateway";
 import { BoardIdentityThumbnail } from "../../boards/BoardIdentityThumbnail";
 import "./board-portal-card.css";
@@ -25,7 +25,7 @@ const COLOR_VARS: Record<string, string> = {
  * The signature "doorway" card. Double-click the tile opens the child board;
  * double-click the title renames it inline; right-click opens a context menu.
  */
-export function BoardPortalCard({
+export const BoardPortalCard = memo(function BoardPortalCard({
   portal,
   onOpen,
   onRename,
@@ -127,4 +127,4 @@ export function BoardPortalCard({
       </div>
     </div>
   );
-}
+});

@@ -13,7 +13,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
-import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard } from "./canvas-mapping";
+import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard, staleNodeIds } from "./canvas-mapping";
 import type {
   CanvasCard,
   CanvasEvents,
@@ -148,32 +148,45 @@ export function CanvasAdapter({
     viewportRef.current = viewport;
   }, [viewport]);
 
-  // Rebuild nodes when the projection (frames OR revision OR editing focus)
-  // changes, using React's "adjust state during render" pattern. Preserve each
-  // node's `selected` flag across the rebuild so entering/leaving edit mode (or
-  // a sibling save) does not silently drop the user's selection. Portal
-  // appearance (title + cover) is part of the key so a rename or cover change
-  // re-renders the tile even when the card revision is unchanged.
-  const cardsKey =
-    cards
-      .map((c) => {
-        const portal = c.kind === "board_portal" ? c : null;
-        return `${c.id}:${c.kind}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}` +
-          (portal ? `:${portal.portalTitle ?? ""}:${portal.portalCoverAssetId ?? ""}` : "");
-      })
-      .join("|") + `#edit:${editingCardId ?? ""}` + `#highlight:${highlightQuery}`;
-  const [lastKey, setLastKey] = useState(cardsKey);
+  // Rebuild nodes when the projection changes, using React's "adjust state
+  // during render" pattern — but only the nodes whose own inputs changed
+  // (P1.8). This used to be keyed on one O(N) string of every card's frame and
+  // revision, and any change to it rebuilt *every* node, so editing one note on
+  // a 1 000-card board re-created 1 000 node objects and re-rendered 1 000
+  // cards. Now each node is rebuilt only when its card's projection inputs
+  // (`canvasNodeInputsEqual`: id, kind, frame, zIndex, revision, portal
+  // appearance), its editing flag or the highlight query changed; every other
+  // node keeps its previous object — including React Flow's own state on it
+  // (selection, measured size) — so React Flow skips it and its memoised card
+  // component is never called. A rebuilt node preserves its `selected` flag, so
+  // entering/leaving edit mode or a sibling save never drops the selection.
+  const [built, setBuilt] = useState({ cards, editingCardId, highlightQuery });
 
-  if (cardsKey !== lastKey) {
-    setLastKey(cardsKey);
-    setNodes((prev) => {
-      const selectedById = new Map(prev.map((n) => [n.id, n.selected]));
-      return cards.map((c) => {
-        const node = cardToNode(c, renderCard);
-        node.selected = selectedById.get(c.id) ?? false;
-        return node;
+  if (
+    cards !== built.cards ||
+    editingCardId !== built.editingCardId ||
+    highlightQuery !== built.highlightQuery
+  ) {
+    const stale = staleNodeIds(built, { cards, editingCardId, highlightQuery });
+    setBuilt({ cards, editingCardId, highlightQuery });
+    if (stale !== null) {
+      setNodes((prev) => {
+        const prevById = new Map(prev.map((n) => [n.id, n]));
+        let changed = prev.length !== cards.length;
+        const next = cards.map((c, i) => {
+          const existing = prevById.get(c.id);
+          if (existing && !stale.has(c.id)) {
+            if (prev[i] !== existing) changed = true;
+            return existing;
+          }
+          changed = true;
+          const node = cardToNode(c, renderCard);
+          node.selected = existing?.selected ?? false;
+          return node;
+        });
+        return changed ? next : prev;
       });
-    });
+    }
   }
 
   const nodesRef = useRef(nodes);
@@ -556,6 +569,12 @@ export function CanvasAdapter({
         key={interactionResetRevision}
         nodes={nodes}
         nodeTypes={nodeTypes}
+        // P1.8: mount only the cards that intersect the viewport. React Flow
+        // still renders every node once (to measure it), then unmounts the
+        // off-screen ones; marquee selection, select-all and group drag work
+        // from its internal node lookup (positions + our explicit width/height),
+        // not the DOM, so off-screen selected cards still move with the group.
+        onlyRenderVisibleElements
         onNodesChange={handleNodesChange}
         deleteKeyCode={null}
         defaultViewport={liveViewport}

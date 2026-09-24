@@ -689,3 +689,98 @@ fn migration_0022_creates_search_index_and_backfills_existing_rows() {
     assert_eq!(ids.len(), 3);
     assert!(!ids.contains(&"n2".to_string()));
 }
+
+/// Migration 0023 adds `boards.change_seq` (default 0 for existing rows) and
+/// the triggers that bump it; the viewport table is not a change source.
+#[test]
+fn migration_0023_adds_board_change_seq_and_its_triggers() {
+    assert!(
+        migrations::MIGRATIONS
+            .iter()
+            .any(|m| m.version == 23 && m.name == "board_change_seq"),
+        "migration 0023 is registered"
+    );
+
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 23) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(migration.sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at)
+             VALUES ('home', 'ws', NULL, 'Home', 'default', NULL, 1, 0, 0),
+                    ('child', 'ws', 'home', 'Child', 'default', NULL, 1, 0, 0);",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let seq = |conn: &rusqlite::Connection, id: &str| -> i64 {
+        conn.query_row("SELECT change_seq FROM boards WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(seq(&conn, "home"), 0, "existing rows start at 0");
+    assert_eq!(seq(&conn, "child"), 0);
+
+    let triggers: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'change_seq_%'")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    for table in [
+        "note_cards",
+        "image_cards",
+        "embed_cards",
+        "file_cards",
+        "filesystem_aliases",
+        "board_portal_cards",
+        "board_shortcut_cards",
+    ] {
+        for op in ["ai", "au", "ad"] {
+            let name = format!("change_seq_{table}_{op}");
+            assert!(triggers.contains(&name), "missing trigger {name}");
+        }
+    }
+
+    // A note on the child bumps the child and (portal counts) its parent.
+    conn.execute_batch(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at)
+             VALUES ('n1', 'child', 'note', 0, 0, 200, 80, 0, 0);
+         INSERT INTO note_cards (card_id, document_json, plain_text) VALUES ('n1', '{}', 'x');",
+    )
+    .unwrap();
+    assert_eq!(seq(&conn, "child"), 2, "card insert + detail insert");
+    assert_eq!(seq(&conn, "home"), 1, "parent bumped once for the count");
+
+    // Bumping change_seq itself does not recurse through the boards trigger.
+    conn.execute(
+        "UPDATE boards SET change_seq = change_seq + 1 WHERE id = 'child'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(seq(&conn, "child"), 3);
+    assert_eq!(seq(&conn, "home"), 1);
+
+    // Viewport writes are not changes.
+    conn.execute(
+        "INSERT INTO board_view_states (board_id, updated_at) VALUES ('home', 0)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(seq(&conn, "home"), 1);
+}

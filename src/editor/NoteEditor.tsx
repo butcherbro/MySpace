@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import { createEditorExtensions } from "./editor-extensions";
 import { openExternalUrl } from "../services/url-opener";
@@ -31,6 +31,13 @@ interface NoteEditorProps {
   onStrikeStateChange?: (active: boolean) => void;
   /** Called with the current text color whenever it changes. */
   onTextColorChange?: (color: TextColorId) => void;
+  /**
+   * Screen point (client coordinates) of the click that started editing. Idle
+   * notes render static HTML (P1.8), so the editor mounts *after* that click
+   * and cannot have seen it; placing the caret at this point keeps "the caret
+   * lands where the user clicked". Read once, when editing begins.
+   */
+  initialCaretPoint?: { x: number; y: number } | null;
 }
 
 /**
@@ -50,7 +57,13 @@ export function NoteEditor({
   onItalicStateChange,
   onStrikeStateChange,
   onTextColorChange,
+  initialCaretPoint = null,
 }: NoteEditorProps) {
+  const initialCaretPointRef = useRef(initialCaretPoint);
+  // Layout effect: synced before the passive focus effect below reads it.
+  useLayoutEffect(() => {
+    initialCaretPointRef.current = initialCaretPoint;
+  }, [initialCaretPoint]);
   const editor = useEditor({
     extensions: createEditorExtensions(),
     content: document as JSONContent,
@@ -94,8 +107,22 @@ export function NoteEditor({
     // autofocus, so that a subsequent click-outside fires a clean blur. We do
     // not force a caret position (`focus("end")`) so the caret lands where the
     // user clicked rather than always at the end.
-    if (editable) {
-      editor?.commands.focus();
+    if (editable && editor) {
+      const point = initialCaretPointRef.current;
+      let pos: number | null = null;
+      if (point) {
+        try {
+          pos = editor.view.posAtCoords({ left: point.x, top: point.y })?.pos ?? null;
+        } catch {
+          // No layout (jsdom) or a point outside the view: plain focus below.
+          pos = null;
+        }
+      }
+      if (pos !== null) {
+        editor.chain().focus().setTextSelection(pos).run();
+      } else {
+        editor.commands.focus();
+      }
     }
   }, [editor, editable]);
 
@@ -134,6 +161,21 @@ export function NoteEditor({
       },
     });
   }, [editor, editable, onCommandsReady]);
+
+  // Idle notes unmount their editor instead of flipping it to read-only
+  // (P1.8), so the "leaving edit mode" signal above never runs for them:
+  // clear the command surface on unmount too. When editing moves from one note
+  // to another in a single commit, this cleanup runs before the new editor's
+  // effect publishes its commands, so the new surface wins.
+  const onCommandsReadyRef = useRef(onCommandsReady);
+  useEffect(() => {
+    onCommandsReadyRef.current = onCommandsReady;
+  }, [onCommandsReady]);
+  useEffect(() => {
+    return () => {
+      if (editable) onCommandsReadyRef.current?.(null);
+    };
+  }, [editable]);
 
   // Report formatting state (bold/italic/strike + text color) changes.
   useEffect(() => {

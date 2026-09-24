@@ -134,6 +134,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "search_index",
         sql: include_str!("../../migrations/0022_search_index.sql"),
     },
+    Migration {
+        version: 23,
+        name: "board_change_seq",
+        sql: include_str!("../../migrations/0023_board_change_seq.sql"),
+    },
 ];
 
 /// The result of comparing the database's applied migrations against what

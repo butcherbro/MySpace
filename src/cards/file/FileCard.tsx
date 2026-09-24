@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import type { FileCardDto } from "../../services/workspace-gateway";
 import "./file-card.css";
 
@@ -74,7 +74,7 @@ function extColor(ext: string): string {
   }
 }
 
-export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Props) {
+export const FileCard = memo(function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Props) {
   const [draft, setDraft] = useState<{ width: number; height: number } | null>(null);
   const draftRef = useRef<{ width: number; height: number } | null>(null);
   const start = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -268,4 +268,4 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
       />
     </article>
   );
-}
+});

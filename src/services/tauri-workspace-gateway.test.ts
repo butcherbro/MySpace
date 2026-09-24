@@ -28,6 +28,14 @@ describe("TauriWorkspaceGateway", () => {
     expect(invokeMock).toHaveBeenCalledWith("load_board_snapshot", { boardId: "home" });
   });
 
+  it("calls get_board_change_seq with a boardId payload and returns both counters", async () => {
+    invokeMock.mockResolvedValue({ dataVersion: 7, changeSeq: 3 });
+    const gw = new TauriWorkspaceGateway();
+    const result = await gw.getBoardChangeSeq("home");
+    expect(invokeMock).toHaveBeenCalledWith("get_board_change_seq", { boardId: "home" });
+    expect(result).toEqual({ dataVersion: 7, changeSeq: 3 });
+  });
+
   it("calls create_note with a wrapped input payload and returns the receipt", async () => {
     invokeMock.mockResolvedValue({ id: "note-1", revision: 1 });
     const gw = new TauriWorkspaceGateway();

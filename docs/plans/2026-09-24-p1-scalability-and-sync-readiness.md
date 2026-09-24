@@ -227,6 +227,11 @@ Owner: agent (Rust codec + receipts), agent (frontend). Estimate: 2 days.
 
 ## P1.6 — Targeted invalidation instead of full reload
 
+**Status: done 2026-09-24.** Trigger-maintained `boards.change_seq`
+(cards, all detail tables, board metadata; parent and shortcut holders bumped
+too); `get_board_change_seq(board_id) -> { dataVersion, changeSeq }` on the
+writer connection; the poll reloads only when both changed.
+
 Steps: `boards.change_seq INTEGER` bumped by the writer for the board(s) a
 mutation touches (and its parent for portal counts); `get_data_version`
 becomes `get_board_change_seq(board_id)`; the frontend polls that (or
@@ -259,6 +264,13 @@ Owner: agent. Estimate: 1 day.
 
 ## P1.8 — Canvas cost per card
 
+**Status: done 2026-09-24.** `onlyRenderVisibleElements`, static Tiptap HTML
+for idle notes/captions/descriptions (editor mounts only for the edited
+card, caret placed at the click point), per-card node rebuilds
+(`canvas-mapping.ts`), memoised card components. 1 000-note board: first
+paint 3.5 s → ~0.7 s in the container; one update re-renders one card.
+`tests/e2e/dense-board.spec.ts` guards budgets.
+
 Steps: React Flow `onlyRenderVisibleElements`; NoteCard renders static
 HTML (Tiptap `generateHTML`) when not editing and mounts the editor only
 for `editingCardId`; replace the O(N) `cardsKey` string with a per-card
@@ -270,6 +282,11 @@ Owner: agent. Estimate: 2 days.
 ---
 
 ## P1.9 — CI hygiene
+
+**Status: done 2026-09-24.** `security-audit` job (cargo audit + npm audit),
+Linux `cargo fmt/clippy/test` job, Dependabot (npm, cargo, actions).
+`rustls` bumped to 0.23.45 for RUSTSEC-2026-0285; remaining warnings are
+unmaintained/unsound transitive crates from Tauri/GTK (tracked by Dependabot).
 
 `cargo audit` (or `cargo deny`) and `npm audit --audit-level=high` as CI
 steps; Dependabot config for npm and cargo; a Linux job that runs

@@ -108,7 +108,51 @@ function link(id: string, x: number, y: number, title: string): EmbedCardDto {
   };
 }
 
+/**
+ * P1.8 budget fixture: `?fixture=dense&notes=N` replaces the mixed dense board
+ * with N note cards on a 40-column grid, each carrying a real (formatted)
+ * document so the idle static renderer does real work. Additive: without
+ * `notes`, `?fixture=dense` is unchanged (the visual-shell screenshots use it).
+ */
+export const DENSE_NOTE_COLUMNS = 40;
+export const DENSE_NOTE_PITCH = { x: 260, y: 140 } as const;
+
+function requestedNoteCount(): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("notes");
+  if (raw === null) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 10_000) : null;
+}
+
+export function denseNotes(count: number): NoteCardDto[] {
+  return Array.from({ length: count }, (_, i) => {
+    const text = `Note ${i}: a short line of text`;
+    return {
+      ...note(
+        `dense-note-${i}`,
+        40 + (i % DENSE_NOTE_COLUMNS) * DENSE_NOTE_PITCH.x,
+        40 + Math.floor(i / DENSE_NOTE_COLUMNS) * DENSE_NOTE_PITCH.y,
+        text,
+      ),
+      documentJson: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: `Note ${i}`, marks: [{ type: "bold" }] },
+              { type: "text", text: ": a short line of text" },
+            ],
+          },
+        ],
+      },
+    };
+  });
+}
+
 export function denseBoardSnapshot(): BoardSnapshot {
+  const noteCount = requestedNoteCount();
   const colors = ["terracotta", "moss", "sky", "sand", "ink", "terracotta"];
   const portals = Array.from({ length: 12 }, (_, i) =>
     portal(
@@ -131,7 +175,7 @@ export function denseBoardSnapshot(): BoardSnapshot {
     },
     breadcrumbs: [{ id: "home", title: "Home" }],
     viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
-    cards: [
+    cards: noteCount !== null ? denseNotes(noteCount) : [
       ...portals,
       note("note-0", 40, 500, "A longer note used to check dense scanability and text wrapping."),
       note("note-1", 320, 500, "Second note."),

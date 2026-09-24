@@ -1,7 +1,8 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { EmbedCardDto } from "../../services/workspace-gateway";
 import { HighlightedText } from "../../components/HighlightedText";
 import { NoteEditor } from "../../editor/NoteEditor";
+import { StaticDocument } from "../../editor/StaticDocument";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { openExternalUrl } from "../../services/url-opener";
 import "./link-card.css";
@@ -26,7 +27,7 @@ interface EmbedCardProps {
  * source line, and an editable rich-text description body. The preview image
  * and favicon render when present (Slice B populates them).
  */
-export function EmbedCard({
+export const EmbedCard = memo(function EmbedCard({
   embed,
   onUpdate,
   onResize,
@@ -210,15 +211,11 @@ export function EmbedCard({
               highlightQuery={highlightQuery}
             />
           ) : embed.descriptionPlainText ? (
-            // Read-only ветка раньше показывала descriptionPlainText (без marks) —
-            // тот же Tiptap-рендерер, что в режиме редактирования, только
-            // editable=false, чтобы bold/italic/strike/списки не терялись после blur.
-            <NoteEditor
-              document={embed.descriptionJson}
-              editable={false}
-              onChange={() => {}}
-              highlightQuery={highlightQuery}
-            />
+            // Read-only ветка раньше показывала plain text (без marks), потом —
+            // read-only Tiptap. P1.8: статический HTML из того же документа и тех же
+            // расширений (marks/списки сохраняются), без экземпляра редактора на
+            // каждую неактивную карточку; редактор монтируется только в режиме правки.
+            <StaticDocument document={embed.descriptionJson} highlightQuery={highlightQuery} />
           ) : (
             <div className="link-card__description-display">Add notes…</div>
           )}
@@ -235,4 +232,4 @@ export function EmbedCard({
       />
     </div>
   );
-}
+});

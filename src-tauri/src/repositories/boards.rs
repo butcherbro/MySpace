@@ -259,3 +259,39 @@ fn load_viewport(conn: &Connection, board_id: &str) -> Result<Viewport, Workspac
     )
     .map_err(WorkspaceError::from)
 }
+
+/// What the frontend polls to detect external writes to the open board
+/// (P1.6). See `commands::boards::get_board_change_seq` for why both values
+/// must be read on the writer connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardChangeSeq {
+    /// `PRAGMA data_version` of the connection this was read on.
+    pub data_version: i64,
+    /// `boards.change_seq` of the requested board (trigger-maintained, 0023).
+    pub change_seq: i64,
+}
+
+/// Reads `PRAGMA data_version` and the board's `change_seq` on `conn`.
+/// `NotFound` if the board row does not exist (trashed boards still answer).
+pub fn get_board_change_seq(
+    conn: &Connection,
+    board_id: &str,
+) -> Result<BoardChangeSeq, WorkspaceError> {
+    let data_version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
+    let change_seq: i64 = match conn.query_row(
+        "SELECT change_seq FROM boards WHERE id = ?1",
+        [board_id],
+        |r| r.get(0),
+    ) {
+        Ok(seq) => seq,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(WorkspaceError::NotFound(board_id.to_string()))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    Ok(BoardChangeSeq {
+        data_version,
+        change_seq,
+    })
+}

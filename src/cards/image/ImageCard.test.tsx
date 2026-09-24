@@ -89,10 +89,12 @@ describe("ImageCard", () => {
     expect(screen.getByTestId("image-card")).toHaveAttribute("data-kind", "image");
     expect(screen.getByTestId("image-card")).toHaveAttribute("data-has-caption", "true");
     expect(screen.getByTestId("image-card")).toHaveClass("image-card--has-caption");
-    // Read-only ветка теперь рендерит через (мок) NoteEditor из captionJson,
-    // а не captionPlainText напрямую — так и должно сохраняться форматирование.
-    expect(lastEditorProps()?.editable).toBe(false);
-    expect(lastEditorProps()?.document).toEqual(captionJson);
+    // Read-only ветка рендерит captionJson (а не captionPlainText), чтобы
+    // сохранялось форматирование — статическим HTML, без экземпляра
+    // редактора (P1.8): NoteEditor монтируется только в режиме правки.
+    const caption = screen.getByTestId("image-caption");
+    expect(caption.querySelector("[data-static-document] p")?.textContent).toBe("Caption");
+    expect(caption.querySelector('[data-testid="mock-editor"]')).toBeNull();
   });
 
   it("marks editing and passes editable=true to the caption editor", () => {

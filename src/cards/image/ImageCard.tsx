@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ImageCardDto } from "../../services/workspace-gateway";
 import { NoteEditor } from "../../editor/NoteEditor";
+import { StaticDocument } from "../../editor/StaticDocument";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { computeResizedImageFrameSize } from "./image-card-geometry";
 import "./image-card.css";
@@ -24,7 +25,7 @@ interface ImageCardProps {
  * caption opens it for editing. The caption draft lifecycle is shared with notes
  * via `useDocumentDraft`.
  */
-export function ImageCard({
+export const ImageCard = memo(function ImageCard({
   image,
   onUpdate,
   onResize,
@@ -183,15 +184,11 @@ export function ImageCard({
             highlightQuery={highlightQuery}
           />
         ) : hasCaption ? (
-          // Read-only ветка раньше показывала captionPlainText (без marks) —
-          // тот же Tiptap-рендерер, что в режиме редактирования, только
-          // editable=false, чтобы bold/italic/strike/списки не терялись после blur.
-          <NoteEditor
-            document={image.captionJson}
-            editable={false}
-            onChange={() => {}}
-            highlightQuery={highlightQuery}
-          />
+          // Read-only ветка раньше показывала plain text (без marks), потом —
+          // read-only Tiptap. P1.8: статический HTML из того же документа и тех же
+          // расширений (marks/списки сохраняются), без экземпляра редактора на
+          // каждую неактивную карточку; редактор монтируется только в режиме правки.
+          <StaticDocument document={image.captionJson} highlightQuery={highlightQuery} />
         ) : (
           <div className="image-card__caption-display">Add caption…</div>
         )}
@@ -222,4 +219,4 @@ export function ImageCard({
       />
     </div>
   );
-}
+});

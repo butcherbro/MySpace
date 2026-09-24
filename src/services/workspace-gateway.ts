@@ -513,6 +513,17 @@ export interface ViewportReceipt {
 }
 
 /**
+ * What the external-change poll reads (P1.6), both on the writer connection:
+ * `dataVersion` is SQLite's `PRAGMA data_version` (moves only when another
+ * process commits), `changeSeq` is the board's trigger-maintained counter
+ * (moves on any write touching what the board renders, own writes included).
+ */
+export interface BoardChangeSeq {
+  dataVersion: number;
+  changeSeq: number;
+}
+
+/**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
  */
@@ -520,7 +531,7 @@ export interface WorkspaceGateway {
   getHomeBoard(): Promise<BoardSummary>;
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot>;
   readCard(cardId: string): Promise<CardDto>;
-  getDataVersion(): Promise<number>;
+  getBoardChangeSeq(boardId: string): Promise<BoardChangeSeq>;
   createNote(input: CreateNoteInput): Promise<CardReceipt>;
   updateNote(input: UpdateNoteInput): Promise<TextReceipt>;
   moveCard(input: MoveCardInput): Promise<CardReceipt>;

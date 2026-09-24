@@ -4,6 +4,7 @@ import type {
   BackupSummary,
   BoardPortalDto,
   BoardShortcutDto,
+  BoardChangeSeq,
   BoardSnapshot,
   BoardSummary,
   CardDto,
@@ -91,9 +92,31 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve({ ...this.board });
   }
 
-  getDataVersion(): Promise<number> {
-    return Promise.resolve(this.dataVersion);
+  /**
+   * Browser mode has no second process, so `dataVersion` stays constant (the
+   * poll never reloads). `changeSeq` bumps whenever what the board renders
+   * (its summary, its cards, its child boards) differs from the last sample.
+   */
+  getBoardChangeSeq(boardId: string): Promise<BoardChangeSeq> {
+    const board = this.boards.get(boardId);
+    if (!board) return Promise.reject(new Error(`board not found: ${boardId}`));
+    const fingerprint = JSON.stringify([
+      board,
+      this.snapshot.cards.filter((card) => card.boardId === boardId),
+      [...this.boards.values()].filter((b) => b.parentBoardId === boardId),
+    ]);
+    const entry = this.changeSeqs.get(boardId);
+    const next =
+      entry === undefined
+        ? { fingerprint, seq: 0 }
+        : entry.fingerprint === fingerprint
+          ? entry
+          : { fingerprint, seq: entry.seq + 1 };
+    this.changeSeqs.set(boardId, next);
+    return Promise.resolve({ dataVersion: 1, changeSeq: next.seq });
   }
+
+  private changeSeqs = new Map<string, { fingerprint: string; seq: number }>();
 
   readCard(cardId: string): Promise<CardDto> {
     const card = this.snapshot.cards.find((c) => c.id === cardId);

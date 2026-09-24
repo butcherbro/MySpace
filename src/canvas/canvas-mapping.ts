@@ -63,3 +63,53 @@ export function frameIntersectionRatio(a: CanvasFrame, b: CanvasFrame): number {
   const minArea = Math.min(a.width * a.height, b.width * b.height);
   return minArea > 0 ? overlap / minArea : 0;
 }
+
+/** Whether two projections of the same card would produce the same node. */
+export function canvasNodeInputsEqual(a: CanvasCard, b: CanvasCard): boolean {
+  return (
+    a.id === b.id &&
+    a.kind === b.kind &&
+    a.revision === b.revision &&
+    a.zIndex === b.zIndex &&
+    a.frame.x === b.frame.x &&
+    a.frame.y === b.frame.y &&
+    a.frame.width === b.frame.width &&
+    a.frame.height === b.frame.height &&
+    a.targetBoardId === b.targetBoardId &&
+    a.portalTitle === b.portalTitle &&
+    a.portalCoverAssetId === b.portalCoverAssetId
+  );
+}
+
+export interface NodeBuildInputs {
+  cards: CanvasCard[];
+  editingCardId: string | null;
+  highlightQuery: string;
+}
+
+/**
+ * Ids of the cards whose node must be rebuilt going from `prev` to `next`
+ * inputs, or `null` when no node changes at all (same cards in the same order,
+ * nothing edited, nothing re-highlighted). A card missing from `prev` is
+ * always stale. The highlight query affects every card's text, so changing it
+ * marks all of them.
+ */
+export function staleNodeIds(prev: NodeBuildInputs, next: NodeBuildInputs): Set<string> | null {
+  const stale = new Set<string>();
+  const highlightChanged = prev.highlightQuery !== next.highlightQuery;
+  const prevById = prev.cards === next.cards ? null : new Map(prev.cards.map((c) => [c.id, c]));
+  let reordered = prev.cards.length !== next.cards.length;
+  next.cards.forEach((card, i) => {
+    if (prevById) {
+      const before = prevById.get(card.id);
+      if (prev.cards[i]?.id !== card.id) reordered = true;
+      if (!before || !canvasNodeInputsEqual(before, card)) stale.add(card.id);
+    }
+    if (highlightChanged) stale.add(card.id);
+  });
+  if (prev.editingCardId !== next.editingCardId) {
+    if (prev.editingCardId !== null) stale.add(prev.editingCardId);
+    if (next.editingCardId !== null) stale.add(next.editingCardId);
+  }
+  return stale.size === 0 && !reordered ? null : stale;
+}

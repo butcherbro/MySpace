@@ -444,9 +444,20 @@ P1 (до серьёзного роста), в порядке выполнени�
 - [x] P1.5 Receipts: `CardReceipt`/`TextReceipt`/`CardsReceipt`/`ViewportReceipt`,
       ревизия читается из БД; `plain_text` считается в Rust (`domain/plain_text.rs`,
       фикстуры синхронизированы с TS-тестом); на фронте нет `revision + 1`.
-- [ ] Точечная инвалидация вместо полного reload по `data_version`.
+- [x] P1.6 `boards.change_seq` + триггеры (миграция 0023), команда `get_board_change_seq`
+      (`dataVersion` + `changeSeq` с writer-соединения); фронт перезагружает доску
+      только если писал другой процесс и именно в открытую доску
+      (`src/state/external-change-detector.ts`).
 - [ ] Повреждённый `document_json` как явное состояние карточки; диалог восстановления.
-- [ ] Виртуализация канваса, Tiptap только в режиме редактирования.
+- [x] P1.8 Стоимость карточки на канвасе: `onlyRenderVisibleElements`; простаивающие
+      заметки/подписи/описания — статический HTML (`editor/static-document.ts`,
+      `StaticDocument`), Tiptap только у редактируемой карточки (каретка ставится
+      в точку клика); вместо O(N) `cardsKey` — пересборка только изменившихся
+      узлов (`staleNodeIds`), карточки в `memo`, стабильные колбэки в `App`.
+      1 000 карточек: обновление одной = 1 рендер карточки
+      (`CanvasAdapter.render-cost.test.tsx`); e2e `dense-board.spec.ts`: первая
+      отрисовка ≈ 0.6–0.75 с в контейнере (было ≈ 3.5 с), пан ≈ 10–25 мс.
+      Проверить на Mac: бюджет 500 мс (`DENSE_BOARD_PAINT_BUDGET_MS=500`).
 - [ ] `cargo audit`/Dependabot в CI.
 
 Известные флейки e2e (не регрессия, воспроизводится на `f819aee`):

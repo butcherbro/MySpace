@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { FilesystemAliasDto, FolderPreviewDto } from "../../services/workspace-gateway";
 import "./folder-shortcut-card.css";
 
@@ -8,7 +8,7 @@ const messages: Record<string, string> = { empty: "This folder is empty.", missi
 function rowLimit(height: number) { return Math.max(2, Math.floor((height - 150) / 42)); }
 function detail(entry: FolderPreviewDto["entries"][number]) { if (entry.kind === "folder") return entry.childCount == null ? "Folder" : `${entry.childCount} items`; if (entry.sizeBytes == null) return "File"; return entry.sizeBytes < 1024 ? `${entry.sizeBytes} B` : `${Math.round(entry.sizeBytes / 1024)} KB`; }
 
-export function FolderShortcutCard({ alias, loadPreview, onOpenFinder, onResize, onContextMenu }: Props) {
+export const FolderShortcutCard = memo(function FolderShortcutCard({ alias, loadPreview, onOpenFinder, onResize, onContextMenu }: Props) {
   const [preview, setPreview] = useState<FolderPreviewDto | null>(null);
   const [draft, setDraft] = useState<{ width: number; height: number } | null>(null);
   const draftRef = useRef<{ width: number; height: number } | null>(null);
@@ -25,4 +25,4 @@ export function FolderShortcutCard({ alias, loadPreview, onOpenFinder, onResize,
     </section>
     <div className="folder-shortcut-card__resize nodrag nopan" data-testid="folder-resize" onPointerDown={(event) => { event.stopPropagation(); start.current = { x: event.clientX, y: event.clientY, width: alias.frame.width, height: alias.frame.height }; event.currentTarget.setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", onMove); window.addEventListener("pointerup", onUp); }} />
   </article>;
-}
+});
