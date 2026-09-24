@@ -11,6 +11,8 @@ interface TrashDrawerProps {
   onRestore: (batchId: string) => void;
   /** Open the empty-Trash confirmation dialog. */
   onEmptyTrash?: () => void;
+  /** Open the "Backups…" (restore from snapshot) dialog. */
+  onRestoreFromBackup?: () => void;
 }
 
 function formatDeletedAt(millis: number): string {
@@ -40,6 +42,7 @@ export function TrashDrawer({
   onClose,
   onRestore,
   onEmptyTrash = () => {},
+  onRestoreFromBackup,
 }: TrashDrawerProps) {
   const empty = !loading && !error && summary && summary.batches.length === 0;
   const populated = !loading && !error && summary && summary.batches.length > 0;
@@ -132,6 +135,15 @@ export function TrashDrawer({
         )}
       </div>
       <footer className="trash-drawer__footer">
+        {onRestoreFromBackup && (
+          <button
+            type="button"
+            className="trash-drawer__restore-from-backup"
+            onClick={onRestoreFromBackup}
+          >
+            Backups…
+          </button>
+        )}
         <button
           type="button"
           className="trash-drawer__empty"

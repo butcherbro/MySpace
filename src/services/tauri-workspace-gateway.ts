@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AddQuickBoardInput,
   AssetDto,
+  BackupSummary,
   BoardShortcutDto,
   BoardSnapshot,
   BoardSummary,
@@ -262,5 +263,13 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
     return invoke<void>("place_unsorted_card", { input });
+  }
+
+  listBackups(): Promise<BackupSummary[]> {
+    return invoke<BackupSummary[]>("list_backups", {});
+  }
+
+  requestRestore(dirName: string): Promise<never> {
+    return invoke<never>("request_restore", { snapshot: dirName });
   }
 }

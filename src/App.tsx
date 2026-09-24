@@ -7,6 +7,7 @@ import {
   useCloseFlush,
 } from "./app/use-close-flush";
 import { useTrashController } from "./app/use-trash-controller";
+import { buildCreateImageCardInput } from "./app/import-image-card";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import { moveSelectionOntoBoard } from "./canvas/move-selection-onto-board";
@@ -36,6 +37,7 @@ import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
 import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
+import { RestoreDialog } from "./backup/restore-dialog";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
 import { SearchBar } from "./search/SearchBar";
 import { useSearchController } from "./search/use-search-controller";
@@ -262,6 +264,7 @@ function App() {
   const refreshTrash = trash.refresh;
   const trashOpen = trash.open;
   const closeTrashDrawer = trash.closeDrawer;
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   useEffect(() => {
     loadQuickBoards();
   }, [loadQuickBoards]);
@@ -571,15 +574,16 @@ function App() {
           captionJson: plainTextToDocument(""),
           captionPlainText: "",
         };
-        await gateway.createImageCard({
-          id: cardId,
-          boardId: currentBoard.id,
-          frame: card.frame,
-          zIndex: card.zIndex,
-          assetId,
-          captionJson: card.captionJson,
-          captionPlainText: "",
-        });
+        await gateway.createImageCard(
+          buildCreateImageCardInput({
+            cardId,
+            boardId: currentBoard.id,
+            frame: card.frame,
+            zIndex: card.zIndex,
+            asset,
+            captionJson: card.captionJson,
+          }),
+        );
         dispatch({ type: "cardAdded", card });
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -2376,7 +2380,16 @@ function App() {
             onClose={trash.closeDrawer}
             onRestore={(batchId) => void trash.restoreBatch(batchId)}
             onEmptyTrash={trash.requestEmpty}
+            onRestoreFromBackup={() => setRestoreDialogOpen(true)}
           />
+        )}
+        {restoreDialogOpen && (
+          <>
+            <div className="restore-dialog-backdrop" onClick={() => setRestoreDialogOpen(false)} />
+            <div className="restore-dialog-overlay">
+              <RestoreDialog gateway={gateway} onClose={() => setRestoreDialogOpen(false)} />
+            </div>
+          </>
         )}
         {trash.emptyDialogOpen && (
           <>

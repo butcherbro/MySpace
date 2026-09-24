@@ -318,4 +318,29 @@ describe("TauriWorkspaceGateway", () => {
     expect(card.previewAsset?.id).toBe("thumb");
     expect(card.previewAsset?.mimeType).toBe("image/png");
   });
+
+  it("calls list_backups with no arguments", async () => {
+    const summaries = [
+      {
+        dirName: "2026-09-20T12-00-00Z",
+        createdAtSecs: 1_758_369_600,
+        schemaVersion: 4,
+        assetCount: 12,
+        totalBytes: 1_048_576,
+        valid: true,
+      },
+    ];
+    invokeMock.mockResolvedValue(summaries);
+    const gw = new TauriWorkspaceGateway();
+    const result = await gw.listBackups();
+    expect(invokeMock).toHaveBeenCalledWith("list_backups", {});
+    expect(result).toEqual(summaries);
+  });
+
+  it("calls request_restore with the chosen snapshot dir name", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const gw = new TauriWorkspaceGateway();
+    void gw.requestRestore("2026-09-20T12-00-00Z");
+    expect(invokeMock).toHaveBeenCalledWith("request_restore", { snapshot: "2026-09-20T12-00-00Z" });
+  });
 });

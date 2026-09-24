@@ -429,9 +429,16 @@ P1 (до серьёзного роста), в порядке выполнени�
       сетевого запроса (TODO в `link_metadata.rs`); `import_asset` при повторном
       использовании одного UUID из двух процессов может удалить чужой файл
       (только при коллизии id — практически невозможно).
-- [ ] Бэкап 2.0: фоновой, content-addressed ассеты (`assets.sha256`), ретеншн по объёму,
-      кнопка Restore.
-- [ ] Реестр kind на бэкенде, снятие `CHECK(kind IN …)`.
+- [x] P1.2 Бэкап 2.0: `assets.sha256` (миграция 0020), хэш при импорте, дедуп по
+      содержимому (импорт, буфер, файлы, enrichment), фоновый backfill, снапшоты
+      с hard-link'ами и лимитом 2 GiB, `list_backups`/`request_restore` +
+      диалог «Backups…» в корзине (restore через маркер и перезапуск).
+      Проверить на Mac: снапшот 2 GB ассетов < 2 с; `CollapseFaviconDuplicates`
+      удалить в следующем релизе.
+- [x] P1.3 Реестр kind: `domain/card_kind.rs` + `domain/kinds/*` (один handler на
+      kind, `to_payload`/`from_payload` — кодеки журнала), миграция 0021 сняла
+      `CHECK(kind IN …)` и размеры (теперь `Frame::validate`). На фронте один
+      список `CARD_KINDS` (`src/cards/card-kinds.ts`).
 - [ ] FTS5 для поиска.
 - [ ] Мутации возвращают ревизию/DTO; `plain_text` считается на бэкенде.
 - [ ] Точечная инвалидация вместо полного reload по `data_version`.

@@ -121,6 +121,8 @@ export interface AssetDto {
   height: number | null;
   sizeBytes: number;
   filePath: string;
+  /** Content hash used for dedup on import; absent on assets predating it. */
+  sha256?: string | null;
 }
 
 /** An image card: a static image plus an editable rich-text caption. */
@@ -549,6 +551,31 @@ export interface WorkspaceGateway {
   /** Reverses a mixed-selection move from the receipt that move returned. */
   undoMoveSelection(receipt: MoveSelectionToBoardReceipt): Promise<void>;
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void>;
+  /** Lists backup snapshots under `backups/`, newest first. */
+  listBackups(): Promise<BackupSummary[]>;
+  /**
+   * Requests a restore from `dirName` (a `BackupSummary.dirName`). On success
+   * the app restarts itself and the returned promise never resolves; a
+   * rejection means the request itself was rejected (invalid name, snapshot
+   * not found, or it failed validation) and nothing changed.
+   */
+  requestRestore(dirName: string): Promise<never>;
+}
+
+/** One snapshot as shown in the "Restore from backup" dialog. */
+export interface BackupSummary {
+  /** Directory name under `backups/`; pass it back to `requestRestore`. */
+  dirName: string;
+  /** Unix seconds when the snapshot was taken. */
+  createdAtSecs: number;
+  /** Schema version recorded in the manifest (0 when unknown). */
+  schemaVersion: number;
+  /** Assets present in the snapshot. */
+  assetCount: number;
+  /** Apparent size of the snapshot, in bytes. */
+  totalBytes: number;
+  /** True when the snapshot passed validation and can be restored. */
+  valid: boolean;
 }
 
 /**

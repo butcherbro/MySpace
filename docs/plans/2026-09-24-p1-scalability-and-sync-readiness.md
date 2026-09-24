@@ -92,6 +92,15 @@ mechanical conversion. Estimate: 3–5 days.
 
 ## P1.2 — Content-addressed assets and backup 2.0
 
+**Status: done 2026-09-24.** Migration 0020 (`assets.sha256` + partial index),
+hashing in every `stage_*`, dedup on import/clipboard/file/enrichment via
+`find_asset_by_sha256`, `Mutation::HashExistingAssets` backfill queued at
+startup, hard-linked snapshots with byte retention (`BACKUP_MAX_TOTAL_BYTES`),
+`list_backups` / `request_restore` commands (restore marker applied on next
+launch), "Backups…" dialog in the Trash drawer. Deviation: files still linked
+from the live `assets/` dir are not counted against the byte limit (pruning
+cannot free them). `collapse_favicon_duplicates` is retired, delete next release.
+
 **Why.** K2 in the audit: every startup snapshot copies every asset, ten
 snapshots keep ten copies. Sync needs blob identity by hash (ADR-0011 §4).
 
@@ -124,6 +133,14 @@ wiring). Estimate: 2–3 days.
 ---
 
 ## P1.3 — Card-kind registry on the backend; drop `CHECK(kind IN …)`
+
+**Status: done 2026-09-24.** `domain/card_kind.rs` (enum, `sql_in_list`,
+`CardKindHandler`), `domain/kinds/*` (one handler per kind, `DetailTable`
+codec: `to_payload`/`from_payload` round-trip tested per kind), migration 0021
+(last `cards` rebuild, CHECKs replaced by `Frame::validate`), generic code
+iterates the registry; frontend `src/cards/card-kinds.ts` is the single list.
+Deviations: `search_rows` returns ranked `SearchHit`s; `list_trash` labels and
+the board-semantics branches in trash stay kind-specific by design.
 
 **Why.** K3: adding a kind means rebuilding `cards` and touching ~15 code
 sites, several of which are SQL string literals.

@@ -1,6 +1,7 @@
 import type {
   AddQuickBoardInput,
   AssetDto,
+  BackupSummary,
   BoardPortalDto,
   BoardShortcutDto,
   BoardSnapshot,
@@ -478,6 +479,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       height: null,
       sizeBytes: 0,
       filePath: `${input.id}.bin`,
+      sha256: null,
     };
     return Promise.resolve(asset);
   }
@@ -502,6 +504,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         height: null,
         sizeBytes: 0,
         filePath: `${input.assetId}.bin`,
+        sha256: null,
       },
       captionJson: input.captionJson,
       captionPlainText: input.captionPlainText,
@@ -649,6 +652,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         height: null,
         sizeBytes: 0,
         filePath: `${input.id}.${fileName.split(".").pop() ?? "bin"}`,
+        sha256: null,
       },
       previewText: "mock preview of " + fileName,
       previewAsset: null,
@@ -1091,6 +1095,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       height: null,
       sizeBytes: 0,
       filePath: `${id}.png`,
+      sha256: null,
     });
   }
 
@@ -1108,6 +1113,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       height: null,
       sizeBytes: 0,
       filePath: `${input.assetId}.png`,
+      sha256: null,
     };
     return Promise.resolve();
   }
@@ -1307,6 +1313,46 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     (card as { unsorted?: boolean }).unsorted = false;
     card.frame = { ...input.frame };
     return Promise.resolve();
+  }
+
+  listBackups(): Promise<BackupSummary[]> {
+    const now = Math.floor(Date.now() / 1000);
+    const summaries: BackupSummary[] = [
+      {
+        dirName: "2026-09-23T09-00-00Z",
+        createdAtSecs: now - 60 * 60 * 6,
+        schemaVersion: 4,
+        assetCount: 18,
+        totalBytes: 6_291_456,
+        valid: true,
+      },
+      {
+        dirName: "2026-09-20T09-00-00Z",
+        createdAtSecs: now - 60 * 60 * 24 * 3,
+        schemaVersion: 4,
+        assetCount: 15,
+        totalBytes: 5_242_880,
+        valid: true,
+      },
+      {
+        dirName: "2026-09-10T09-00-00Z",
+        createdAtSecs: now - 60 * 60 * 24 * 13,
+        schemaVersion: 3,
+        assetCount: 9,
+        totalBytes: 2_097_152,
+        valid: false,
+      },
+    ];
+    return Promise.resolve(summaries);
+  }
+
+  requestRestore(dirName: string): Promise<never> {
+    // The real command restarts the app and the returned promise never
+    // resolves. There is nothing to restart in the mock, so this only logs
+    // the request (for dev builds/tests to observe which snapshot was
+    // chosen) and resolves — callers should not rely on this ever settling.
+    console.log(`mock: restore requested from backup "${dirName}"`);
+    return Promise.resolve() as unknown as Promise<never>;
   }
 
   private buildBreadcrumbs(boardId: string) {
