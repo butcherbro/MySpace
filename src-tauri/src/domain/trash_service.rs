@@ -58,7 +58,12 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
         return Err(WorkspaceError::NotFound(board_id.to_string()));
     }
 
-    // Mark all boards in the subtree.
+    // Mark all boards in the subtree. A previously-trashed sub-board (trashed in
+    // an earlier batch) is still walked by the CTE so its own still-active
+    // descendants and cards are reachable, but the UPDATE must not touch a board
+    // that is already trashed — otherwise its `trash_batch_id` would be
+    // overwritten with this new batch, silently emptying the earlier batch and
+    // making restore of either batch resurrect/re-trash the wrong rows.
     tx.execute(
         "WITH RECURSIVE subtree(id) AS (
             SELECT id FROM boards WHERE id = ?1
@@ -67,11 +72,12 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
          )
          UPDATE boards
          SET deleted_at = ?2, trash_batch_id = ?3
-         WHERE id IN (SELECT id FROM subtree)",
+         WHERE id IN (SELECT id FROM subtree) AND deleted_at IS NULL",
         params![board_id, now, batch_id],
     )?;
 
-    // Mark all cards belonging to those boards.
+    // Mark all cards belonging to those boards — but only cards not already
+    // trashed under an earlier batch (see comment above).
     tx.execute(
         "UPDATE cards
          SET deleted_at = ?2, trash_batch_id = ?3
@@ -82,7 +88,8 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
                 SELECT b.id FROM boards b JOIN subtree s ON b.parent_board_id = s.id
             )
             SELECT id FROM subtree
-         )",
+         )
+         AND deleted_at IS NULL",
         params![board_id, now, batch_id],
     )?;
 
@@ -128,6 +135,9 @@ fn trash_board_in_tx(
     batch_id: &str,
     now: i64,
 ) -> Result<(), WorkspaceError> {
+    // See the identical comment in `trash_board`: the CTE may still traverse an
+    // already-trashed sub-board, but the UPDATE must skip rows already trashed
+    // so an earlier batch keeps its own `trash_batch_id`.
     tx.execute(
         "WITH RECURSIVE subtree(id) AS (
             SELECT id FROM boards WHERE id = ?1
@@ -136,7 +146,7 @@ fn trash_board_in_tx(
          )
          UPDATE boards
          SET deleted_at = ?2, trash_batch_id = ?3
-         WHERE id IN (SELECT id FROM subtree)",
+         WHERE id IN (SELECT id FROM subtree) AND deleted_at IS NULL",
         params![board_id, now, batch_id],
     )?;
 
@@ -150,7 +160,8 @@ fn trash_board_in_tx(
                 SELECT b.id FROM boards b JOIN subtree s ON b.parent_board_id = s.id
             )
             SELECT id FROM subtree
-         )",
+         )
+         AND deleted_at IS NULL",
         params![board_id, now, batch_id],
     )?;
 
@@ -239,6 +250,41 @@ pub fn trash_selection(
 /// cards in the batch, restoring original placement.
 pub fn restore_trash_batch(conn: &mut Connection, batch_id: &str) -> Result<(), WorkspaceError> {
     let tx = conn.transaction()?;
+
+    // Refuse when restoring this batch would surface a card or board whose
+    // parent is still trashed in a *different* batch: the card would become an
+    // invisible orphan on a trashed board, or the board would be unreachable
+    // from any active ancestor. A parent trashed in this very same batch is
+    // fine — it is restored together, right here.
+    let orphaned_card: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM cards c
+         JOIN boards p ON p.id = c.board_id
+         WHERE c.trash_batch_id = ?1
+           AND p.deleted_at IS NOT NULL
+           AND (p.trash_batch_id IS NULL OR p.trash_batch_id != ?1)",
+        [batch_id],
+        |r| r.get(0),
+    )?;
+    if orphaned_card > 0 {
+        return Err(WorkspaceError::ConstraintViolation(
+            "restore the parent board first".to_string(),
+        ));
+    }
+
+    let orphaned_board: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM boards b
+         JOIN boards p ON p.id = b.parent_board_id
+         WHERE b.trash_batch_id = ?1
+           AND p.deleted_at IS NOT NULL
+           AND (p.trash_batch_id IS NULL OR p.trash_batch_id != ?1)",
+        [batch_id],
+        |r| r.get(0),
+    )?;
+    if orphaned_board > 0 {
+        return Err(WorkspaceError::ConstraintViolation(
+            "restore the parent board first".to_string(),
+        ));
+    }
 
     tx.execute(
         "UPDATE boards SET deleted_at = NULL, trash_batch_id = NULL WHERE trash_batch_id = ?1",
@@ -687,12 +733,12 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
         });
     }
 
-    batches.truncate(MAX_BATCHES);
     batches.sort_by(|a, b| {
         b.deleted_at
             .cmp(&a.deleted_at)
             .then_with(|| b.batch_id.cmp(&a.batch_id))
     });
+    batches.truncate(MAX_BATCHES);
 
     let batch_count = batches.len() as i64;
     let board_count = batches.iter().map(|b| b.board_count).sum();
