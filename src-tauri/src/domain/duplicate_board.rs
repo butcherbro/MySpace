@@ -344,21 +344,15 @@ fn load_portal_dto(
     tx.query_row(
         "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
                 p.target_board_id, b.revision, b.title, b.color_token, b.symbol,
-                COALESCE(child.child_board_count, 0),
-                COALESCE(cardchild.child_card_count, 0),
+                (SELECT COUNT(*) FROM boards cb
+                 WHERE cb.parent_board_id = p.target_board_id AND cb.deleted_at IS NULL) AS child_board_count,
+                (SELECT COUNT(*) FROM cards cc
+                 WHERE cc.board_id = p.target_board_id AND cc.deleted_at IS NULL) AS child_card_count,
                 ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
          FROM cards c
          JOIN board_portal_cards p ON p.card_id = c.id
          JOIN boards b ON b.id = p.target_board_id
          LEFT JOIN assets ca ON ca.id = b.cover_asset_id
-         LEFT JOIN (
-             SELECT parent_board_id, COUNT(*) AS child_board_count
-             FROM boards WHERE deleted_at IS NULL GROUP BY parent_board_id
-         ) child ON child.parent_board_id = p.target_board_id
-         LEFT JOIN (
-             SELECT board_id, COUNT(*) AS child_card_count
-             FROM cards WHERE deleted_at IS NULL GROUP BY board_id
-         ) cardchild ON cardchild.board_id = p.target_board_id
          WHERE c.id = ?1",
         [portal_card_id],
         |row| {

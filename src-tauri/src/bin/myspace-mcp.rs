@@ -158,7 +158,13 @@ fn resolve_board_id(board_arg: &str) -> Result<String, WorkspaceError> {
 
 fn main() {
     let (db_path, asset_dir) = resolve_paths();
-    let mut conn = db::open(std::path::Path::new(&db_path)).expect("failed to open workspace db");
+    let mut conn = match db::open_readonly_checked(std::path::Path::new(&db_path)) {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("myspace-mcp: failed to open workspace db at {db_path}: {err}");
+            std::process::exit(1);
+        }
+    };
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();

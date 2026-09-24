@@ -339,3 +339,93 @@ fn cards_accept_file_kind_and_foreign_keys_stay_clean() {
     let violations = stmt.query_map([], |_| Ok(())).unwrap().count();
     assert_eq!(violations, 0);
 }
+
+#[test]
+fn migration_creates_the_0019_lookup_indexes() {
+    let conn = open_in_memory().unwrap();
+    let indexes = index_names(&conn);
+
+    for expected in [
+        "idx_image_cards_asset",
+        "idx_embed_cards_asset",
+        "idx_embed_cards_favicon_asset",
+        "idx_file_cards_asset",
+        "idx_file_cards_preview_asset",
+        "idx_boards_cover_asset",
+        "idx_favicon_cache_asset",
+        "idx_mutation_receipts_batch",
+        "idx_cards_trashed",
+        "idx_boards_trashed",
+    ] {
+        assert!(
+            indexes.iter().any(|t| t == expected),
+            "missing index: {expected}; got {indexes:?}"
+        );
+    }
+}
+
+/// A database that already has a migration version newer than this build
+/// knows about must never be migrated by an older build.
+#[test]
+fn run_migrations_refuses_a_database_newer_than_this_build() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    migrations::run_migrations(&mut conn).unwrap();
+
+    conn.execute(
+        "INSERT INTO schema_migrations (version, name, applied_at) VALUES (9999, 'from_the_future', 0)",
+        [],
+    )
+    .unwrap();
+
+    let err = migrations::run_migrations(&mut conn).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("newer"),
+        "expected error message to mention 'newer', got: {message}"
+    );
+}
+
+#[test]
+fn schema_status_is_up_to_date_after_open_in_memory() {
+    let conn = open_in_memory().unwrap();
+    assert_eq!(
+        migrations::schema_status(&conn).unwrap(),
+        migrations::SchemaStatus::UpToDate
+    );
+}
+
+#[test]
+fn schema_status_reports_newer_without_mutating() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    migrations::run_migrations(&mut conn).unwrap();
+    conn.execute(
+        "INSERT INTO schema_migrations (version, name, applied_at) VALUES (9999, 'from_the_future', 0)",
+        [],
+    )
+    .unwrap();
+
+    match migrations::schema_status(&conn).unwrap() {
+        migrations::SchemaStatus::Newer { db, .. } => assert_eq!(db, 9999),
+        other => panic!("expected SchemaStatus::Newer, got {other:?}"),
+    }
+}
+
+#[test]
+fn schema_status_reports_pending_before_migrating() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(include_str!("../migrations/0001_workspace.sql"))
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);
+         INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'workspace', 0);",
+    )
+    .unwrap();
+
+    match migrations::schema_status(&conn).unwrap() {
+        migrations::SchemaStatus::Pending(count) => assert!(count > 0),
+        other => panic!("expected SchemaStatus::Pending, got {other:?}"),
+    }
+}
