@@ -69,6 +69,7 @@ import { htmlToDocument } from "./editor/html-to-document";
 import { flushAllDrafts } from "./editor/draft-flush-registry";
 import { copyText } from "./services/clipboard";
 import type {
+  AssetDto,
   BoardPortalDto,
   BoardShortcutDto,
   CardDto,
@@ -547,6 +548,47 @@ function App() {
     [cleanupCreationDrag, handleCreateNote, handleCreateLink, handleCreateChildBoard],
   );
 
+  // Creates an image card for an already-imported asset at board coordinates.
+  const placeImageAsset = useCallback(
+    async (asset: AssetDto, x: number, y: number, cardId: string, centered = false) => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard) return;
+      {
+        // Backend не читает natural width/height картинки при импорте
+        // (assets.width/height в БД всегда NULL), поэтому пропорции для
+        // стартового frame берём в браузере — иначе карточка получает
+        // фиксированный 320x240 и обрезает картинку под рамку (todo.md №3).
+        const natural = await loadNaturalImageSize(assetUrl(asset.filePath));
+        const { width, height } = computeInitialImageFrameSize(natural?.width, natural?.height);
+        const card: ImageCardDto = {
+          kind: "image",
+          id: cardId,
+          boardId: currentBoard.id,
+          frame: centered
+            ? { x: Math.max(0, x - width / 2), y: Math.max(0, y - height / 2), width, height }
+            : { x, y, width, height },
+          zIndex: cardsRef.current.length,
+          revision: 1,
+          asset,
+          captionJson: plainTextToDocument(""),
+          captionPlainText: "",
+        };
+        await gateway.createImageCard(
+          buildCreateImageCardInput({
+            cardId,
+            boardId: currentBoard.id,
+            frame: card.frame,
+            zIndex: card.zIndex,
+            asset,
+            captionJson: card.captionJson,
+          }),
+        );
+        dispatch({ type: "cardAdded", card });
+      }
+    },
+    [gateway],
+  );
+
   // Imports an image and creates a card at the given board coordinates. Shared
   // by the file picker (button) and native drag-drop.
   const importImageCard = useCallback(
@@ -566,39 +608,12 @@ function App() {
           fileName,
           mimeType,
         });
-        // Backend не читает natural width/height картинки при импорте
-        // (assets.width/height в БД всегда NULL), поэтому пропорции для
-        // стартового frame берём в браузере — иначе карточка получает
-        // фиксированный 320x240 и обрезает картинку под рамку (todo.md №3).
-        const natural = await loadNaturalImageSize(assetUrl(asset.filePath));
-        const { width, height } = computeInitialImageFrameSize(natural?.width, natural?.height);
-        const card: ImageCardDto = {
-          kind: "image",
-          id: cardId,
-          boardId: currentBoard.id,
-          frame: { x, y, width, height },
-          zIndex: cardsRef.current.length,
-          revision: 1,
-          asset,
-          captionJson: plainTextToDocument(""),
-          captionPlainText: "",
-        };
-        await gateway.createImageCard(
-          buildCreateImageCardInput({
-            cardId,
-            boardId: currentBoard.id,
-            frame: card.frame,
-            zIndex: card.zIndex,
-            asset,
-            captionJson: card.captionJson,
-          }),
-        );
-        dispatch({ type: "cardAdded", card });
+        await placeImageAsset(asset, x, y, cardId);
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
-    [gateway, idGenerator],
+    [gateway, idGenerator, placeImageAsset],
   );
 
   const handleCreateImage = useCallback(async () => {
@@ -838,11 +853,27 @@ function App() {
     return true;
   }, [board, dispatcher, idGenerator, fallbackPastePosition]);
 
+  // Ctrl/Cmd+V of a bitmap or a copied image file onto the canvas. The backend
+  // reads the OS clipboard directly (NSPasteboard on macOS, arboard elsewhere),
+  // which also covers file copies from Finder/Explorer that the webview only
+  // exposes as an opaque "Files" entry.
+  const handlePasteImage = useCallback(async () => {
+    const position = lastCanvasPointRef.current ?? fallbackPastePosition();
+    try {
+      const asset = await gateway.importClipboardImage();
+      // Centred under the mouse cursor, like a drop.
+      await placeImageAsset(asset, position.x, position.y, idGenerator.nextId(), true);
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [gateway, idGenerator, placeImageAsset, fallbackPastePosition]);
+
   useCanvasPaste({
     enabled: Boolean(board),
     onPaste: handleCanvasPaste,
     onPasteCards: handlePasteCards,
     onPastePath: handlePastePath,
+    onPasteImage: handlePasteImage,
   });
 
   const handleUpdateNote = useCallback(

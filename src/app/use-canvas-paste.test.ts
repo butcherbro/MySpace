@@ -1,7 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { extractPathCandidate, useCanvasPaste } from "./use-canvas-paste";
+import { extractPathCandidate, isImagePaste, useCanvasPaste } from "./use-canvas-paste";
 
 function dispatchPaste(target: EventTarget, data: Partial<Record<"text/html" | "text/plain", string>>) {
   const clipboardData = {
@@ -302,5 +302,57 @@ describe("extractPathCandidate", () => {
   it("rejects empty/whitespace-only text", () => {
     expect(extractPathCandidate("")).toBeNull();
     expect(extractPathCandidate("   ")).toBeNull();
+  });
+});
+
+describe("image paste", () => {
+  function fakeData(opts: {
+    text?: string;
+    html?: string;
+    items?: { kind: string; type: string }[];
+    types?: string[];
+  }): DataTransfer {
+    return {
+      getData: (t: string) => (t === "text/plain" ? opts.text ?? "" : t === "text/html" ? opts.html ?? "" : ""),
+      items: (opts.items ?? []) as unknown as DataTransferItemList,
+      files: [] as unknown as FileList,
+      types: opts.types ?? [],
+    } as unknown as DataTransfer;
+  }
+
+  it("treats a bitmap without text as an image paste, even next to an <img> html tag", () => {
+    expect(isImagePaste(fakeData({ items: [{ kind: "file", type: "image/png" }] }))).toBe(true);
+    expect(
+      isImagePaste(fakeData({ html: '<img src="x.png">', items: [{ kind: "file", type: "image/png" }] })),
+    ).toBe(true);
+    expect(isImagePaste(fakeData({ types: ["Files"] }))).toBe(true);
+  });
+
+  it("lets plain text win over an image (Office copies add a rendered picture)", () => {
+    expect(
+      isImagePaste(fakeData({ text: "hello", items: [{ kind: "file", type: "image/png" }] })),
+    ).toBe(false);
+    expect(isImagePaste(fakeData({ text: "hello" }))).toBe(false);
+    expect(isImagePaste(null)).toBe(false);
+  });
+
+  it("calls onPasteImage instead of onPaste for an image and prevents the default", () => {
+    const onPaste = vi.fn();
+    const onPasteImage = vi.fn();
+    renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPasteImage }));
+    const canvasDiv = document.createElement("div");
+    document.body.appendChild(canvasDiv);
+    const event = new Event("paste", { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, "clipboardData", {
+      value: fakeData({ items: [{ kind: "file", type: "image/png" }] }),
+    });
+    Object.defineProperty(event, "target", { value: canvasDiv });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+    expect(onPasteImage).toHaveBeenCalledTimes(1);
+    expect(onPaste).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    canvasDiv.remove();
   });
 });

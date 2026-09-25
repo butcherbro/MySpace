@@ -1,6 +1,6 @@
 [package]
 name = "myspace"
-version = "0.2.1"
+version = "0.2.2"
 description = "A spatial project surface"
 authors = ["you"]
 edition = "2021"

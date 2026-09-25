@@ -24,6 +24,13 @@ export interface CanvasPasteOptions {
    * text/html note below.
    */
   onPastePath?: (path: string) => Promise<boolean>;
+  /**
+   * Called when the clipboard holds an image (a bitmap such as a screenshot,
+   * or a copied image file) and no plain text. The handler reads the image
+   * from the OS clipboard itself; the webview's `clipboardData` does not
+   * expose copied files' contents on every platform.
+   */
+  onPasteImage?: () => void;
 }
 
 /**
@@ -58,7 +65,24 @@ export function extractPathCandidate(text: string): string | null {
  * canvas-paste path existed before this hook, and building it is out of scope
  * for formatted-text paste (todo.md №13).
  */
-export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath }: CanvasPasteOptions): void {
+/**
+ * True when the paste carries an image and no plain text. Images win over
+ * HTML because "Copy image" in browsers puts an `<img>` tag next to the
+ * bitmap; plain text wins over images because Office apps add a rendered
+ * picture next to the real text.
+ */
+export function isImagePaste(data: DataTransfer | null): boolean {
+  if (!data) return false;
+  const text = data.getData("text/plain");
+  if (text.trim()) return false;
+  const items = Array.from(data.items ?? []);
+  if (items.some((i) => i.kind === "file" && i.type.startsWith("image/"))) return true;
+  if (Array.from(data.files ?? []).some((f) => f.type.startsWith("image/"))) return true;
+  // A file copied in Finder/Explorer can arrive as an untyped "Files" entry.
+  return Array.from(data.types ?? []).includes("Files");
+}
+
+export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath, onPasteImage }: CanvasPasteOptions): void {
   useEffect(() => {
     if (!enabled) return;
 
@@ -96,6 +120,12 @@ export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath }: 
         return;
       }
 
+      if (onPasteImage && isImagePaste(e.clipboardData)) {
+        e.preventDefault();
+        onPasteImage();
+        return;
+      }
+
       const html = e.clipboardData?.getData("text/html") ?? "";
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!html.trim() && !text.trim()) return;
@@ -118,5 +148,5 @@ export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath }: 
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [enabled, onPaste, onPasteCards, onPastePath]);
+  }, [enabled, onPaste, onPasteCards, onPastePath, onPasteImage]);
 }
