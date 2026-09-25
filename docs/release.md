@@ -163,3 +163,17 @@ expand the red step.
 
 The release stays a **draft** after any failure, so users are never offered a
 broken update. Delete the draft in `MySpace-releases` if you abandon the version.
+
+## Releasing without a terminal
+
+GitHub → the private `MySpace` repo → **Actions** → **Release** → **Run workflow**:
+
+- *Use workflow from*: the branch that carries the new version.
+- *tag*: the release name, e.g. `v0.2.1`. It must equal the version in
+  `package.json`, `tauri.conf.json` and `Cargo.toml`.
+- *ref*: the same branch name (leave empty only if a git tag with that name
+  already exists in this repo).
+
+The release tag is created in the public `MySpace-releases` repo, so no tag
+is needed in this repo. Installed apps pick the update up on their next start
+or from **Trash → Check for updates…**.

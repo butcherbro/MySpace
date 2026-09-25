@@ -32,9 +32,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)release, e.g. v0.2.0"
+        description: "Release name, e.g. v0.2.1 (must match the app version)"
         required: true
         type: string
+      ref:
+        description: "Branch or commit to build (empty = the tag itself, which must exist)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -44,6 +49,10 @@ env:
   RELEASES_OWNER: butcherbro
   RELEASES_REPO: MySpace-releases
   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  # What to check out: an explicit branch/commit from a manual run, else the tag.
+  # The release tag itself is created in the public releases repo, so a manual
+  # run from a branch needs no tag in this repo.
+  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || (github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name) }}
 
 concurrency:
   # One run per tag; a second push of the same tag waits instead of racing
@@ -60,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ env.SOURCE_REF }}
 
       # The updater compares the running version with `latest.json`, whose
       # version comes from tauri.conf.json. A tag that disagrees with the three
@@ -165,7 +174,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ env.SOURCE_REF }}
 
       - uses: actions/setup-node@v4
         with:
