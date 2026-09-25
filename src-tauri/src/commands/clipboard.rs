@@ -157,11 +157,70 @@ pub fn read_clipboard_image() -> Result<Option<(Vec<u8>, String, String)>, Strin
     Ok(None)
 }
 
-/// Not implemented off macOS yet (arboard's image read needs the `image-data`
-/// feature plus PNG re-encoding); the caller surfaces this as an error.
+/// Reads an image from the clipboard on Windows and Linux through arboard.
+/// Order matches macOS: bitmap data first (screenshots, "Copy image"), then a
+/// copied image file (Explorer). The bitmap arrives as RGBA and is re-encoded
+/// as PNG so the asset store sees the same bytes it would get from a file.
 #[cfg(not(target_os = "macos"))]
 pub fn read_clipboard_image() -> Result<Option<(Vec<u8>, String, String)>, String> {
-    Err("clipboard image paste is only implemented on macOS".to_string())
+    // 1. Bitmap on the clipboard.
+    let image = with_clipboard(|cb| match cb.get_image() {
+        Ok(img) => Ok(Some(img)),
+        Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(e) => Err(e),
+    })?;
+    if let Some(img) = image {
+        let bytes = encode_rgba_png(img.width, img.height, &img.bytes)?;
+        return Ok(Some((
+            bytes,
+            "image/png".to_string(),
+            "clipboard.png".to_string(),
+        )));
+    }
+
+    // 2. A copied image file (Explorer / file manager).
+    let files = with_clipboard(|cb| match cb.get().file_list() {
+        Ok(list) => Ok(list),
+        Err(arboard::Error::ContentNotAvailable) => Ok(Vec::new()),
+        Err(e) => Err(e),
+    })?;
+    for path in files {
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| "clipboard-image".to_string());
+        let mime = crate::mime_for_asset_name(&file_name).to_string();
+        if !mime.starts_with("image/") {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&path) {
+            return Ok(Some((bytes, mime, file_name)));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Encodes a tightly packed RGBA8 buffer as PNG.
+#[cfg(not(target_os = "macos"))]
+fn encode_rgba_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 || rgba.len() != width * height * 4 {
+        return Err("clipboard image has an unexpected size".to_string());
+    }
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| format!("png header: {e}"))?;
+        writer
+            .write_image_data(rgba)
+            .map_err(|e| format!("png encode: {e}"))?;
+    }
+    Ok(out)
 }
 
 #[cfg(target_os = "macos")]
@@ -201,6 +260,16 @@ fn file_name_from_url(url_str: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn encodes_rgba_as_png_and_rejects_bad_sizes() {
+        let px = vec![255u8, 0, 0, 255, 0, 255, 0, 255];
+        let bytes = super::encode_rgba_png(2, 1, &px).expect("png");
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(super::encode_rgba_png(2, 2, &px).is_err());
+        assert!(super::encode_rgba_png(0, 0, &[]).is_err());
+    }
+
     use super::paths_as_text;
     use std::path::PathBuf;
 

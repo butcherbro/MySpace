@@ -82,7 +82,7 @@ Not implemented off macOS yet:
 
 - Office/PDF thumbnails on File Cards (Quick Look `qlmanage`); the card shows
   no thumbnail.
-- Pasting an image from the clipboard (`read_clipboard_image`) returns an error.
+- Pasting an image from the clipboard works through arboard (bitmap re-encoded as PNG, or a copied image file).
 - `npm run release` (installs into `/Applications`); Windows installers come
   from the release workflow, or build one by hand with
   `npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'`

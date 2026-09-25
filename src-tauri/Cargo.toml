@@ -1,6 +1,6 @@
 [package]
 name = "myspace"
-version = "0.2.0"
+version = "0.2.1"
 description = "A spatial project surface"
 authors = ["you"]
 edition = "2021"
@@ -72,8 +72,9 @@ objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 
 # Cross-platform clipboard for everything that is not macOS (macOS keeps the
-# proven NSPasteboard path in commands/clipboard.rs). `image-data` is off: we
-# only write text and file lists (CF_HDROP on Windows, text/uri-list on X11).
+# proven NSPasteboard path in commands/clipboard.rs). `image-data` gives us
+# the RGBA bitmap for "paste image"; `png` re-encodes it for the asset store.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-arboard = { version = "3.6", default-features = false }
+arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+png = "0.18"
 
