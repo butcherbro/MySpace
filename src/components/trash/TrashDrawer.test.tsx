@@ -154,4 +154,35 @@ describe("TrashDrawer", () => {
     await user.click(screen.getByRole("button", { name: "Devices…" }));
     expect(onOpenDevices).toHaveBeenCalled();
   });
+
+  it("offers Check for updates… only when wired", async () => {
+    const user = userEvent.setup();
+    const onCheckForUpdates = vi.fn();
+    const { rerender } = render(
+      <TrashDrawer
+        summary={summary}
+        loading={false}
+        error={null}
+        restoringBatchId={null}
+        onClose={vi.fn()}
+        onRestore={vi.fn()}
+        onOpenDevices={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Check for updates…" })).toBeNull();
+    rerender(
+      <TrashDrawer
+        summary={summary}
+        loading={false}
+        error={null}
+        restoringBatchId={null}
+        onClose={vi.fn()}
+        onRestore={vi.fn()}
+        onOpenDevices={vi.fn()}
+        onCheckForUpdates={onCheckForUpdates}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Check for updates…" }));
+    expect(onCheckForUpdates).toHaveBeenCalled();
+  });
 });

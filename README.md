@@ -36,13 +36,30 @@ npm run tauri dev
 ```
 
 `npm run tauri dev` — dev loop with hot reload.
-`npm run release` — builds the .app and installs it to /Applications/MySpace.app.
+`npm run release` — builds the .app and installs it to /Applications/MySpace.app
+(local, unsigned for the updater; published releases come from `.github/workflows/release.yml`).
 
 ## Platforms
 
 macOS is the primary target and the required CI job. Windows and Linux build
 and pass the Rust gates in CI (`windows-cargo`, `linux-cargo`); see
 `.github/workflows/ci.yml`.
+
+### Download
+
+Installers are published to the public repo
+[butcherbro/MySpace-releases](https://github.com/butcherbro/MySpace-releases/releases/latest):
+
+- macOS, Apple Silicon: [`myspace_<version>_aarch64.dmg`](https://github.com/butcherbro/MySpace-releases/releases/latest)
+- macOS, Intel: [`myspace_<version>_x64.dmg`](https://github.com/butcherbro/MySpace-releases/releases/latest)
+- Windows 10/11 x64: [`myspace_<version>_x64-setup.exe`](https://github.com/butcherbro/MySpace-releases/releases/latest)
+
+The builds are not notarized (macOS) or code-signed (Windows) yet: on macOS
+right-click the app -> Open (macOS 15+: System Settings -> Privacy & Security
+-> Open Anyway); on Windows SmartScreen -> More info -> Run anyway. After
+that, the app updates itself: it checks for a new version on startup and
+offers "Update and restart" (also Trash -> "Check for updates…"). How to cut
+a release: `docs/release.md`.
 
 ### Windows
 
@@ -66,8 +83,10 @@ Not implemented off macOS yet:
 - Office/PDF thumbnails on File Cards (Quick Look `qlmanage`); the card shows
   no thumbnail.
 - Pasting an image from the clipboard (`read_clipboard_image`) returns an error.
-- `npm run release` (installs into `/Applications`); build a Windows bundle
-  with `npm run tauri build` by hand.
+- `npm run release` (installs into `/Applications`); Windows installers come
+  from the release workflow, or build one by hand with
+  `npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'`
+  (see `docs/release.md`).
 
 Needs a human on Windows (CI cannot exercise UI or the clipboard): drag a
 folder in and open it, open/reveal a File Card, "Copy File Path" and "Copy

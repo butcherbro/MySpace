@@ -1,6 +1,6 @@
 [package]
 name = "myspace"
-version = "0.1.0"
+version = "0.2.0"
 description = "A spatial project surface"
 authors = ["you"]
 edition = "2021"
@@ -27,6 +27,10 @@ rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }
 uuid = { version = "1.26.0", features = ["v7", "serde", "rng-getrandom"] }
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-dialog = "2"
+# In-app updates (signed, from the public MySpace-releases repo) and the
+# relaunch after installing one. Registered only in `run()`, never in tests.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 reqwest = { version = "0.13.4", features = ["blocking"] }
 url = "2.5.8"
 # GFM-таблицы для рендера .md-превью (file card) в HTML внутри sandboxed iframe.

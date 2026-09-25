@@ -39,6 +39,8 @@ import { TrashDrawer } from "./components/trash/TrashDrawer";
 import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
 import { RestoreDialog } from "./backup/restore-dialog";
 import { DevicesDialog } from "./sync/DevicesDialog";
+import { UpdatePrompt } from "./updates/UpdatePrompt";
+import { useUpdateCheck } from "./updates/use-update-check";
 import { SyncStatusPill } from "./sync/SyncStatusPill";
 import { useSyncAppliedReload } from "./sync/use-sync-state";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
@@ -1320,6 +1322,15 @@ function App() {
     onError: (error) => dispatch({ type: "failed", message: errorMessage(error) }),
   });
 
+  // In-app updates (desktop only). The same pending-write barriers as the close
+  // run before the app is replaced: the installer and `relaunch()` bypass the
+  // window close handler above.
+  const updates = useUpdateCheck({
+    flushBeforeInstall: async () => {
+      await Promise.all([flushAllDrafts(), queueRef.current.flush(), viewportController.flush()]);
+    },
+  });
+
   const handleCardsSelected = useCallback((e: { ids: string[] }) => {
     const prev = state.selection;
     const next = e.ids;
@@ -2506,8 +2517,10 @@ function App() {
             onEmptyTrash={trash.requestEmpty}
             onRestoreFromBackup={() => setRestoreDialogOpen(true)}
             onOpenDevices={() => setDevicesDialogOpen(true)}
+            onCheckForUpdates={updates.supported ? () => void updates.checkNow() : undefined}
           />
         )}
+        <UpdatePrompt controller={updates} />
         {devicesDialogOpen && (
           <>
             <div className="devices-dialog-backdrop" onClick={() => setDevicesDialogOpen(false)} />

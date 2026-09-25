@@ -21,6 +21,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // In-app updates: the frontend (`src/updates/`) calls `check()` /
+        // `downloadAndInstall()` and then `relaunch()`. Config (endpoint,
+        // pubkey, Windows install mode) lives in `plugins.updater` of
+        // tauri.conf.json. Only registered here, so `cargo test` never loads it.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // Decorations are deliberately NOT persisted: Windows/Linux run
         // undecorated (tauri.windows.conf.json / tauri.linux.conf.json) with
         // our own window controls, and a state file saved by an older build

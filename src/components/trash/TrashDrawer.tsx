@@ -16,6 +16,8 @@ interface TrashDrawerProps {
   onRestoreFromBackup?: () => void;
   /** Open the "Devices…" (LAN sync, ADR-0011 S3) dialog. */
   onOpenDevices?: () => void;
+  /** Run a manual update check (desktop builds only; the result shows in the update banner). */
+  onCheckForUpdates?: () => void;
 }
 
 function formatDeletedAt(millis: number): string {
@@ -47,6 +49,7 @@ export function TrashDrawer({
   onEmptyTrash = () => {},
   onRestoreFromBackup,
   onOpenDevices,
+  onCheckForUpdates,
 }: TrashDrawerProps) {
   const empty = !loading && !error && summary && summary.batches.length === 0;
   const populated = !loading && !error && summary && summary.batches.length > 0;
@@ -156,6 +159,16 @@ export function TrashDrawer({
             onClick={onOpenDevices}
           >
             Devices…
+          </button>
+        )}
+        {onCheckForUpdates && (
+          <button
+            type="button"
+            className="trash-drawer__restore-from-backup trash-drawer__check-updates"
+            data-testid="trash-drawer-check-updates"
+            onClick={onCheckForUpdates}
+          >
+            Check for updates…
           </button>
         )}
         <button

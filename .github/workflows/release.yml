@@ -1,0 +1,254 @@
+name: Release
+
+# Builds signed-for-the-updater installers for macOS (Apple Silicon + Intel) and
+# Windows x64 and publishes them, together with the updater manifest
+# `latest.json`, to the PUBLIC repo butcherbro/MySpace-releases. This (code)
+# repo stays private; installed apps only ever talk to the public repo.
+#
+# Flow (see docs/release.md):
+#   1. create-release  checks that the tag matches the app version and creates
+#                      (or reuses) a DRAFT release in MySpace-releases.
+#   2. build           one job per platform; tauri-action builds, uploads the
+#                      installers + updater bundles + .sig files to that draft
+#                      and merges its platform into `latest.json`.
+#   3. publish         checks that `latest.json` lists every platform with a
+#                      signature, then publishes the draft. Only now does
+#                      `releases/latest/download/latest.json` move to the new
+#                      version, so installed apps never see a half-uploaded
+#                      release.
+#
+# Secrets (repo Settings -> Secrets and variables -> Actions):
+#   RELEASES_TOKEN                      fine-grained PAT, Contents: read/write on
+#                                       butcherbro/MySpace-releases
+#   TAURI_SIGNING_PRIVATE_KEY           updater private key (file content)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  empty (the key has no password)
+#
+# No Apple notarization and no Windows code signing yet: macOS builds are only
+# ad-hoc signed (bundle.macOS.signingIdentity "-"), Windows builds are unsigned.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)release, e.g. v0.2.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASES_OWNER: butcherbro
+  RELEASES_REPO: MySpace-releases
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+concurrency:
+  # One run per tag; a second push of the same tag waits instead of racing
+  # the first one on the same draft release.
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_id: ${{ steps.release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      # The updater compares the running version with `latest.json`, whose
+      # version comes from tauri.conf.json. A tag that disagrees with the three
+      # version fields would publish an update that never installs (or loops).
+      - name: Check the tag matches the app version
+        run: |
+          want="${TAG#v}"
+          pkg=$(node -p "require('./package.json').version")
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)
+          echo "tag=$want package.json=$pkg tauri.conf.json=$conf Cargo.toml=$cargo"
+          if [ "$pkg" != "$want" ] || [ "$conf" != "$want" ] || [ "$cargo" != "$want" ]; then
+            echo "::error::Tag $TAG does not match the version in package.json / tauri.conf.json / Cargo.toml"
+            exit 1
+          fi
+
+      - name: Write the release notes
+        run: |
+          cat > release-notes.md <<EOF
+          MySpace ${TAG}
+
+          ## Download
+
+          - **macOS, Apple Silicon (M1 and later):** \`myspace_${TAG#v}_aarch64.dmg\`
+          - **macOS, Intel:** \`myspace_${TAG#v}_x64.dmg\`
+          - **Windows 10/11 (64-bit):** \`myspace_${TAG#v}_x64-setup.exe\`
+
+          Already installed? The app offers this update by itself ("Update and restart").
+
+          ## First install
+
+          These builds are not notarized by Apple and not code-signed for Windows yet,
+          so the system warns on the first launch. Updates installed from inside the app
+          do not show these warnings again.
+
+          **macOS:** open the .dmg and drag MySpace to Applications. On first launch,
+          right-click (or Control-click) the app in Applications and choose **Open**,
+          then **Open** again. On macOS 15 (Sequoia) and later: try to open it once,
+          then go to **System Settings -> Privacy & Security** and click **Open Anyway**.
+
+          **Windows:** run the setup. If SmartScreen says "Windows protected your PC",
+          click **More info -> Run anyway**.
+          EOF
+
+      - name: Create or reuse the draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          repo="$RELEASES_OWNER/$RELEASES_REPO"
+          # Drafts are not visible through /releases/tags/{tag}; list instead.
+          existing=$(gh api "repos/$repo/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id) \(.draft)\"" | head -n1)
+          if [ -n "$existing" ]; then
+            id="${existing%% *}"
+            draft="${existing##* }"
+            if [ "$draft" != "true" ]; then
+              echo "::error::$repo already has a published release $TAG. Bump the version and tag again."
+              exit 1
+            fi
+            echo "Reusing draft release $id for $TAG"
+          else
+            # target_commitish must exist in the RELEASES repo (it has its own
+            # history), so the tag is cut from its default branch `main`.
+            id=$(gh api -X POST "repos/$repo/releases" \
+              -f tag_name="$TAG" \
+              -f target_commitish=main \
+              -f name="MySpace $TAG" \
+              -F body=@release-notes.md \
+              -F draft=true \
+              -F prerelease=false \
+              --jq .id)
+            echo "Created draft release $id for $TAG"
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            platform: macos-latest
+            rust-target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: macOS (Intel)
+            # Cross-compiled on the Apple Silicon runner (the Intel images are
+            # being retired); same toolchain as the native build.
+            platform: macos-latest
+            rust-target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - name: Windows (x64)
+            platform: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            # NSIS only: one installer per platform, and the updater manifest
+            # then always points at the same format the user installed.
+            args: --bundles nsis
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.rust-target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # No sidecar step: tauri.conf.json has no `bundle.externalBin`, and the
+      # `myspace-mcp` binary is not shipped inside the installers (see
+      # docs/release.md, "MCP server").
+
+      # tauri-action v0 (0.6.x at the time of writing). `owner`/`repo` publish
+      # to the public releases repo; with `releaseId` it uploads into the draft
+      # created above, and `tagName` makes the URLs inside latest.json point at
+      # /releases/download/<tag>/ instead of the draft's untagged-… path.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          owner: ${{ env.RELEASES_OWNER }}
+          repo: ${{ env.RELEASES_REPO }}
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          tagName: ${{ env.TAG }}
+          releaseName: "MySpace ${{ env.TAG }}"
+          releaseDraft: true
+          prerelease: false
+          # `notes` in latest.json; the full install notes are on the release page.
+          releaseBody: "MySpace ${{ env.TAG }}"
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          retryAttempts: 1
+          args: ${{ matrix.args }}
+
+  publish:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The three build jobs merge into one latest.json read-modify-write; two
+      # jobs finishing within the same second could drop a platform. Check it
+      # before anything is published: a missing platform keeps the release a
+      # draft (re-run the workflow; assets and latest.json are replaced).
+      - name: Verify latest.json
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          repo="$RELEASES_OWNER/$RELEASES_REPO"
+          asset=$(gh api "repos/$repo/releases/$RELEASE_ID/assets" --paginate \
+            --jq '.[] | select(.name == "latest.json") | .id')
+          if [ -z "$asset" ]; then
+            echo "::error::latest.json was not uploaded"
+            exit 1
+          fi
+          gh api -H "Accept: application/octet-stream" "repos/$repo/releases/assets/$asset" > latest.json
+          cat latest.json
+          jq -e --arg v "${TAG#v}" '.version == $v' latest.json >/dev/null \
+            || { echo "::error::latest.json version is not ${TAG#v}"; exit 1; }
+          for platform in darwin-aarch64 darwin-x86_64 windows-x86_64; do
+            jq -e --arg p "$platform" --arg t "$TAG" \
+              '(.platforms[$p].signature // "") != ""
+               and (.platforms[$p].url | contains("/releases/download/" + $t + "/"))' latest.json >/dev/null \
+              || { echo "::error::latest.json has no signed entry for $platform"; exit 1; }
+          done
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          gh api -X PATCH "repos/$RELEASES_OWNER/$RELEASES_REPO/releases/$RELEASE_ID" \
+            -F draft=false -F prerelease=false -f make_latest=true \
+            --jq '"Published " + .html_url'
