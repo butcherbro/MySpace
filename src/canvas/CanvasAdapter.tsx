@@ -671,7 +671,9 @@ export function CanvasAdapter({
         minZoom={0.1}
         maxZoom={4}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={3} color="var(--desk-dot)" />
+        {/* Fine dots at zoom 1 (Milanote-like); they scale with the viewport, so
+            zooming in makes them coarser. */}
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color="var(--desk-dot)" />
         <CanvasScrollbars extentMin={TRANSLATE_EXTENT_MIN} />
       </ReactFlow>
     </div>

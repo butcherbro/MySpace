@@ -2,7 +2,7 @@
   color-scheme: light dark;
 
   --desk: #ebedee;
-  --desk-dot: #dfe1e2;
+  --desk-dot: #d3d6d8;
   /* Rail / tab-strip chrome sits one step below the top bar, which is the
      lightest surface of the shell (breadcrumb row + window controls). */
   --chrome-surface: rgba(243, 244, 243, 0.97);

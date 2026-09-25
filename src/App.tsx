@@ -2127,7 +2127,11 @@ function App() {
     gateway,
     openBoardId,
     (boardId) => void navigateTo(boardId),
-    () => void refreshTrash(),
+    () => {
+      // Quick boards and the trash badge are not part of the board load.
+      void refreshTrash();
+      loadQuickBoards();
+    },
   );
 
   const handleRenameBoard = useCallback(
