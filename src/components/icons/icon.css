@@ -5,3 +5,14 @@
   flex: none;
   color: inherit;
 }
+
+/* Colored Board tile (BoardTileIcon): fill colors come from tokens, not
+   currentColor, so hover/active states only change the button background. */
+.board-tile-icon__tile {
+  fill: var(--board-tile-fill);
+  stroke: var(--board-tile-edge);
+}
+
+.board-tile-icon__card {
+  fill: var(--board-tile-card);
+}

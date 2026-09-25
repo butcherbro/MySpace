@@ -30,8 +30,10 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  background: var(--chrome-surface);
-  border-bottom: 1px solid var(--edge-subtle);
+  /* The top bar (Home + breadcrumbs) is the lightest chrome surface, a step
+     above the tab strip / rails below it, closed off by a 1px hairline. */
+  background: var(--surface-topbar);
+  border-bottom: 1px solid var(--edge-topbar);
   user-select: none;
   z-index: 20;
 }
@@ -39,8 +41,9 @@
 /* Empty drag region under the macOS traffic lights. The whole title bar is a
    drag surface; interactive chrome below opts out. Only macOS's overlay title
    bar draws traffic lights over our content (`titleBarStyle: "Overlay"` in
-   tauri.conf.json) — Windows/Linux use a native title bar above this one and
-   need no reserved clearance, so the 78px inset is scoped to macOS only. */
+   tauri.conf.json) — Windows/Linux are undecorated and draw their caption
+   buttons at the right end instead (WindowControls), so the 78px inset is
+   scoped to macOS only. */
 .app-shell__titlebar-drag {
   flex: 0 0 0;
   align-self: stretch;

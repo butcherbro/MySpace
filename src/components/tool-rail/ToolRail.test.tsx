@@ -52,6 +52,20 @@ describe("ToolRail", () => {
     expect(screen.getByRole("button", { name: "New note" })).not.toHaveClass("tool-button--board");
   });
 
+  it("draws the Board tool with the colored board tile glyph; other tools stay monochrome", () => {
+    renderRail();
+
+    const boardButton = screen.getByRole("button", { name: "New board" });
+    const tile = within(boardButton).getByTestId("board-tile-icon");
+    expect(tile.tagName.toLowerCase()).toBe("svg");
+    expect(tile).toHaveAttribute("viewBox", "0 0 24 24");
+    expect(tile.querySelector(".board-tile-icon__tile")).not.toBeNull();
+    // One wide card on top plus two smaller cards below.
+    expect(tile.querySelectorAll(".board-tile-icon__card")).toHaveLength(3);
+    expect(screen.getAllByTestId("board-tile-icon")).toHaveLength(1);
+    expect(within(screen.getByRole("button", { name: "New note" })).queryByTestId("board-tile-icon")).toBeNull();
+  });
+
   it("renders note tools (back + bold/italic/strike + color swatches) plus trash in note mode", () => {
     renderRail({ mode: "note" });
 

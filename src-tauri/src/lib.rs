@@ -21,7 +21,18 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Decorations are deliberately NOT persisted: Windows/Linux run
+        // undecorated (tauri.windows.conf.json / tauri.linux.conf.json) with
+        // our own window controls, and a state file saved by an older build
+        // (decorated: true) must not bring the native title bar back.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        - tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
+                .build(),
+        )
         .register_uri_scheme_protocol("myspace-asset", |app, request| {
             // `myspace-asset://localhost/<file-name>` serves an imported file
             // from the asset directory. The incoming path is treated strictly as

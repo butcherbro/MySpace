@@ -3,7 +3,20 @@
 
   --desk: #ebedee;
   --desk-dot: #dfe1e2;
-  --chrome-surface: rgba(255, 255, 255, 0.96);
+  /* Rail / tab-strip chrome sits one step below the top bar, which is the
+     lightest surface of the shell (breadcrumb row + window controls). */
+  --chrome-surface: rgba(243, 244, 243, 0.97);
+  --surface-topbar: #fbfbfa;
+  --edge-topbar: rgba(54, 63, 58, 0.12);
+  /* Windows/Linux caption buttons (see src/app/window-controls.css). */
+  --window-control-hover: rgba(0, 0, 0, 0.06);
+  --window-control-active: rgba(0, 0, 0, 0.1);
+  --window-control-close: #c42b1c;
+  --window-control-close-active: #b3291c;
+  /* Colored Board tile in the left rail (board-blue portal colour). */
+  --board-tile-fill: var(--portal-sky);
+  --board-tile-edge: #4f86a5;
+  --board-tile-card: #ffffff;
   --paper: #fffefa;
   --paper-raised: #ffffff;
 
@@ -72,6 +85,11 @@
     --desk: #171a18;
     --desk-dot: rgba(255, 255, 255, 0.1);
     --chrome-surface: rgba(24, 28, 25, 0.96);
+    --surface-topbar: #242925;
+    --edge-topbar: rgba(255, 255, 255, 0.09);
+    --window-control-hover: rgba(255, 255, 255, 0.08);
+    --window-control-active: rgba(255, 255, 255, 0.05);
+    --board-tile-edge: #3f7391;
     --paper: #1d221f;
     --paper-raised: #242923;
 

@@ -27,7 +27,7 @@ export function BoardBreadcrumbs({
   if (breadcrumbs.length === 0) return null;
 
   return (
-    <nav className="breadcrumbs" aria-label="Board path" data-testid="breadcrumbs" data-tauri-drag-region="false">
+    <nav className="breadcrumbs" aria-label="Board path" data-testid="breadcrumbs">
       {breadcrumbs.map((item, i) => {
         const isDropTarget = item.id === dropTargetBoardId;
         return (

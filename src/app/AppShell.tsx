@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { useShellPlatform, usesCustomWindowChrome } from "./platform";
+import { WindowControls } from "./WindowControls";
 import "./app-shell.css";
 
 interface AppShellProps {
@@ -21,11 +23,22 @@ export function AppShell({ topBar, toolRail, rightRail, rightRailCollapsed = fal
     .filter(Boolean)
     .join(" ");
 
-  // Window dragging is done explicitly: WKWebView does not honor CSS
+  const platform = useShellPlatform();
+  const customChrome = usesCustomWindowChrome(platform);
+  // Windows/Linux (undecorated): the whole bar is a Tauri drag region. "deep"
+  // makes every non-interactive descendant drag the window (Tauri's drag script
+  // still lets buttons/inputs/links and `data-tauri-drag-region="false"`
+  // subtrees through), and a double-click on it toggles maximize natively.
+  const dragRegionProps = customChrome ? { "data-tauri-drag-region": "deep" } : {};
+
+  // macOS: window dragging is done explicitly: WKWebView does not honor CSS
   // `-webkit-app-region`, and a wide `data-tauri-drag-region` header conflicts
   // with interactive chrome. Starting the drag ourselves on mouse-down keeps
   // buttons/inputs/search clickable while the rest of the bar moves the window.
   function onTitleBarMouseDown(event: React.MouseEvent<HTMLElement>) {
+    // On Windows/Linux Tauri's own drag-region script handles drag + double-click
+    // maximize; starting a second drag here would race it.
+    if (customChrome) return;
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
     if (target.closest("button, input, textarea, a, select, [data-no-drag]")) return;
@@ -46,12 +59,14 @@ export function AppShell({ topBar, toolRail, rightRail, rightRailCollapsed = fal
         className="app-shell__title-bar"
         data-testid="title-bar-region"
         onMouseDown={onTitleBarMouseDown}
+        {...dragRegionProps}
       >
         {/* Empty drag spacer under the macOS traffic lights. */}
         <div className="app-shell__titlebar-drag" data-testid="titlebar-drag-region" />
         <div className="app-shell__titlebar-content" data-testid="top-bar-region">
           {topBar}
         </div>
+        {customChrome && <WindowControls />}
       </header>
       <aside className="app-shell__tool-rail" data-testid="tool-rail-region">
         {toolRail}

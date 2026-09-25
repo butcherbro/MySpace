@@ -162,9 +162,9 @@
 }
 
 /* Board-инструмент в рейле раньше сливался с остальными (одинаковый серый
-   значок); красим его тем же семейным цветом, что и портал доски по
-   умолчанию (--portal-ink), и держим этот акцент во всех состояниях —
-   hover/active красят фон, не перекрашивают иконку обратно в серый. */
+   значок); теперь у него цветная плитка (BoardTileIcon, цвета из токенов
+   --board-tile-*), а подпись держит семейный цвет портала (--portal-ink) во
+   всех состояниях — hover/active красят только фон. */
 .tool-button--board {
   color: var(--portal-ink);
 }
@@ -183,6 +183,14 @@
 .tool-button__icon {
   width: 20px;
   height: 20px;
+}
+
+/* The colored Board tile is a 24px glyph; negative margins keep it inside the
+   20px icon row so its label lines up with the other tools. */
+.tool-button__icon--tile {
+  width: 24px;
+  height: 24px;
+  margin: -2px 0;
 }
 
 .tool-button__label {

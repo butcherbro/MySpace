@@ -1,0 +1,52 @@
+/* Caption buttons for the undecorated Windows/Linux window (Windows 11 metrics:
+   46×32 hit areas, flush with the top-right corner of the window). */
+.window-controls {
+  display: flex;
+  align-self: flex-start;
+  flex: 0 0 auto;
+  height: 32px;
+  margin-left: var(--space-1);
+}
+
+.window-controls__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: default;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.window-controls__button svg {
+  display: block;
+}
+
+.window-controls__button:hover {
+  background: var(--window-control-hover);
+}
+
+.window-controls__button:active {
+  background: var(--window-control-active);
+}
+
+.window-controls__button--close:hover,
+.window-controls__button--close:active {
+  background: var(--window-control-close);
+  color: #fff;
+}
+
+.window-controls__button--close:active {
+  background: var(--window-control-close-active);
+}
+
+.window-controls__button:focus-visible {
+  outline: 2px solid var(--edge-focus);
+  outline-offset: -2px;
+}
