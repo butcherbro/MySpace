@@ -1,6 +1,7 @@
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { StartupGate } from "./app/StartupGate";
+import { installNativeContextMenuGuard } from "./app/native-context-menu";
 import { applyPlatformAttribute } from "./app/platform";
 import "./styles/tokens.css";
 import "./styles/global.css";
@@ -10,6 +11,9 @@ import "./App.css";
 // paint of the shell already has the right CSS scoping (macOS traffic-light
 // clearance vs. native title bars elsewhere).
 applyPlatformAttribute();
+// WebView2 shows its own "Reload / Print / Inspect" menu on right-click; the
+// app has its own menus for the canvas and cards.
+installNativeContextMenuGuard();
 
 // The gate asks the backend whether it started in recovery mode (P1.7) before
 // the app mounts; in that mode only the recovery dialog renders.
