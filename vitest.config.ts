@@ -8,5 +8,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // Let `*.css?raw` imports return the real source (typography.test.ts reads
+    // the tokens); other CSS stays stubbed out as before.
+    css: { include: [/\.css\?raw$/] },
   },
 });

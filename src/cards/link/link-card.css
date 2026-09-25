@@ -55,12 +55,14 @@
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font-family: var(--font-content);
+  font-family: var(--font-text);
   font-size: 15px;
   font-weight: 500;
   line-height: 1.28;
   color: var(--link);
   text-decoration: none;
+  font-feature-settings: var(--font-text-features);
+  letter-spacing: var(--text-note-tracking);
 }
 
 .link-card__title:hover,
@@ -82,10 +84,11 @@
 .link-card__description--user-comment .link-card__description-display {
   font-weight: 600;
   color: var(--ink);
+  font-feature-settings: var(--font-text-features);
 }
 
 .link-card__description-display {
-  font-family: var(--font-content);
+  font-family: var(--font-text);
   font-size: 14px;
   line-height: 1.45;
   color: var(--ink-secondary);

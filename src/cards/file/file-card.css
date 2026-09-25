@@ -105,7 +105,7 @@
   margin: 0;
   padding: 10px 12px;
   overflow: auto;
-  font: 400 12px/1.5 var(--font-content);
+  font: 400 12px/1.5 var(--font-text);
   color: var(--ink-secondary);
   white-space: pre-wrap;
   word-break: break-word;

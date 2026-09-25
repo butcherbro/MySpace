@@ -3,6 +3,9 @@ import App from "./App";
 import { StartupGate } from "./app/StartupGate";
 import { installNativeContextMenuGuard } from "./app/native-context-menu";
 import { applyPlatformAttribute } from "./app/platform";
+// Inter Variable (all subsets incl. cyrillic) bundled as woff2 by Vite — the
+// app never fetches fonts at runtime. Must precede tokens.css (--font-ui).
+import "@fontsource-variable/inter";
 import "./styles/tokens.css";
 import "./styles/global.css";
 import "./App.css";

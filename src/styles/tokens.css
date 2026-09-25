@@ -63,8 +63,23 @@
     0 8px 22px rgba(31, 37, 33, 0.07);
   --shadow-menu: 0 8px 28px rgba(20, 24, 22, 0.18);
 
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-content: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  /* One bundled face on every platform (@fontsource-variable/inter, imported
+     in main.tsx — ships inside the app, no runtime network). System fonts are
+     only the fallback while the woff2 decodes. --font-text is the family for
+     written content (notes, captions, descriptions); same face for now, kept
+     separate so content typography can change without touching the chrome. */
+  --font-ui: "Inter Variable", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-text: "Inter Variable", -apple-system, "Segoe UI", system-ui, sans-serif;
+  /* Inter's rounder alternates (single-storey a, open digits) + contextual
+     alternates. Applied to written content. */
+  --font-text-features: "cv11", "ss01", "calt";
+
+  /* Type scale. UI chrome stays compact; note text is larger and airier. */
+  --text-ui-size: 13px;
+  --text-ui-leading: 1.4;
+  --text-note-size: 15px;
+  --text-note-leading: 1.55;
+  --text-note-tracking: -0.005em;
 
   --radius-note: 5px;
   --radius-image: 4px;
