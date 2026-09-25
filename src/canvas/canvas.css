@@ -100,3 +100,16 @@
 .canvas-surface .react-flow__attribution a:hover {
   color: var(--ink);
 }
+
+/* Space + drag pans (CanvasAdapter `spacePan`): a grab hand over the whole
+   board, cards included, and a closed hand while the pan is in progress. */
+.canvas-surface--space-pan .react-flow__pane,
+.canvas-surface--space-pan .react-flow__node,
+.canvas-surface--space-pan .react-flow__node * {
+  cursor: grab;
+}
+
+.canvas-surface--space-pan .react-flow__pane.dragging,
+.canvas-surface--space-pan .react-flow__pane.dragging * {
+  cursor: grabbing;
+}

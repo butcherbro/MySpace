@@ -13,6 +13,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
+import { CanvasScrollbars } from "./CanvasScrollbars";
 import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard, staleNodeIds } from "./canvas-mapping";
 import type {
   CanvasCard,
@@ -37,7 +38,25 @@ interface CanvasAdapterProps {
   highlightQuery?: string;
 }
 
+/**
+ * True for targets where Space must type a space (or press a control), never
+ * start Space-pan: text fields, contenteditable (the Tiptap editor), and
+ * React Flow's own `.nokey` opt-out.
+ */
+function isSpaceReservedTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  if (target.closest('[contenteditable]:not([contenteditable="false"]), .ProseMirror, .nokey')) return true;
+  // Space activates a focused button/link — leave that alone.
+  return !!target.closest('button, a[href], [role="button"], [role="menuitem"], [role="tab"], [role="option"]');
+}
+
 type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"] };
+
+/** Top-left of the translate extent: the board never scrolls above/left of its origin. */
+const TRANSLATE_EXTENT_MIN = { x: 0, y: 0 } as const;
 
 const nodeTypes: NodeTypes = {
   // Раньше рамка была принудительно 100%/100% от React Flow узла, чей
@@ -68,7 +87,10 @@ function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode):
     height: like.height,
     zIndex: like.zIndex,
     data: { content: renderCard(card), kind: card.kind },
-    draggable: true,
+    // No per-node `draggable`: an explicit `true` here would override the
+    // `nodesDraggable={false}` that Space-pan mode sets (React Flow gives the
+    // node's own flag precedence), and a draggable node carries `nopan`, so a
+    // Space+drag starting over a card would move the card instead of panning.
   };
 }
 
@@ -114,6 +136,34 @@ export function CanvasAdapter({
   );
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [interactionResetRevision, setInteractionResetRevision] = useState(0);
+
+  // Space + left-drag pans (Milanote). React Flow's own `panActivationKeyCode`
+  // is not enough: it switches `panOnDrag` on, but every draggable node carries
+  // `nopan`, so dragging over a card with Space held still moved the card. While
+  // Space is held we therefore also turn node dragging and marquee selection
+  // off; see the ReactFlow props below.
+  const [spacePan, setSpacePan] = useState(false);
+  useEffect(() => {
+    const isSpace = (event: KeyboardEvent) => event.code === "Space" || event.key === " ";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isSpace(event) || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isSpaceReservedTarget(event.target) || isSpaceReservedTarget(document.activeElement)) return;
+      event.preventDefault();
+      setSpacePan(true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (isSpace(event)) setSpacePan(false);
+    };
+    const release = () => setSpacePan(false);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", release);
+    };
+  }, []);
 
   // React Flow 12 очищает рамку по pointerup, но оставляет её при pointercancel.
   // WKWebView также может потерять pointerup, когда жест выходит за границы окна.
@@ -557,8 +607,9 @@ export function CanvasAdapter({
   return (
     <div
       ref={surfaceRef}
-      className="canvas-surface"
+      className={spacePan ? "canvas-surface canvas-surface--space-pan" : "canvas-surface"}
       data-testid="canvas-surface"
+      data-space-pan={spacePan ? "true" : undefined}
       data-kind="desk"
       tabIndex={0}
       onKeyDown={handleCanvasKeyDown}
@@ -578,15 +629,18 @@ export function CanvasAdapter({
         onNodesChange={handleNodesChange}
         deleteKeyCode={null}
         defaultViewport={liveViewport}
-        translateExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
+        translateExtent={[[TRANSLATE_EXTENT_MIN.x, TRANSLATE_EXTENT_MIN.y], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
         nodeExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
         panOnScroll
-        selectionOnDrag
-        panOnDrag={[1, 2]}
+        // Space-pan is handled above (it also has to disable node dragging),
+        // so React Flow's built-in Space activation is switched off.
+        panActivationKeyCode={null}
+        selectionOnDrag={!spacePan}
+        panOnDrag={spacePan ? [0, 1, 2] : [1, 2]}
         zoomOnScroll
         zoomOnPinch
         zoomOnDoubleClick={false}
-        nodesDraggable
+        nodesDraggable={!spacePan}
         nodesConnectable={false}
         edgesFocusable={false}
         nodesFocusable
@@ -618,6 +672,7 @@ export function CanvasAdapter({
         maxZoom={4}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={3} color="var(--desk-dot)" />
+        <CanvasScrollbars extentMin={TRANSLATE_EXTENT_MIN} />
       </ReactFlow>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CanvasAdapter } from "./CanvasAdapter";
 import { ImageCard } from "../cards/image/ImageCard";
@@ -16,6 +16,10 @@ const backgroundProps: Array<{
   size?: number;
   color?: string;
 }> = [];
+
+// The overlay scrollbars read React Flow's store (covered by the geometry unit
+// tests and the canvas-scroll e2e); this mock has no store to give them.
+vi.mock("./CanvasScrollbars", () => ({ CanvasScrollbars: () => null }));
 
 vi.mock("@xyflow/react", async () => {
   await import("react");
@@ -110,6 +114,60 @@ describe("CanvasAdapter", () => {
     );
 
     expect(setViewport).toHaveBeenCalledWith({ x: 0, y: 0, zoom: 1.5 });
+  });
+
+  it("Space held switches to pan mode (left-drag pans, no marquee, no card drag) and releases on keyup", () => {
+    reactFlowProps.length = 0;
+    render(
+      <CanvasAdapter
+        cards={cards}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        events={{}}
+        renderCard={(card) => <span>{card.id}</span>}
+      />,
+    );
+    type PanProps = { panOnDrag?: unknown; selectionOnDrag?: boolean; nodesDraggable?: boolean; panActivationKeyCode?: unknown };
+    const last = () => reactFlowProps[reactFlowProps.length - 1] as PanProps;
+    expect(last()).toMatchObject({ panOnDrag: [1, 2], selectionOnDrag: true, nodesDraggable: true, panActivationKeyCode: null });
+
+    const keydown = new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true });
+    act(() => {
+      document.body.dispatchEvent(keydown);
+    });
+    expect(keydown.defaultPrevented).toBe(true);
+    expect(last()).toMatchObject({ panOnDrag: [0, 1, 2], selectionOnDrag: false, nodesDraggable: false });
+    expect(screen.getByTestId("canvas-surface").getAttribute("data-space-pan")).toBe("true");
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space" }));
+    });
+    expect(last()).toMatchObject({ panOnDrag: [1, 2], selectionOnDrag: true, nodesDraggable: true });
+  });
+
+  it("Space typed into a text field or contenteditable never starts pan mode", () => {
+    reactFlowProps.length = 0;
+    render(
+      <>
+        <textarea data-testid="field" />
+        <div data-testid="editor" contentEditable suppressContentEditableWarning>
+          <p data-testid="editor-p">text</p>
+        </div>
+        <CanvasAdapter
+          cards={cards}
+          viewport={{ x: 0, y: 0, zoom: 1 }}
+          events={{}}
+          renderCard={(card) => <span>{card.id}</span>}
+        />
+      </>,
+    );
+    for (const id of ["field", "editor-p"]) {
+      const event = new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true });
+      act(() => {
+        screen.getByTestId(id).dispatchEvent(event);
+      });
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(screen.getByTestId("canvas-surface").getAttribute("data-space-pan")).toBeNull();
   });
 
   it("constrains panning to a top-left-anchored board surface", () => {
