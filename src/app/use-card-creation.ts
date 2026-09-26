@@ -1,6 +1,11 @@
 import { useCallback, type Dispatch, type RefObject } from "react";
 import { plainTextToDocument } from "../editor/document-codec";
-import { CreateNoteCommand } from "../commands/card-commands";
+import {
+  CreateFileCardCommand,
+  CreateFolderShortcutCommand,
+  CreateImageCardCommand,
+  CreateNoteCommand,
+} from "../commands/card-commands";
 import { CreateChildBoardCommand } from "../commands/board-commands";
 import type { CommandDispatcher } from "../commands/command-dispatcher";
 import { errorMessage } from "../services/error-message";
@@ -14,8 +19,6 @@ import type {
   BoardPortalDto,
   BoardSummary,
   CardDto,
-  FileCardDto,
-  FilesystemAliasDto,
   ImageCardDto,
   NoteCardDto,
   WorkspaceGateway,
@@ -26,9 +29,10 @@ import type { CurrentBoardAction } from "../state/current-board-store";
  * Card creation: note/link/child board/image/file card/folder shortcut, plus
  * opening and revealing a file card. Shared by the tool rail, the pane context
  * menu, native Finder drop, and paste (the last two call these handlers
- * through their own hooks).
+ * through their own hooks). Every card is created through the dispatcher, so
+ * each creation is one undo entry.
  *
- * Extracted from `App.tsx` unchanged (docs/plans/2026-09-26-app-tsx-split.md, step 8).
+ * Extracted from `App.tsx` (docs/plans/2026-09-26-app-tsx-split.md, step 8).
  */
 
 export interface CardCreationDeps {
@@ -211,20 +215,23 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
           captionJson: plainTextToDocument(""),
           captionPlainText: "",
         };
-        await gateway.createImageCard(
-          buildCreateImageCardInput({
+        await dispatcher.execute(
+          new CreateImageCardCommand(
             cardId,
-            boardId: currentBoard.id,
-            frame: card.frame,
-            zIndex: card.zIndex,
-            asset,
-            captionJson: card.captionJson,
-          }),
+            buildCreateImageCardInput({
+              cardId,
+              boardId: currentBoard.id,
+              frame: card.frame,
+              zIndex: card.zIndex,
+              asset,
+              captionJson: card.captionJson,
+            }),
+          ),
         );
         dispatch({ type: "cardAdded", card });
       }
     },
-    [gateway, boardRef, cardsRef, dispatch],
+    [dispatcher, boardRef, cardsRef, dispatch],
   );
 
   // Imports an image and creates a card at the given board coordinates. Shared
@@ -271,19 +278,23 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
         height: 300,
       };
       try {
-        const card: FilesystemAliasDto = await gateway.createFolderAlias({
-          id: idGenerator.nextId(),
-          boardId: currentBoard.id,
-          frame,
-          zIndex: cardsRef.current.length,
-          sourcePath,
-        });
-        dispatch({ type: "cardAdded", card });
+        const id = idGenerator.nextId();
+        const card = await dispatcher.execute(
+          new CreateFolderShortcutCommand(id, {
+            id,
+            boardId: currentBoard.id,
+            frame,
+            zIndex: cardsRef.current.length,
+            sourcePath,
+          }),
+        );
+        // unreachable null: первое исполнение всегда создаёт карточку
+        if (card) dispatch({ type: "cardAdded", card });
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
-    [gateway, idGenerator, boardRef, cardsRef, dispatch],
+    [dispatcher, idGenerator, boardRef, cardsRef, dispatch],
   );
 
   const createFileCard = useCallback(
@@ -297,21 +308,25 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
         height: 240,
       };
       try {
-        const card: FileCardDto = await gateway.createFileCard({
-          id: idGenerator.nextId(),
-          boardId: currentBoard.id,
-          frame,
-          zIndex: cardsRef.current.length,
-          sourcePath: item.path,
-          mimeType: item.mimeType,
-          fileName: item.fileName,
-        });
-        dispatch({ type: "cardAdded", card });
+        const id = idGenerator.nextId();
+        const card = await dispatcher.execute(
+          new CreateFileCardCommand(id, {
+            id,
+            boardId: currentBoard.id,
+            frame,
+            zIndex: cardsRef.current.length,
+            sourcePath: item.path,
+            mimeType: item.mimeType,
+            fileName: item.fileName,
+          }),
+        );
+        // unreachable null: первое исполнение всегда создаёт карточку
+        if (card) dispatch({ type: "cardAdded", card });
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
-    [gateway, idGenerator, boardRef, cardsRef, dispatch],
+    [dispatcher, idGenerator, boardRef, cardsRef, dispatch],
   );
 
   // "Add Folder Shortcut…" on the pane context menu (todo.md №23): the native

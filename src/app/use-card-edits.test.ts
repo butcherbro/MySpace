@@ -11,6 +11,9 @@ import type {
 import type { CurrentBoardAction } from "../state/current-board-store";
 import { MutationQueue } from "../persistence/entity-write-queue";
 import { useCardEdits, type CardEditsOptions } from "./use-card-edits";
+import { EditCardTextCommand, ResizeCardCommand } from "../commands/card-commands";
+import type { CommandDispatcher } from "../commands/command-dispatcher";
+import type { WorkspaceCommand } from "../commands/workspace-command";
 
 function asset(overrides: Partial<AssetDto> = {}): AssetDto {
   return {
@@ -111,10 +114,16 @@ function harness(
   const dispatch = vi.fn<(action: CurrentBoardAction) => void>();
   const cardsRef: CardEditsOptions["cardsRef"] = { current: overrides.cards ?? [note()] };
   const queueRef: CardEditsOptions["queueRef"] = { current: new MutationQueue() };
+  const record = vi.fn<(command: WorkspaceCommand<unknown>) => Promise<void>>(async () => {});
+  const dispatcher = { record } as unknown as CommandDispatcher;
+  let nextId = 0;
+  const idGenerator = { nextId: () => `cmd-${++nextId}` };
 
-  const { result } = renderHook(() => useCardEdits({ gateway, dispatch, queueRef, cardsRef }));
+  const { result } = renderHook(() =>
+    useCardEdits({ gateway, dispatch, queueRef, cardsRef, dispatcher, idGenerator }),
+  );
 
-  return { result, dispatch, cardsRef, updateNote, convertNoteToEmbed, updateImageCaption, updateEmbedDescription, moveCard };
+  return { result, dispatch, cardsRef, record, updateNote, convertNoteToEmbed, updateImageCaption, updateEmbedDescription, moveCard };
 }
 
 describe("useCardEdits", () => {
@@ -522,6 +531,193 @@ describe("useCardEdits", () => {
       });
 
       expect(test.dispatch).toHaveBeenCalledWith({ type: "failed", message: "stale_revision" });
+    });
+  });
+
+  describe("undo history", () => {
+    const typed = (text: string) => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
+    /** The single recorded command, asserting there is exactly one. */
+    function recorded(test: ReturnType<typeof harness>) {
+      expect(test.record).toHaveBeenCalledTimes(1);
+      return test.record.mock.calls[0][0];
+    }
+    /** Lets the fire-and-forget resize task run. */
+    async function settle() {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    it("records one note edit per session: from the document before the first save to the finalized one", async () => {
+      const original = note().documentJson;
+      const test = harness();
+
+      await act(async () => {
+        await test.result.current.handleUpdateNote("note-1", typed("h"));
+        await test.result.current.handleUpdateNote("note-1", typed("he"));
+        await test.result.current.handleFinalizeNote("note-1", typed("hey"));
+      });
+
+      const command = recorded(test);
+      expect(command).toBeInstanceOf(EditCardTextCommand);
+      expect(command).toMatchObject({ label: "Edit note", cardId: "note-1", before: original, after: typed("hey") });
+    });
+
+    it("records nothing for debounced saves until the session is finalized", async () => {
+      const test = harness();
+
+      await act(async () => {
+        await test.result.current.handleUpdateNote("note-1", typed("h"));
+      });
+
+      expect(test.record).not.toHaveBeenCalled();
+    });
+
+    it("records nothing when the finalized document equals the session start", async () => {
+      const original = note().documentJson;
+      const test = harness();
+
+      await act(async () => {
+        await test.result.current.handleUpdateNote("note-1", typed("typo"));
+        await test.result.current.handleFinalizeNote("note-1", JSON.parse(JSON.stringify(original)));
+      });
+
+      expect(test.record).not.toHaveBeenCalled();
+    });
+
+    it("starts the next session from the previous session's result", async () => {
+      const test = harness();
+
+      await act(async () => {
+        await test.result.current.handleFinalizeNote("note-1", typed("one"));
+        await test.result.current.handleFinalizeNote("note-1", typed("two"));
+      });
+
+      expect(test.record).toHaveBeenCalledTimes(2);
+      expect(test.record.mock.calls[1][0]).toMatchObject({ before: typed("one"), after: typed("two") });
+    });
+
+    it("keeps the session open when finalize fails and records once on the successful retry", async () => {
+      const original = note().documentJson;
+      let fail = true;
+      const test = harness({
+        updateNote: vi.fn(async () => {
+          if (fail) throw new Error("offline");
+          return { id: "note-1", revision: 2, plainText: "x" };
+        }),
+      });
+
+      await act(async () => {
+        await test.result.current.handleFinalizeNote("note-1", typed("x")).catch(() => {});
+      });
+      expect(test.record).not.toHaveBeenCalled();
+      fail = false;
+      await act(async () => {
+        await test.result.current.handleFinalizeNote("note-1", typed("x"));
+      });
+
+      expect(recorded(test)).toMatchObject({ before: original, after: typed("x") });
+    });
+
+    it("records nothing when finalize converts the note into a link", async () => {
+      const test = harness({ convertNoteToEmbed: vi.fn(async () => embed({ id: "note-1" })) });
+
+      await act(async () => {
+        await test.result.current.handleUpdateNote("note-1", typed("https://example.org/x"));
+        await test.result.current.handleFinalizeNote("note-1", urlOnlyDoc);
+      });
+
+      expect(test.record).not.toHaveBeenCalled();
+    });
+
+    it("records nothing for a repair session of a corrupt note (undo would bring the damage back)", async () => {
+      const test = harness({ cards: [note({ corrupt: true, documentJson: { type: "doc", content: [] } })] });
+
+      await act(async () => {
+        await test.result.current.handleFinalizeNote("note-1", typed("recovered"), { acknowledgeCorrupt: true });
+      });
+
+      expect(test.record).not.toHaveBeenCalled();
+    });
+
+    it("records one caption edit per session", async () => {
+      const test = harness({ cards: [image()] });
+
+      await act(async () => {
+        await test.result.current.handleUpdateImageCaption("image-1", typed("ca"));
+        await test.result.current.handleFinalizeImageCaption("image-1", typed("cat"));
+      });
+
+      expect(recorded(test)).toMatchObject({
+        label: "Edit caption",
+        cardId: "image-1",
+        before: image().captionJson,
+        after: typed("cat"),
+      });
+    });
+
+    it("records one link description edit per session", async () => {
+      const test = harness({ cards: [embed()] });
+
+      await act(async () => {
+        await test.result.current.handleUpdateEmbedDescription("embed-1", typed("d"));
+        await test.result.current.handleFinalizeEmbedDescription("embed-1", typed("desc"));
+      });
+
+      expect(recorded(test)).toMatchObject({
+        label: "Edit description",
+        cardId: "embed-1",
+        before: embed().descriptionJson,
+        after: typed("desc"),
+      });
+    });
+
+    it("records one resize per gesture, before frame to after frame", async () => {
+      const test = harness({ cards: [note({ frame: { x: 10, y: 20, width: 240, height: 120 } })] });
+
+      act(() => {
+        test.result.current.handleResizeNote("note-1", 300, 200);
+      });
+      await settle();
+
+      const command = recorded(test);
+      expect(command).toBeInstanceOf(ResizeCardCommand);
+      expect(command).toMatchObject({
+        label: "Resize",
+        cardId: "note-1",
+        before: { x: 10, y: 20, width: 240, height: 120 },
+        after: { x: 10, y: 20, width: 300, height: 200 },
+      });
+    });
+
+    it("does not record an automatic fit-to-content resize", async () => {
+      const test = harness();
+
+      act(() => {
+        test.result.current.handleResizeNote("note-1", 240, 400, { auto: true });
+      });
+      await settle();
+
+      expect(test.moveCard).toHaveBeenCalledTimes(1);
+      expect(test.record).not.toHaveBeenCalled();
+    });
+
+    it("does not record a resize that failed or changed nothing", async () => {
+      const failing = harness({ moveCard: vi.fn(async () => { throw new Error("stale_revision"); }) });
+      act(() => {
+        failing.result.current.handleResizeNote("note-1", 300, 200);
+      });
+      await settle();
+      expect(failing.record).not.toHaveBeenCalled();
+
+      const same = harness();
+      act(() => {
+        same.result.current.handleResizeNote("note-1", 240, 120);
+      });
+      await settle();
+      expect(same.record).not.toHaveBeenCalled();
     });
   });
 });

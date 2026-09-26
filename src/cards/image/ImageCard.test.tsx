@@ -203,6 +203,30 @@ describe("ImageCard", () => {
     expect(screen.getByTestId("image-card")).toHaveAttribute("data-saving", "false");
   });
 
+  it("finalizes the caption through onFinalize on blur (one undo entry per edit)", async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockResolvedValue(undefined);
+    const edited = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "cat" }] }] };
+    render(
+      <ImageCard
+        image={makeImage()}
+        onUpdate={onUpdate}
+        onFinalize={onFinalize}
+        onResize={vi.fn()}
+        onContextMenu={vi.fn()}
+      />,
+    );
+
+    fireEvent.doubleClick(screen.getByTestId("image-caption"));
+    act(() => lastEditorProps()?.onChange(edited));
+    await act(async () => {
+      await lastEditorProps()?.onBlur?.();
+    });
+
+    expect(onFinalize).toHaveBeenCalledWith("image-1", edited);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it("marks errors when the caption save fails", async () => {
     const onUpdate = vi.fn().mockRejectedValue(new Error("boom"));
     render(

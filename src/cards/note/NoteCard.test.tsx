@@ -180,7 +180,7 @@ describe("NoteCard", () => {
     // No avalanche of writes: the grow, like content autosave, is debounced.
     expect(onResize).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(250));
-    expect(onResize).toHaveBeenCalledWith("note-1", 200, 220);
+    expect(onResize).toHaveBeenCalledWith("note-1", 200, 220, { auto: true });
     vi.useRealTimers();
   });
 
@@ -196,7 +196,7 @@ describe("NoteCard", () => {
     Object.defineProperty(card, "scrollHeight", { configurable: true, value: 220 });
     act(() => lastEditorProps()?.onChange(changedDoc));
     act(() => vi.advanceTimersByTime(250));
-    expect(onResize).toHaveBeenCalledWith("note-1", 200, 220);
+    expect(onResize).toHaveBeenCalledWith("note-1", 200, 220, { auto: true });
 
     // The note re-renders with the grown, persisted frame (as the parent would
     // after the resize command lands), then the user manually drags the handle

@@ -230,4 +230,73 @@ describe("CommandDispatcher", () => {
     expect(d.canRedo()).toBe(false);
     expect(d.undoLabel).toBe("One");
   });
+
+  describe("record", () => {
+    it("pushes an already-applied command without executing it", async () => {
+      const d = new CommandDispatcher(new MockWorkspaceGateway());
+      const execute = vi.fn(async () => {});
+      const undo = vi.fn(async () => {});
+
+      await d.record(cmd("r", "Edit note", execute, undo));
+
+      expect(execute).not.toHaveBeenCalled();
+      expect(d.canUndo()).toBe(true);
+      expect(d.undoLabel).toBe("Edit note");
+      await d.undo();
+      expect(undo).toHaveBeenCalledTimes(1);
+      await d.redo();
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears redo and notifies subscribers", async () => {
+      const d = new CommandDispatcher(new MockWorkspaceGateway());
+      await d.execute(cmd("a", "A", async () => {}, async () => {}));
+      await d.undo();
+      const listener = vi.fn();
+      d.subscribe(listener);
+
+      await d.record(cmd("r", "R", async () => {}, async () => {}));
+
+      expect(d.canRedo()).toBe(false);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("merges with the previous entry like execute", async () => {
+      const d = new CommandDispatcher(new MockWorkspaceGateway());
+      const merged = cmd("m", "Merged", async () => {}, async () => {});
+      const first: WorkspaceCommand = { ...cmd("a", "A", async () => {}, async () => {}), mergeWith: () => merged };
+      await d.execute(first);
+
+      await d.record(cmd("b", "B", async () => {}, async () => {}));
+
+      expect(d.undoLabel).toBe("Merged");
+      await d.undo();
+      expect(d.canUndo()).toBe(false);
+    });
+
+    it("keeps at most 200 entries", async () => {
+      const d = new CommandDispatcher(new MockWorkspaceGateway());
+      for (let i = 0; i < 201; i++) {
+        await d.record(cmd(String(i), `C${i}`, async () => {}, async () => {}));
+      }
+      let undone = 0;
+      while (await d.undo()) undone++;
+      expect(undone).toBe(200);
+    });
+
+    it("waits for an in-flight undo instead of being popped by it", async () => {
+      const d = new CommandDispatcher(new MockWorkspaceGateway());
+      let releaseUndo!: () => void;
+      const gate = new Promise<void>((resolve) => { releaseUndo = resolve; });
+      await d.execute(cmd("a", "A", async () => {}, async () => { await gate; }));
+
+      const undoing = d.undo();
+      const recording = d.record(cmd("r", "Recorded", async () => {}, async () => {}));
+      releaseUndo();
+      await Promise.all([undoing, recording]);
+
+      expect(d.undoLabel).toBe("Recorded");
+      expect(d.canRedo()).toBe(false);
+    });
+  });
 });

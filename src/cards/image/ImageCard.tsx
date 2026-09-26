@@ -14,6 +14,8 @@ interface ImageCardProps {
   image: ImageCardDto;
   /** Persist the caption as an authoritative document. Rejects on failure. */
   onUpdate: DocumentSave;
+  /** Finalize a caption edit (blur); falls back to `onUpdate` when absent. */
+  onFinalize?: DocumentSave;
   /** Persist a manual resize (width/height in CSS px). */
   onResize: (id: string, width: number, height: number) => void;
   /** Request a context menu (right-click). */
@@ -31,6 +33,7 @@ interface ImageCardProps {
 export const ImageCard = memo(function ImageCard({
   image,
   onUpdate,
+  onFinalize,
   onResize,
   onContextMenu,
   highlightQuery = "",
@@ -41,11 +44,12 @@ export const ImageCard = memo(function ImageCard({
 
   // P1.7: a corrupt caption shows its recovered text and never autosaves
   // until the user starts a repair (see editor/corrupt-document.ts).
-  const repair = useCorruptRepair({ corrupt: image.corrupt === true, onUpdate });
+  const repair = useCorruptRepair({ corrupt: image.corrupt === true, onUpdate, onFinalize });
   const { draft, saving, error, handleChange, handleBlur, replaceDraft } = useDocumentDraft({
     id: image.id,
     persistedDocument: image.captionJson,
     onUpdate: repair.onUpdate,
+    onFinalize: repair.onFinalize,
     onSaved: () => setEditing(false),
     corrupt: repair.damaged,
   });

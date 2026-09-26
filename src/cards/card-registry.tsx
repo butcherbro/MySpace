@@ -16,6 +16,7 @@ import { FolderShortcutCard } from "./folder/FolderShortcutCard";
 import { FileCard } from "./file/FileCard";
 import { BoardShortcutCard } from "./board/BoardShortcutCard";
 import type { DocumentSave } from "../editor/corrupt-document";
+import type { ResizeOptions } from "./resize-options";
 // The single card-kind list and per-kind capability registry live in
 // ./card-kinds.ts (kept out of this JSX-heavy file so importing the plain
 // data doesn't pull in every card component, and so react-refresh's
@@ -32,8 +33,12 @@ export interface CardRenderContext {
   onFinalizeNote: DocumentSave;
   /** Persist an image card's caption. */
   onUpdateImageCaption: DocumentSave;
+  /** Finalize an image caption edit (blur): closes its undo entry. */
+  onFinalizeImageCaption: DocumentSave;
   /** Persist an embed (Link) card's description body. */
   onUpdateEmbedDescription: DocumentSave;
+  /** Finalize a Link Card description edit (blur): closes its undo entry. */
+  onFinalizeEmbedDescription: DocumentSave;
   /** Retry metadata enrichment for a failed Link Card. */
   onRetryEmbedMetadata: (id: string) => void;
   /** Open a board portal. */
@@ -42,12 +47,12 @@ export interface CardRenderContext {
   onRenameBoard: (boardId: string, title: string) => void;
   /** Request a context menu (right-click) for a card. */
   onContextMenu: (cardId: string, x: number, y: number) => void;
-  /** Persist a manual resize (width/height). */
-  onResizeNote: (id: string, width: number, height: number) => void;
+  /** Persist a manual resize (width/height), or an automatic fit (`auto`). */
+  onResizeNote: (id: string, width: number, height: number, options?: ResizeOptions) => void;
   /** Persist a manual resize for image cards. */
   onResizeImage: (id: string, width: number, height: number) => void;
-  /** Persist a manual resize for embed (Link) cards. */
-  onResizeEmbed: (id: string, width: number, height: number) => void;
+  /** Persist a manual resize for embed (Link) cards, or an automatic fit (`auto`). */
+  onResizeEmbed: (id: string, width: number, height: number, options?: ResizeOptions) => void;
   /** Persist a manual resize for folder shortcuts. */
   onResizeFilesystemAlias: (id: string, width: number, height: number) => void;
   /** Fetch the bounded live folder preview exactly when a shortcut mounts. */
@@ -105,6 +110,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
       <ImageCard
         image={card}
         onUpdate={ctx.onUpdateImageCaption}
+        onFinalize={ctx.onFinalizeImageCaption}
         onResize={ctx.onResizeImage}
         onContextMenu={ctx.onContextMenu}
         highlightQuery={ctx.highlightQuery}
@@ -117,6 +123,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
       <EmbedCard
         embed={card}
         onUpdate={ctx.onUpdateEmbedDescription}
+        onFinalize={ctx.onFinalizeEmbedDescription}
         onResize={ctx.onResizeEmbed}
         onContextMenu={ctx.onContextMenu}
         onRetryMetadata={ctx.onRetryEmbedMetadata}

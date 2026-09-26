@@ -5,6 +5,7 @@
 // - Undo dispatches a new durable inverse mutation.
 // - Redo is cleared after any new command.
 // - Maximum 200 entries.
+// - `record` adds an already-applied command under the same rules.
 // - Undo/redo that fails with `CommandConflictError`, a backend
 //   `stale_revision` (revisions only grow) or `not_found` (the card was removed
 //   outside the history, e.g. by sync) drops that command from its stack, since
@@ -42,6 +43,20 @@ export class CommandDispatcher {
       this.pushUndo(command as WorkspaceCommand<unknown>);
       this.notify();
       return result;
+    });
+  }
+
+  /**
+   * Records a command whose effect is already applied (a text edit session or
+   * a resize gesture that saved as it went) without calling `execute`. Same
+   * merge/limit/redo-clearing rules as `execute`.
+   */
+  record(command: WorkspaceCommand<unknown>): Promise<void> {
+    // Через ту же очередь: иначе запись посреди идущего undo легла бы на вершину
+    // стека, и undo снял бы её вместо своей команды.
+    return this.enqueue(async () => {
+      this.pushUndo(command);
+      this.notify();
     });
   }
 

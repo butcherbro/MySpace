@@ -2,6 +2,12 @@ import { act, renderHook } from "@testing-library/react";
 import type { RefObject } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandDispatcher } from "../commands/command-dispatcher";
+import type { WorkspaceCommand } from "../commands/workspace-command";
+import {
+  CreateFileCardCommand,
+  CreateFolderShortcutCommand,
+  CreateImageCardCommand,
+} from "../commands/card-commands";
 import type { IdGenerator } from "../services/id-generator";
 import type {
   AssetDto,
@@ -68,7 +74,7 @@ function harness(
     board?: BoardSummary | null;
     notes?: NoteCardDto[];
     cards?: CardDto[];
-    execute?: () => Promise<unknown>;
+    execute?: (command: WorkspaceCommand<unknown>) => Promise<unknown>;
     createImageCard?: ReturnType<typeof vi.fn>;
     importAsset?: ReturnType<typeof vi.fn>;
     createFolderAlias?: ReturnType<typeof vi.fn>;
@@ -81,7 +87,11 @@ function harness(
   const currentBoard = overrides.board === undefined ? board() : overrides.board;
   const notes = overrides.notes ?? [];
   const cards = overrides.cards ?? [];
-  const execute = vi.fn(overrides.execute ?? (async () => undefined));
+  // По умолчанию диспетчер действительно исполняет команду против шлюза ниже,
+  // чтобы проверки вызовов шлюза проходили через тот же путь, что и в App.
+  const execute = vi.fn(
+    overrides.execute ?? ((command: WorkspaceCommand<unknown>) => command.execute(gateway)),
+  );
   const dispatcher = { execute } as unknown as CommandDispatcher;
   const idGenerator = idGeneratorFixture();
   const dispatch = vi.fn<(action: CurrentBoardAction) => void>();
@@ -125,6 +135,8 @@ function harness(
   const revealFileCard = overrides.revealFileCard ?? vi.fn(async () => undefined);
 
   const gateway = {
+    createNote: vi.fn(async () => undefined),
+    createChildBoard: vi.fn(async () => undefined),
     createImageCard,
     importAsset,
     createFolderAlias,
@@ -312,6 +324,30 @@ describe("useCardCreation", () => {
   });
 
   describe("placeImageAsset", () => {
+    it("creates the card through the dispatcher so it is undoable", async () => {
+      mocks.loadNaturalImageSize.mockResolvedValueOnce(null);
+      const test = harness();
+
+      await act(async () => {
+        await test.result.current.placeImageAsset(asset(), 100, 50, "image-1");
+      });
+
+      expect(test.execute).toHaveBeenCalledTimes(1);
+      expect(test.execute.mock.calls[0][0]).toBeInstanceOf(CreateImageCardCommand);
+      expect(test.execute.mock.calls[0][0]).toMatchObject({ id: "image-1" });
+    });
+
+    it("dispatches a failure instead of cardAdded when the command rejects", async () => {
+      mocks.loadNaturalImageSize.mockResolvedValueOnce(null);
+      const test = harness({ execute: async () => { throw new Error("disk full"); } });
+
+      await act(async () => {
+        await test.result.current.placeImageAsset(asset(), 100, 50, "image-1").catch(() => {});
+      });
+
+      expect(test.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "cardAdded" }));
+    });
+
     it("creates an image card with the fallback size when natural size fails to load", async () => {
       mocks.loadNaturalImageSize.mockResolvedValueOnce(null);
       const test = harness({ cards: [{ id: "c1" } as CardDto] });
@@ -432,6 +468,20 @@ describe("useCardCreation", () => {
   });
 
   describe("createFolderShortcut vs createFileCard", () => {
+    it("both create through the dispatcher so they are undoable", async () => {
+      const test = harness();
+
+      await act(async () => {
+        await test.result.current.createFolderShortcut("/Users/x/Folder", 10, 20);
+        await test.result.current.createFileCard({ path: "/tmp/x.txt", fileName: "x.txt", mimeType: "text/plain" }, 10, 20);
+      });
+
+      expect(test.execute.mock.calls.map((c) => c[0].constructor)).toEqual([
+        CreateFolderShortcutCommand,
+        CreateFileCardCommand,
+      ]);
+    });
+
     it("createFolderShortcut creates a filesystem_alias card and dispatches cardAdded", async () => {
       const test = harness();
 

@@ -50,6 +50,7 @@ import { UnsortedPanel } from "./navigation/UnsortedPanel";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import type { DocumentSaveOptions } from "./editor/corrupt-document";
+import type { ResizeOptions } from "./cards/resize-options";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { useNativeFileDrop } from "./app/use-native-file-drop";
@@ -287,9 +288,11 @@ function App() {
     handleUpdateNote,
     handleFinalizeNote,
     handleUpdateImageCaption,
+    handleFinalizeImageCaption,
     handleUpdateEmbedDescription,
+    handleFinalizeEmbedDescription,
     handleResizeNote,
-  } = useCardEdits({ gateway, dispatch, queueRef, cardsRef });
+  } = useCardEdits({ gateway, dispatch, queueRef, cardsRef, dispatcher, idGenerator });
 
   // Build the canvas projection from all cards (notes + portals). Memoised on
   // `state.cards` (P1.8): the canvas diffs this array per card, and an App
@@ -588,7 +591,9 @@ function App() {
     onUpdateNote: handleUpdateNote,
     onFinalizeNote: handleFinalizeNote,
     onUpdateImageCaption: handleUpdateImageCaption,
+    onFinalizeImageCaption: handleFinalizeImageCaption,
     onUpdateEmbedDescription: handleUpdateEmbedDescription,
+    onFinalizeEmbedDescription: handleFinalizeEmbedDescription,
     onRetryEmbedMetadata: handleRetryEmbedMetadata,
     onOpenBoard: handleOpenBoard,
     onRenameBoard: handleRenameBoard,
@@ -623,15 +628,21 @@ function App() {
         latest().onFinalizeNote(id, document, options),
       onUpdateImageCaption: (id: string, document: unknown, options?: DocumentSaveOptions) =>
         latest().onUpdateImageCaption(id, document, options),
+      onFinalizeImageCaption: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onFinalizeImageCaption(id, document, options),
       onUpdateEmbedDescription: (id: string, document: unknown, options?: DocumentSaveOptions) =>
         latest().onUpdateEmbedDescription(id, document, options),
+      onFinalizeEmbedDescription: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onFinalizeEmbedDescription(id, document, options),
       onRetryEmbedMetadata: (id: string) => latest().onRetryEmbedMetadata(id),
       onOpenBoard: (boardId: string) => latest().onOpenBoard(boardId),
       onRenameBoard: (boardId: string, title: string) => latest().onRenameBoard(boardId, title),
       onContextMenu: (cardId: string, x: number, y: number) => latest().onContextMenu(cardId, x, y),
-      onResizeNote: (id: string, w: number, h: number) => latest().onResizeNote(id, w, h),
+      onResizeNote: (id: string, w: number, h: number, options?: ResizeOptions) =>
+        latest().onResizeNote(id, w, h, options),
       onResizeImage: (id: string, w: number, h: number) => latest().onResizeImage(id, w, h),
-      onResizeEmbed: (id: string, w: number, h: number) => latest().onResizeEmbed(id, w, h),
+      onResizeEmbed: (id: string, w: number, h: number, options?: ResizeOptions) =>
+        latest().onResizeEmbed(id, w, h, options),
       onResizeFilesystemAlias: (id: string, w: number, h: number) => latest().onResizeFilesystemAlias(id, w, h),
       onLoadFolderPreview: (id: string) => latest().onLoadFolderPreview(id),
       onOpenFolderInFinder: (id: string) => latest().onOpenFolderInFinder(id),
