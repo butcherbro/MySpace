@@ -8,6 +8,7 @@ import {
 } from "./app/use-close-flush";
 import { useNoteFormatting } from "./app/use-note-formatting";
 import { useBoardCover } from "./app/use-board-cover";
+import { useQuickBoards } from "./app/use-quick-boards";
 import { useTrashController } from "./app/use-trash-controller";
 import { buildCreateImageCardInput } from "./app/import-image-card";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
@@ -80,7 +81,6 @@ import type {
   ImageCardDto,
   NoteCardDto,
   PathClassificationDto,
-  QuickBoardDto,
   BoardSnapshot,
   WorkspaceGateway,
 } from "./services/workspace-gateway";
@@ -124,9 +124,7 @@ function App() {
   const noteColor = (activeNote?.colorToken as NoteColorId | undefined) ?? "default";
 
 
-  // Quick Boards: persisted, ordered references to Boards. The rail starts
-  // collapsed so it never occupies full width on launch.
-  const [quickBoards, setQuickBoards] = useState<QuickBoardDto[]>([]);
+  // Quick Boards rail starts collapsed so it never occupies full width on launch.
   const [quickBoardsCollapsed, setQuickBoardsCollapsed] = useState(true);
 
   // Unsorted drawer: shows when unsorted cards exist; Close hides it until the
@@ -248,15 +246,14 @@ function App() {
   }, [board]);
 
 
-  // Load persisted Quick Board references once at startup.
-  const loadQuickBoards = useCallback(() => {
-    void gateway
-      .listQuickBoards()
-      .then(setQuickBoards)
-      .catch((e) => {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      });
-  }, [gateway]);
+  const {
+    quickBoards,
+    setQuickBoards,
+    loadQuickBoards,
+    handleQuickBoardRemove,
+    handleQuickBoardPin,
+    handleQuickBoardsReorder,
+  } = useQuickBoards({ gateway, dispatch });
 
   // Recoverable Trash: the summary drives the rail badge and the drawer, and the
   // restore/empty flows reconcile the board and the rail afterwards. The board
@@ -274,9 +271,6 @@ function App() {
   const closeTrashDrawer = trash.closeDrawer;
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [devicesDialogOpen, setDevicesDialogOpen] = useState(false);
-  useEffect(() => {
-    loadQuickBoards();
-  }, [loadQuickBoards]);
 
 
   const handleCreateNote = useCallback(
@@ -1237,54 +1231,6 @@ function App() {
     [gateway, dispatcher, idGenerator],
   );
 
-  // Quick Boards: remove deletes only the reference, and pin adds a reference
-  // without moving/reparenting the Board. (Open lives after `navigateTo`.)
-  const handleQuickBoardRemove = useCallback(
-    (boardId: string) => {
-      void gateway
-        .removeQuickBoard(boardId)
-        .then(loadQuickBoards)
-        .catch((e) => {
-          dispatch({ type: "failed", message: errorMessage(e) });
-        });
-    },
-    [gateway, loadQuickBoards],
-  );
-
-  const handleQuickBoardPin = useCallback(
-    (boardId: string) => {
-      void gateway
-        .addQuickBoard({ boardId })
-        .then(loadQuickBoards)
-        .catch((e) => {
-          dispatch({ type: "failed", message: errorMessage(e) });
-        });
-    },
-    [gateway, loadQuickBoards],
-  );
-
-  const handleQuickBoardsReorder = useCallback(
-    (boardIds: string[]) => {
-      // Optimistically apply the new order, then persist transactionally.
-      setQuickBoards((prev) => {
-        const byId = new Map(prev.map((q) => [q.boardId, q]));
-        const next: QuickBoardDto[] = [];
-        for (const id of boardIds) {
-          const q = byId.get(id);
-          if (q) next.push({ ...q, sortOrder: next.length });
-        }
-        return next;
-      });
-      void gateway
-        .reorderQuickBoards({ boardIds })
-        .catch((e) => {
-          dispatch({ type: "failed", message: errorMessage(e) });
-          loadQuickBoards();
-        });
-    },
-    [gateway, loadQuickBoards],
-  );
-
   // Trashing a board_portal cascades server-side to every shortcut pointing at
   // it (todo.md №17, ADR-0010). A shortcut on the SAME board being viewed is
   // visible right now and must disappear immediately too — the backend already
@@ -1967,7 +1913,9 @@ function App() {
     setQuickBoards,
   });
 
-  // Quick Boards: open navigates (opening/activating a tab).
+  // Quick Boards: open navigates (opening/activating a tab). Stays here, not in
+  // use-quick-boards, because it needs `navigateTo`, which is declared later
+  // in this component than the hook (see use-quick-boards.ts).
   const handleQuickBoardOpen = useCallback(
     (boardId: string) => {
       void navigateTo(boardId, { pushHistory: true, tabMode: "open" });
