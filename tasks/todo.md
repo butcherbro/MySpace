@@ -386,6 +386,99 @@ precision for lists and code blocks. Reasons and owners are in
     скролл вниз → зависшее marquee-выделение → `window.dispatchEvent(new
     Event("blur"))` → pan не откатывается. Подтверждено red на до-фикс коде через
     `git stash`, green после. См. `tasks/lessons.md` 2026-09-19.
+    **2026-09-24, вторая причина (пользователь: пружина осталась).** Remount при
+    зависшей рамке был не единственным путём к сбросу. `snapshotLoaded` в
+    `src/state/current-board-store.ts` обнулял viewport и увеличивал
+    `boardOpenRevision` при ЛЮБОЙ перезагрузке той же доски, а `CanvasAdapter`
+    по `viewportResetToken={boardOpenRevision}` императивно ставил (0,0). Такие
+    перезагрузки происходят без участия пользователя: undo/redo, rename, и
+    главное — poll `PRAGMA data_version` каждые 3 с в `App.tsx`, который
+    срабатывает после enrichment ссылки (оно пишет через второе соединение) и
+    после любой записи MCP. Отсюда «то есть, то нет»: совпадение скролла с
+    фоновой перезагрузкой. Фикс: перезагрузка той же доски сохраняет pan,
+    редактируемую заметку и выделение (фильтруя исчезнувшие карточки); токен
+    сброса растёт только при смене доски. Тесты в
+    `src/state/current-board-store.test.ts`.
+
+## Архитектурный аудит 2026-09-24
+
+Отчёт: `docs/audits/2026-09-24-architecture-audit.md` (риски, три режима нагрузки,
+roadmap P0/P1/P2). Направление синхронизации между устройствами: ADR-0011.
+
+P0 — закрыто в этой сессии (ветка `claude/awesome-goodall-4tfsko`):
+- [x] Trash-целостность: чужие батчи не перезаписываются, restore в удалённого
+      родителя отклоняется, сортировка до обрезки (`trash_integrity.rs`).
+- [x] Защита версии схемы + `foreign_key_check`/`quick_check` после миграций;
+      MCP не мигрирует БД.
+- [x] Миграция 0019: индексы на `*_asset_id`, `deleted_at`, `batch_id`;
+      портальные счётчики без полного скана.
+- [x] Бэкап публикуется при пропавшем файле ассета (список в манифесте).
+- [x] Потеря последних ~250 мс ввода при навигации без blur — подтверждена и
+      закрыта (`draft-flush-registry.ts`).
+- [x] `tracing`: `<data dir>/logs/myspace.log`, `MYSPACE_LOG`, `slow=true` > 250 мс.
+- [x] «Пружина» №26, вторая причина: перезагрузка той же доски больше не
+      сбрасывает viewport/редактирование.
+
+P1 (до серьёзного роста), в порядке выполнения:
+- [x] P1.1 БД и диск с main thread: `app::Workspace` (writer-поток + пул из 2
+      читателей), все команды `async`, единая воронка `domain::Mutation`
+      (Tauri, MCP и стартовое обслуживание), `BEGIN IMMEDIATE` везде,
+      check-then-act внутри транзакций, bounded retry на BUSY, `queue_ms`/`exec_ms`
+      в логе. Тесты: `workspace_actor.rs`, `write_transactions.rs`.
+      Хвосты (не блокируют): enrichment держит одно pooled-соединение на время
+      сетевого запроса (TODO в `link_metadata.rs`); `import_asset` при повторном
+      использовании одного UUID из двух процессов может удалить чужой файл
+      (только при коллизии id — практически невозможно).
+- [x] P1.2 Бэкап 2.0: `assets.sha256` (миграция 0020), хэш при импорте, дедуп по
+      содержимому (импорт, буфер, файлы, enrichment), фоновый backfill, снапшоты
+      с hard-link'ами и лимитом 2 GiB, `list_backups`/`request_restore` +
+      диалог «Backups…» в корзине (restore через маркер и перезапуск).
+      Проверить на Mac: снапшот 2 GB ассетов < 2 с; `CollapseFaviconDuplicates`
+      удалить в следующем релизе.
+- [x] P1.3 Реестр kind: `domain/card_kind.rs` + `domain/kinds/*` (один handler на
+      kind, `to_payload`/`from_payload` — кодеки журнала), миграция 0021 сняла
+      `CHECK(kind IN …)` и размеры (теперь `Frame::validate`). На фронте один
+      список `CARD_KINDS` (`src/cards/card-kinds.ts`).
+- [x] P1.4 FTS5: `search_index` + триггеры (миграция 0022), prefix-поиск, 50k заметок
+      ≈ 5–20 мс. Файловые карточки ищутся. Спека `docs/specs/search.md` обновлена.
+- [x] P1.5 Receipts: `CardReceipt`/`TextReceipt`/`CardsReceipt`/`ViewportReceipt`,
+      ревизия читается из БД; `plain_text` считается в Rust (`domain/plain_text.rs`,
+      фикстуры синхронизированы с TS-тестом); на фронте нет `revision + 1`.
+- [x] P1.6 `boards.change_seq` + триггеры (миграция 0023), команда `get_board_change_seq`
+      (`dataVersion` + `changeSeq` с writer-соединения); фронт перезагружает доску
+      только если писал другой процесс и именно в открытую доску
+      (`src/state/external-change-detector.ts`).
+- [x] P1.7 Повреждённые данные: `corrupt` в DTO заметки/картинки/ссылки (пустой doc +
+      сохранённый plain text, `warn` `corrupt_document`), запись поверх — только с
+      `acknowledgeCorrupt`; карточка «Damaged … — showing recovered text» без автосейва,
+      Repair → редактор; сбой открытия БД при старте → recovery mode
+      (`get_startup_failure`, `StartupGate` + `RecoveryDialog`, restore из последнего снапшота / Quit).
+- [x] P1.8 Стоимость карточки на канвасе: `onlyRenderVisibleElements`; простаивающие
+      заметки/подписи/описания — статический HTML (`editor/static-document.ts`,
+      `StaticDocument`), Tiptap только у редактируемой карточки (каретка ставится
+      в точку клика); вместо O(N) `cardsKey` — пересборка только изменившихся
+      узлов (`staleNodeIds`), карточки в `memo`, стабильные колбэки в `App`.
+      1 000 карточек: обновление одной = 1 рендер карточки
+      (`CanvasAdapter.render-cost.test.tsx`); e2e `dense-board.spec.ts`: первая
+      отрисовка ≈ 0.6–0.75 с в контейнере (было ≈ 3.5 с), пан ≈ 10–25 мс.
+      Проверить на Mac: бюджет 500 мс (`DENSE_BOARD_PAINT_BUDGET_MS=500`).
+- [ ] `cargo audit`/Dependabot в CI.
+
+P2 / platform:
+- [x] Windows: build + CI + path locator + opener + clipboard (done 2026-09-24);
+      thumbnails on Windows pending. Подробности: README → «Platforms».
+      Проверить на живом Windows: см. список «Needs a human on Windows» там же.
+- [x] Device identity + device-scoped shortcut locators (ADR-0012), migration 0024
+      (done 2026-09-24). Проверить на Mac: старые ярлыки папок открываются после
+      миграции; на Windows: ярлык с Mac показан «On <Mac>», «Point to a folder on
+      this computer…» делает его рабочим. UI для имени устройства нет (только
+      команды `get_device_identity` / `rename_device`). Скопированная на другую
+      машину база получает новый device_id (отпечаток машины в `local_meta`).
+
+Известные флейки e2e (не регрессия, воспроизводится на `f819aee`):
+- [ ] `group-tab-drop.spec.ts:40` — на медленном кадре рамка выделения захватывает
+      портал (3 узла вместо 2), ~25 % прогонов при `--workers 1`. Починить
+      гест (`selectNotesOnly`: выделять по клику с Shift или ждать стабилизации).
 
 ## Осталось после сессии 2026-09-18
 
@@ -398,3 +491,76 @@ precision for lists and code blocks. Reasons and owners are in
 - [ ] Резервная копия: приватный git remote — по решению пользователя.
 - [ ] Опционально: подогнать frame старых image cards под пропорции; полноэкранный
       просмотр `.md`.
+
+## Следующие фичи — зафиксировано 2026-09-25
+
+Порядок: сначала связи (дешевле, почти всё есть в React Flow), потом группы.
+
+- [ ] **Связи между карточками (connectors).** Кружок-ручка в углу карточки
+      при наведении; тянешь на другую карточку, отпускаешь над ней — связь.
+      Плавающая стрелка: целится в центр цели, заканчивается на её границе,
+      пересчитывается при движении любой из карточек. Отдельная сущность
+      `connector(from_card, to_card, board_id, color, arrow_ends, label?)`,
+      своя таблица + тип в журнале синхронизации, удаляется вместе с любой из
+      карточек. Выделение кликом, Delete, цвет и направление в контекстном меню.
+      Отпустил в пустоту — ничего не создаётся.
+- [ ] **Группы (подложка с названием), как в Obsidian Canvas.** Новый тип
+      карточки `group`: рамка, плашка с названием сверху, цвет из палитры
+      досок, лежит под остальными по z-порядку. Членство геометрическое:
+      карточка в группе, если внутри её рамки; тянешь подложку — едет всё
+      внутри; вытащил за край — вышла из группы. Создание: выделить несколько
+      карточек → «Group» в контекстном меню и плавающей панели, рамка по
+      охватывающему прямоугольнику с отступом. «Ungroup» удаляет подложку.
+      Ресайз за углы; авто-расширение не в первой версии. Перед началом — ADR.
+
+## Sync
+
+- [x] **S1 — change journal** (ADR-0011, migration 0025): `changes` (wire
+      format), HLC in `local_meta.hlc_last`, per-register `entity_clocks`,
+      `purged` tombstones, `pending_changes`, `sync_cursors`. Every journaled
+      mutation writes its rows in the same `BEGIN IMMEDIATE` as the write
+      (`sync::funnel`), from the app and the MCP server alike. One-time backfill
+      of pre-journal data at startup (`local_meta.journal_snapshot_done`).
+- [x] **S2 — replay engine** (`sync::replay::apply_remote`): idempotent,
+      LWW per register, park/retry of rows whose dependency is missing, purge
+      never resurrects, conflict copy for concurrent note edits, forwarding
+      (star and mesh). Commands `sync_export_changes`, `sync_apply_changes`,
+      `sync_status`; event `sync-applied` with the touched board ids.
+      Tests: `src-tauri/tests/sync_replay.rs`.
+- [x] **S3 — LAN transport** (ADR-0011 status): self-signed certs pinned by
+      fingerprint, mutual TLS 1.3, pairing with a 6-digit code + HMAC proofs,
+      mDNS discovery (`mdns-sd`) with pairing by `host:port` as fallback,
+      pull loop (start, 5 s tick, 500 ms after a local write + poke, sync now),
+      blobs by `sha256`. Migration 0026 `sync_peers`. Commands `get_sync_state`,
+      `sync_list_peers`, `sync_list_discovered`, `sync_begin_pairing`,
+      `sync_cancel_pairing`, `sync_pair_with`, `sync_unpair`, `sync_now`;
+      events `sync-state`, `sync-applied`. UI: Devices dialog (Trash drawer
+      "Devices…", top-bar pill). Tests: `src-tauri/tests/sync_lan.rs`,
+      `src/sync/*.test.tsx`, `tests/e2e/sync-devices.spec.ts`.
+- [x] Frontend: `sync-applied` reloads the open board (and the trash).
+- [ ] **Human check on the desk (Mac + Windows):** pair both ways, Windows
+      firewall prompt (Private network), edit on one → appears on the other
+      within ~1 s, image/file card blobs arrive, unplug Wi-Fi on one → error
+      shown, reconnect → catches up, rename a device → the other shows the new
+      name after the next contact.
+- [ ] Pairing is not resistant to an active man-in-the-middle during the
+      pairing minute (the 6-digit code can be brute-forced offline from the
+      HMAC proof). Replace the HMAC exchange with a PAKE (SPAKE2 / CPace) before
+      the relay, or show a short fingerprint on both screens to compare.
+- [ ] Private key is stored in the workspace database (`local_meta`), hence
+      in backups. Consider the OS keychain / DPAPI.
+- [ ] Blobs are served from memory (the whole file is read); stream from disk
+      for large file cards. The client streams to disk already.
+- [ ] The mDNS advert shows the device name to the whole network; offer an
+      option to hide it.
+- [ ] IPv6 link-local addresses are skipped (no scope id in the advert); a
+      network with IPv6 only needs "Add by address" with a global address.
+- [ ] A device whose IP changes and that mDNS cannot see is unreachable until
+      re-added by address (the port is random per start); consider a fixed
+      preferred port.
+- [ ] Render image/file cards whose blob is missing as "waiting for file"
+      instead of a broken image (the board reloads when the blob arrives).
+- [ ] The MCP server does not signal `local_writes` (other process): its
+      writes reach peers on the next 5 s tick, not at once.
+- [ ] Journal compaction (all peers' cursors past a row → it can be folded
+      into a snapshot) and a policy for devices that stay offline for months.

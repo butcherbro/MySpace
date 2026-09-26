@@ -20,7 +20,8 @@ export interface ViewportPersistence {
 
 export interface ViewportPersistenceOptions {
   delayMs?: number;
-  onSaved?: (save: PendingViewportSave) => void;
+  /** `revision` is the authoritative post-save revision from the backend's receipt. */
+  onSaved?: (save: PendingViewportSave, revision: number) => void;
   onError?: (error: unknown, save: PendingViewportSave) => void;
 }
 
@@ -68,8 +69,8 @@ export function useViewportPersistence(
           zoom: save.viewport.zoom,
         })
         .then(
-          () => {
-            handlers.current.onSaved?.(save);
+          (receipt) => {
+            handlers.current.onSaved?.(save, receipt.revision);
           },
           (error: unknown) => {
             handlers.current.onError?.(error, save);

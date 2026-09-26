@@ -57,6 +57,13 @@ export interface NoteCardDto {
   plainText: string;
   /** Semantic background-color preset id (`default`, `yellow`, …). */
   colorToken: string;
+  /**
+   * P1.7: the stored document is not valid JSON. `documentJson` is then an
+   * empty doc and `plainText` is the only recoverable content; the card shows
+   * it read-only and a write must carry `acknowledgeCorrupt: true`. Always
+   * sent by the backend; optional so older fixtures stay valid.
+   */
+  corrupt?: boolean;
 }
 
 export interface BoardPortalDto {
@@ -121,6 +128,8 @@ export interface AssetDto {
   height: number | null;
   sizeBytes: number;
   filePath: string;
+  /** Content hash used for dedup on import; absent on assets predating it. */
+  sha256?: string | null;
 }
 
 /** An image card: a static image plus an editable rich-text caption. */
@@ -134,6 +143,13 @@ export interface ImageCardDto {
   asset: AssetDto;
   captionJson: unknown;
   captionPlainText: string;
+  /**
+   * P1.7: the stored caption is not valid JSON. `captionJson` is then an
+   * empty doc and `captionPlainText` is the only recoverable content; the card shows
+   * it read-only and a write must carry `acknowledgeCorrupt: true`. Always
+   * sent by the backend; optional so older fixtures stay valid.
+   */
+  corrupt?: boolean;
 }
 
 export type LinkMetadataStatus = "pending" | "ready" | "failed";
@@ -163,6 +179,13 @@ export interface EmbedCardDto {
   previewOrigin: "fetched" | "custom" | null;
   metadataStatus: LinkMetadataStatus;
   metadataError: string | null;
+  /**
+   * P1.7: the stored description is not valid JSON. `descriptionJson` is then an
+   * empty doc and `descriptionPlainText` is the only recoverable content; the card shows
+   * it read-only and a write must carry `acknowledgeCorrupt: true`. Always
+   * sent by the backend; optional so older fixtures stay valid.
+   */
+  corrupt?: boolean;
 }
 
 export interface FilesystemAliasDto {
@@ -173,9 +196,28 @@ export interface FilesystemAliasDto {
   zIndex: number;
   revision: number;
   targetKind: "folder" | "file";
-  /** Last resolved display path only; bookmark bytes remain the authority in Rust. */
+  /**
+   * Display path only, as written by the origin device; bookmark bytes remain
+   * the authority in Rust.
+   */
   pathHint: string;
   displayName: string;
+  /** The device that created the shortcut (ADR-0012). */
+  originDeviceId: string;
+  /** That device's name when this device knows it; `null` shows "another device". */
+  originDeviceName: string | null;
+  /**
+   * True when this device holds a locator for the shortcut. `false`: the card
+   * was created on another device; it renders dimmed, cannot open, and offers
+   * "Point to a folder on this computer…".
+   */
+  local: boolean;
+}
+
+/** This installation's identity (ADR-0012). */
+export interface DeviceIdentity {
+  deviceId: string;
+  deviceName: string;
 }
 
 /** A File Card: a text-like file copied into the managed asset store. */
@@ -202,7 +244,14 @@ export interface CreateFileCardInput {
   fileName: string;
 }
 
-export type FolderPreviewStatus = "ready" | "empty" | "missing" | "permission_lost" | "io_error";
+export type FolderPreviewStatus =
+  | "ready"
+  | "empty"
+  | "missing"
+  | "permission_lost"
+  | "io_error"
+  /** No locator on this device (ADR-0012); the filesystem is not touched. */
+  | "foreign_device";
 
 export interface FolderEntryDto {
   name: string;
@@ -243,14 +292,14 @@ export interface CreateNoteInput {
   frame: Frame;
   zIndex: number;
   documentJson: unknown;
-  plainText: string;
 }
 
 export interface UpdateNoteInput {
   id: string;
   expectedRevision: number;
   documentJson: unknown;
-  plainText: string;
+  /** P1.7: required (true) to overwrite a stored document that is corrupt. */
+  acknowledgeCorrupt?: boolean;
 }
 
 export interface MoveCardInput {
@@ -351,7 +400,6 @@ export interface CreateImageCardInput {
   zIndex: number;
   assetId: string;
   captionJson: unknown;
-  captionPlainText: string;
 }
 
 export interface CreateFolderAliasInput {
@@ -381,7 +429,8 @@ export interface UpdateImageCaptionInput {
   id: string;
   expectedRevision: number;
   captionJson: unknown;
-  captionPlainText: string;
+  /** P1.7: required (true) to overwrite a stored document that is corrupt. */
+  acknowledgeCorrupt?: boolean;
 }
 
 export interface TrashItemInput {
@@ -396,14 +445,14 @@ export interface ConvertNoteToEmbedInput {
   displayUrl: string;
   title: string;
   descriptionJson: unknown;
-  descriptionPlainText: string;
 }
 
 export interface UpdateEmbedDescriptionInput {
   id: string;
   expectedRevision: number;
   descriptionJson: unknown;
-  descriptionPlainText: string;
+  /** P1.7: required (true) to overwrite a stored document that is corrupt. */
+  acknowledgeCorrupt?: boolean;
 }
 
 export interface EnrichEmbedMetadataInput {
@@ -492,22 +541,63 @@ export interface SetNoteColorInput {
   colorToken: string;
 }
 
+/** Receipt of a mutation that only bumps one card's revision. */
+export interface CardReceipt {
+  id: string;
+  revision: number;
+}
+
+/** Receipt of a text mutation: the backend derives `plainText` from the JSON
+ *  document, so the caller never computes or sends it itself. */
+export interface TextReceipt {
+  id: string;
+  revision: number;
+  plainText: string;
+}
+
+/** Receipt of a batch move: one `CardReceipt` per moved card. */
+export interface CardsReceipt {
+  cards: CardReceipt[];
+}
+
+/** Receipt of a viewport save. */
+export interface ViewportReceipt {
+  revision: number;
+}
+
+/**
+ * What the external-change poll reads (P1.6), both on the writer connection:
+ * `dataVersion` is SQLite's `PRAGMA data_version` (moves only when another
+ * process commits), `changeSeq` is the board's trigger-maintained counter
+ * (moves on any write touching what the board renders, own writes included).
+ */
+export interface BoardChangeSeq {
+  dataVersion: number;
+  changeSeq: number;
+}
+
 /**
  * The gateway the UI talks to. Concrete implementations adapt Tauri commands
  * or an in-memory mock (for browser-mode tests).
  */
 export interface WorkspaceGateway {
+  /**
+   * P1.7: `null` normally; set when the workspace database could not be opened
+   * at startup. The app then renders only the recovery dialog and calls no
+   * other command except `listBackups` / `requestRestore`.
+   */
+  getStartupFailure(): Promise<StartupFailure | null>;
   getHomeBoard(): Promise<BoardSummary>;
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot>;
   readCard(cardId: string): Promise<CardDto>;
-  getDataVersion(): Promise<number>;
-  createNote(input: CreateNoteInput): Promise<void>;
-  updateNote(input: UpdateNoteInput): Promise<void>;
-  moveCard(input: MoveCardInput): Promise<void>;
-  moveCards(input: MoveCardsInput): Promise<void>;
-  moveCardToBoard(input: MoveCardToBoardInput): Promise<void>;
+  getBoardChangeSeq(boardId: string): Promise<BoardChangeSeq>;
+  createNote(input: CreateNoteInput): Promise<CardReceipt>;
+  updateNote(input: UpdateNoteInput): Promise<TextReceipt>;
+  moveCard(input: MoveCardInput): Promise<CardReceipt>;
+  moveCards(input: MoveCardsInput): Promise<CardsReceipt>;
+  moveCardToBoard(input: MoveCardToBoardInput): Promise<CardReceipt>;
   moveBoard(input: MoveBoardInput): Promise<void>;
-  saveViewport(input: SaveViewportInput): Promise<void>;
+  saveViewport(input: SaveViewportInput): Promise<ViewportReceipt>;
   createChildBoard(input: CreateChildBoardInput): Promise<void>;
   duplicateBoard(input: DuplicateBoardInput): Promise<DuplicateBoardReceipt>;
   renameBoard(boardId: string, title: string): Promise<void>;
@@ -523,13 +613,21 @@ export interface WorkspaceGateway {
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]>;
   classifyPath(path: string): Promise<PathClassificationDto>;
   openFolderInFinder(cardId: string): Promise<void>;
+  /**
+   * "Point to a folder on this computer…" (ADR-0012): stores this device's
+   * locator for the shortcut and returns it with `local: true`. Device-local;
+   * the origin device's locator and the path hint are untouched.
+   */
+  setFilesystemAliasLocalTarget(cardId: string, path: string): Promise<FilesystemAliasDto>;
+  getDeviceIdentity(): Promise<DeviceIdentity>;
+  renameDevice(name: string): Promise<DeviceIdentity>;
   createFileCard(input: CreateFileCardInput): Promise<FileCardDto>;
   openFileCard(cardId: string): Promise<void>;
   revealFileCard(cardId: string): Promise<void>;
-  updateImageCaption(input: UpdateImageCaptionInput): Promise<void>;
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<TextReceipt>;
   convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto>;
   enrichEmbedMetadata(input: EnrichEmbedMetadataInput): Promise<EmbedCardDto>;
-  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void>;
+  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<TextReceipt>;
   trashSelection(input: TrashSelectionInput): Promise<string>;
   listTrash(): Promise<TrashSummaryDto>;
   emptyTrash(confirmation: string): Promise<EmptyTrashResult>;
@@ -543,12 +641,113 @@ export interface WorkspaceGateway {
   setBoardCover(input: SetBoardCoverInput): Promise<void>;
   removeBoardCover(boardId: string): Promise<void>;
   setNoteColor(input: SetNoteColorInput): Promise<void>;
-  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void>;
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<CardsReceipt>;
   /** One atomic call for a mixed selection of leaves and Board Portals (ADR-0007). */
   moveSelectionToBoard(input: MoveSelectionToBoardInput): Promise<MoveSelectionToBoardReceipt>;
   /** Reverses a mixed-selection move from the receipt that move returned. */
   undoMoveSelection(receipt: MoveSelectionToBoardReceipt): Promise<void>;
-  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void>;
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<CardReceipt>;
+  /** Lists backup snapshots under `backups/`, newest first. */
+  listBackups(): Promise<BackupSummary[]>;
+  /**
+   * Requests a restore from `dirName` (a `BackupSummary.dirName`). On success
+   * the app restarts itself and the returned promise never resolves; a
+   * rejection means the request itself was rejected (invalid name, snapshot
+   * not found, or it failed validation) and nothing changed.
+   */
+  requestRestore(dirName: string): Promise<never>;
+
+  // ---- device sync over the LAN (ADR-0011 S3) -------------------------
+  /** Paired peers, discovery status, this device's port and addresses. */
+  getSyncState(): Promise<SyncState>;
+  syncListPeers(): Promise<SyncPeerState[]>;
+  /** Devices mDNS currently sees (never this one). */
+  syncListDiscovered(): Promise<DiscoveredDevice[]>;
+  /** Shows a 6-digit code on this device, valid 5 minutes. */
+  syncBeginPairing(): Promise<PairingCode>;
+  syncCancelPairing(): Promise<void>;
+  /** Pairs with a discovered device or a `host:port`, using the code the
+   *  OTHER device shows. */
+  syncPairWith(input: PairWithInput): Promise<SyncPeerState>;
+  syncUnpair(deviceId: string): Promise<void>;
+  /** One pass over every paired peer; resolves with the state after it. */
+  syncNow(): Promise<SyncState>;
+  /** `sync-state` event. Resolves with the unsubscribe function. */
+  onSyncState(handler: (state: SyncState) => void): Promise<() => void>;
+  /** `sync-applied` event: local board ids whose content changed. */
+  onSyncApplied(handler: (boardIds: string[]) => void): Promise<() => void>;
+}
+
+/** One paired device (ADR-0011 S3). Times are unix milliseconds. */
+export interface SyncPeerState {
+  deviceId: string;
+  name: string;
+  /** The last contact attempt succeeded. */
+  online: boolean;
+  /** mDNS currently sees it. */
+  discovered: boolean;
+  lastSyncAt: number | null;
+  lastError: string | null;
+  lastAddress: string | null;
+}
+
+/** Payload of the `sync-state` event and `getSyncState`. */
+export interface SyncState {
+  peers: SyncPeerState[];
+  /** mDNS discovery is running. */
+  discovering: boolean;
+  /** Why discovery is not running, when it is not. */
+  discoveryError: string | null;
+  /** A user-visible sync pass is running. */
+  syncing: boolean;
+  /** This device's sync port and `ip:port` addresses, for "Add by address". */
+  port: number;
+  addresses: string[];
+}
+
+/** A device found on the local network. */
+export interface DiscoveredDevice {
+  deviceId: string;
+  name: string;
+  addresses: string[];
+  fingerprint: string;
+  paired: boolean;
+}
+
+export interface PairingCode {
+  code: string;
+  /** Unix milliseconds. */
+  expiresAt: number;
+}
+
+export interface PairWithInput {
+  deviceId?: string;
+  address?: string;
+  code: string;
+}
+
+/** Why the app started in recovery mode (P1.7). No paths, no content. */
+export interface StartupFailure {
+  /** Stable error code (`db_open_failed`, `workspace_start_failed`). */
+  code: string;
+  /** User-facing text, prefixed with the code. */
+  message: string;
+}
+
+/** One snapshot as shown in the "Restore from backup" dialog. */
+export interface BackupSummary {
+  /** Directory name under `backups/`; pass it back to `requestRestore`. */
+  dirName: string;
+  /** Unix seconds when the snapshot was taken. */
+  createdAtSecs: number;
+  /** Schema version recorded in the manifest (0 when unknown). */
+  schemaVersion: number;
+  /** Assets present in the snapshot. */
+  assetCount: number;
+  /** Apparent size of the snapshot, in bytes. */
+  totalBytes: number;
+  /** True when the snapshot passed validation and can be restored. */
+  valid: boolean;
 }
 
 /**

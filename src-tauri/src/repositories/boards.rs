@@ -7,19 +7,24 @@ use rusqlite::{params, Connection};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AssetDto, BoardSnapshot, BoardSummary, Breadcrumb, UpdateViewportInput, Viewport,
+    ViewportReceipt,
 };
 
 use super::super::db;
 use super::cards::load_cards;
+use super::immediate_tx;
 
 /// Persists a board's viewport, bumping its revision with an optimistic guard.
 pub fn update_viewport(
     conn: &mut Connection,
     input: &UpdateViewportInput,
-) -> Result<(), WorkspaceError> {
+) -> Result<ViewportReceipt, WorkspaceError> {
     let now = db::migrations::now_millis();
 
-    let changed = conn.execute(
+    // One IMMEDIATE transaction so the stale-revision diagnosis below reads the
+    // same state the guarded UPDATE saw.
+    let tx = immediate_tx(conn)?;
+    let changed = tx.execute(
         "UPDATE board_view_states
          SET viewport_x = ?1, viewport_y = ?2, zoom = ?3, revision = revision + 1, updated_at = ?4
          WHERE board_id = ?5 AND revision = ?6",
@@ -34,7 +39,7 @@ pub fn update_viewport(
     )?;
 
     if changed == 0 {
-        let exists: i64 = conn.query_row(
+        let exists: i64 = tx.query_row(
             "SELECT COUNT(*) FROM board_view_states WHERE board_id = ?1",
             [input.board_id.clone()],
             |r| r.get(0),
@@ -42,7 +47,7 @@ pub fn update_viewport(
         if exists == 0 {
             return Err(WorkspaceError::NotFound(input.board_id.clone()));
         }
-        let actual: i64 = conn.query_row(
+        let actual: i64 = tx.query_row(
             "SELECT revision FROM board_view_states WHERE board_id = ?1",
             [input.board_id.clone()],
             |r| r.get(0),
@@ -53,7 +58,13 @@ pub fn update_viewport(
         });
     }
 
-    Ok(())
+    let revision: i64 = tx.query_row(
+        "SELECT revision FROM board_view_states WHERE board_id = ?1",
+        [input.board_id.as_str()],
+        |r| r.get(0),
+    )?;
+    tx.commit()?;
+    Ok(ViewportReceipt { revision })
 }
 
 /// Loads the complete, self-contained projection of a board.
@@ -64,8 +75,8 @@ pub fn load_board_snapshot(
     let board = load_board_summary(conn, board_id)?;
     let breadcrumbs = load_breadcrumbs(conn, board_id)?;
     let viewport = load_viewport(conn, board_id)?;
-    let cards = load_cards(conn, board_id, true, false)?;
-    let unsorted_cards = load_cards(conn, board_id, false, true)?;
+    let cards = load_cards(conn, board_id, false)?;
+    let unsorted_cards = load_cards(conn, board_id, true)?;
 
     Ok(BoardSnapshot {
         board,
@@ -76,11 +87,55 @@ pub fn load_board_snapshot(
     })
 }
 
+/// Loads the Home (root) board summary.
+pub fn load_home_board(conn: &Connection) -> Result<BoardSummary, WorkspaceError> {
+    let root_id: String =
+        conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+            r.get(0)
+        })?;
+    conn.query_row(
+        "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path,
+                ca.sha256
+         FROM boards b
+         LEFT JOIN assets ca ON ca.id = b.cover_asset_id
+         WHERE b.id = ?1",
+        [root_id],
+        |row| {
+            let cover_asset = if row.get::<_, Option<String>>(6)?.is_some() {
+                Some(AssetDto {
+                    id: row.get(6)?,
+                    file_name: row.get(7)?,
+                    mime_type: row.get(8)?,
+                    width: row.get(9)?,
+                    height: row.get(10)?,
+                    size_bytes: row.get(11)?,
+                    file_path: row.get(12)?,
+                    sha256: row.get(13)?,
+                })
+            } else {
+                None
+            };
+            Ok(BoardSummary {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                parent_board_id: row.get(2)?,
+                revision: row.get(3)?,
+                color_token: row.get(4)?,
+                symbol: row.get(5)?,
+                cover_asset,
+            })
+        },
+    )
+    .map_err(WorkspaceError::from)
+}
+
 /// Lists all active (non-trashed) boards.
 pub fn list_boards(conn: &Connection) -> Result<Vec<BoardSummary>, WorkspaceError> {
     let mut stmt = conn.prepare(
         "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
-                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path,
+                ca.sha256
          FROM boards b
          LEFT JOIN assets ca ON ca.id = b.cover_asset_id
          WHERE b.deleted_at IS NULL
@@ -96,6 +151,7 @@ pub fn list_boards(conn: &Connection) -> Result<Vec<BoardSummary>, WorkspaceErro
                 height: row.get(10)?,
                 size_bytes: row.get(11)?,
                 file_path: row.get(12)?,
+                sha256: row.get(13)?,
             })
         } else {
             None
@@ -123,7 +179,8 @@ pub(super) fn load_board_summary(
 ) -> Result<BoardSummary, WorkspaceError> {
     conn.query_row(
         "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
-                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path,
+                ca.sha256
          FROM boards b
          LEFT JOIN assets ca ON ca.id = b.cover_asset_id
          WHERE b.id = ?1 AND b.deleted_at IS NULL",
@@ -138,6 +195,7 @@ pub(super) fn load_board_summary(
                     height: row.get(10)?,
                     size_bytes: row.get(11)?,
                     file_path: row.get(12)?,
+                    sha256: row.get(13)?,
                 })
             } else {
                 None
@@ -200,4 +258,40 @@ fn load_viewport(conn: &Connection, board_id: &str) -> Result<Viewport, Workspac
         },
     )
     .map_err(WorkspaceError::from)
+}
+
+/// What the frontend polls to detect external writes to the open board
+/// (P1.6). See `commands::boards::get_board_change_seq` for why both values
+/// must be read on the writer connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardChangeSeq {
+    /// `PRAGMA data_version` of the connection this was read on.
+    pub data_version: i64,
+    /// `boards.change_seq` of the requested board (trigger-maintained, 0023).
+    pub change_seq: i64,
+}
+
+/// Reads `PRAGMA data_version` and the board's `change_seq` on `conn`.
+/// `NotFound` if the board row does not exist (trashed boards still answer).
+pub fn get_board_change_seq(
+    conn: &Connection,
+    board_id: &str,
+) -> Result<BoardChangeSeq, WorkspaceError> {
+    let data_version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
+    let change_seq: i64 = match conn.query_row(
+        "SELECT change_seq FROM boards WHERE id = ?1",
+        [board_id],
+        |r| r.get(0),
+    ) {
+        Ok(seq) => seq,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(WorkspaceError::NotFound(board_id.to_string()))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    Ok(BoardChangeSeq {
+        data_version,
+        change_seq,
+    })
 }

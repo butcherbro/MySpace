@@ -1,5 +1,8 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import { NoteEditor } from "../../editor/NoteEditor";
+import { StaticDocument } from "../../editor/StaticDocument";
+import { DamagedDocument } from "../../editor/DamagedDocument";
+import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import type { NoteEditorCommands } from "../../editor/editor-commands";
 import type { TextColorId } from "../../editor/text-color";
@@ -13,9 +16,9 @@ interface NoteCardProps {
   /** Exit edit mode. */
   onDeactivate: () => void;
   /** Persist note content as an authoritative document. Rejects on failure. */
-  onUpdate: (id: string, document: unknown) => Promise<void>;
+  onUpdate: DocumentSave;
   /** Finalize note editing (blur/Enter) and optionally convert into a Link Card. */
-  onFinalize?: (id: string, document: unknown) => Promise<void>;
+  onFinalize?: DocumentSave;
   /** Request a context menu (right-click) for this card. */
   onContextMenu: (cardId: string, x: number, y: number) => void;
   /** Persist a manual resize (width/height in CSS px). */
@@ -34,12 +37,23 @@ interface NoteCardProps {
   onTextColorChange?: (color: TextColorId) => void;
 }
 
+/** How long a pointer-down may precede edit entry and still place the caret. */
+const CARET_CLICK_WINDOW_MS = 1000;
+
 /**
  * An editable note backed by an authoritative document. Editing is controlled
  * by the parent; the draft lifecycle (debounce/flush) lives in the shared
  * `useDocumentDraft` hook.
+ *
+ * P1.8: only the note being edited mounts a Tiptap editor. An idle note
+ * renders its persisted document as static HTML (`StaticDocument`), so a board
+ * of N notes costs one editor, not N. The draft hook stays mounted either way;
+ * while idle it is clean, so its draft-flush registration has nothing to write.
+ *
+ * Memoised: `App` passes stable (ref-backed) callbacks, so an unrelated card's
+ * update never re-renders this one.
  */
-export function NoteCard({
+export const NoteCard = memo(function NoteCard({
   note,
   editing,
   onDeactivate,
@@ -54,13 +68,36 @@ export function NoteCard({
   onStrikeStateChange,
   onTextColorChange,
 }: NoteCardProps) {
-  const { draft, saving, error, handleChange, handleBlur, handleFinalize } = useDocumentDraft({
+  // P1.7: a corrupt note shows its recovered text and never autosaves until
+  // the user starts a repair (see editor/corrupt-document.ts).
+  const repair = useCorruptRepair({ corrupt: note.corrupt === true, onUpdate, onFinalize });
+  const { draft, saving, error, handleChange, handleBlur, handleFinalize, replaceDraft } = useDocumentDraft({
     id: note.id,
     persistedDocument: note.documentJson,
-    onUpdate,
-    onFinalize,
+    onUpdate: repair.onUpdate,
+    onFinalize: repair.onFinalize,
     onSaved: onDeactivate,
+    corrupt: repair.damaged,
   });
+  // The Repair click also reaches the canvas as a card click, which starts
+  // editing, so the editor mounts on the recovered document.
+  const startRepair = () => {
+    repair.beginRepair();
+    replaceDraft(recoveredDocument(note.plainText));
+  };
+
+  // The static view is swapped for an editor on the click that starts editing,
+  // so remember where that click landed (see NoteEditor `initialCaretPoint`).
+  const lastPointerDownRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const [caretPoint, setCaretPoint] = useState<{ x: number; y: number } | null>(null);
+  const [wasEditing, setWasEditing] = useState(editing);
+  if (editing !== wasEditing) {
+    setWasEditing(editing);
+    const down = lastPointerDownRef.current;
+    setCaretPoint(
+      editing && down && performance.now() - down.t <= CARET_CLICK_WINDOW_MS ? { x: down.x, y: down.y } : null,
+    );
+  }
 
   const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
@@ -175,33 +212,49 @@ export function NoteCard({
       data-editing={editing ? "true" : "false"}
       data-saving={saving ? "true" : "false"}
       data-error={error ? "true" : "false"}
+      data-corrupt={repair.damaged ? "true" : "false"}
       style={{ width: appliedWidth, height: appliedHeight }}
+      onPointerDown={(e) => {
+        lastPointerDownRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
         onContextMenu(note.id, e.clientX, e.clientY);
       }}
     >
-      <NoteEditor
-        document={editing ? draft : note.documentJson}
-        editable={editing}
-        onChange={handleChange}
-        onBlur={() => {
-          // Флашим отложенный автогrow-write вместе с флашем контента на blur —
-          // иначе последний рост «в полёте» (debounce ещё не сработал) терялся бы.
-          flushPendingGrow();
-          handleBlur();
-        }}
-        onFinalize={() => {
-          void handleFinalize();
-        }}
-        highlightQuery={highlightQuery}
-        onCommandsReady={onCommandsReady}
-        onBoldStateChange={onBoldStateChange}
-        onItalicStateChange={onItalicStateChange}
-        onStrikeStateChange={onStrikeStateChange}
-        onTextColorChange={onTextColorChange}
-      />
+      {repair.damaged ? (
+        <DamagedDocument
+          label="note"
+          plainText={note.plainText}
+          onRepair={startRepair}
+          highlightQuery={highlightQuery}
+        />
+      ) : editing ? (
+        <NoteEditor
+          document={draft}
+          editable
+          onChange={handleChange}
+          onBlur={() => {
+            // Флашим отложенный автогrow-write вместе с флашем контента на blur —
+            // иначе последний рост «в полёте» (debounce ещё не сработал) терялся бы.
+            flushPendingGrow();
+            handleBlur();
+          }}
+          onFinalize={() => {
+            void handleFinalize();
+          }}
+          highlightQuery={highlightQuery}
+          initialCaretPoint={caretPoint}
+          onCommandsReady={onCommandsReady}
+          onBoldStateChange={onBoldStateChange}
+          onItalicStateChange={onItalicStateChange}
+          onStrikeStateChange={onStrikeStateChange}
+          onTextColorChange={onTextColorChange}
+        />
+      ) : (
+        <StaticDocument document={note.documentJson} highlightQuery={highlightQuery} />
+      )}
       {saving && <div className="note-card__status note-card__status--saving">Saving…</div>}
       {error && <div className="note-card__status note-card__status--error">{error}</div>}
       <div
@@ -211,4 +264,4 @@ export function NoteCard({
       />
     </div>
   );
-}
+});

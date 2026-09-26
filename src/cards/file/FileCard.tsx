@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import type { FileCardDto } from "../../services/workspace-gateway";
 import "./file-card.css";
+import { assetUrl } from "../../services/asset-url";
 
 interface Props {
   file: FileCardDto;
@@ -74,7 +75,7 @@ function extColor(ext: string): string {
   }
 }
 
-export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Props) {
+export const FileCard = memo(function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Props) {
   const [draft, setDraft] = useState<{ width: number; height: number } | null>(null);
   const draftRef = useRef<{ width: number; height: number } | null>(null);
   const start = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -170,7 +171,7 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
           {file.previewAsset ? (
             <img
               className="file-card__thumb"
-              src={`myspace-asset://localhost/${file.previewAsset.filePath}`}
+              src={assetUrl(file.previewAsset.filePath)}
               alt=""
               draggable={false}
             />
@@ -241,7 +242,7 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
           className="file-card__html"
           data-testid="file-preview"
           title={file.asset.fileName}
-          src={`myspace-asset://localhost/${file.asset.filePath}`}
+          src={assetUrl(file.asset.filePath)}
           sandbox=""
           tabIndex={-1}
         />
@@ -268,4 +269,4 @@ export function FileCard({ file, onOpen, onReveal, onResize, onContextMenu }: Pr
       />
     </article>
   );
-}
+});

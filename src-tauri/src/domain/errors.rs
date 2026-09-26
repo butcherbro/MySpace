@@ -16,6 +16,9 @@ pub enum WorkspaceError {
     RootBoardProtected,
     /// An unexpected database failure.
     Database(String),
+    /// A device-sync transport failure (peer unreachable, refused pairing,
+    /// TLS or protocol error). User-facing message.
+    Sync(String),
 }
 
 impl std::fmt::Display for WorkspaceError {
@@ -28,6 +31,25 @@ impl std::fmt::Display for WorkspaceError {
             WorkspaceError::ConstraintViolation(m) => write!(f, "constraint violation: {m}"),
             WorkspaceError::RootBoardProtected => write!(f, "root board is protected"),
             WorkspaceError::Database(m) => write!(f, "database error: {m}"),
+            WorkspaceError::Sync(m) => write!(f, "sync: {m}"),
+        }
+    }
+}
+
+impl WorkspaceError {
+    /// True when the failure is SQLite reporting a busy/locked database, i.e.
+    /// another process held the write lock past `busy_timeout`. The writer
+    /// thread re-runs such mutations a bounded number of times. Detected on
+    /// the message because `Database` carries only a string at the IPC
+    /// boundary; `From<rusqlite::Error>` below writes these messages, so the
+    /// two stay in step.
+    pub fn is_busy(&self) -> bool {
+        match self {
+            WorkspaceError::Database(message) => {
+                message.contains("database is locked")
+                    || message.contains("database table is locked")
+            }
+            _ => false,
         }
     }
 }

@@ -31,7 +31,7 @@ describe("useViewportPersistence", () => {
     // before the debounce elapses. The save must still carry A and revision 7:
     // reading a shared revision at timer time is what sent A's viewport with B's
     // revision and produced a stale-revision banner on B.
-    const saveViewport = vi.fn().mockResolvedValue(undefined);
+    const saveViewport = vi.fn().mockResolvedValue({ revision: 8 });
     const onSaved = vi.fn();
     const { result: hook } = renderHook(() =>
       useViewportPersistence(gatewayWith(saveViewport), { delayMs: 0, onSaved }),
@@ -51,6 +51,7 @@ describe("useViewportPersistence", () => {
     });
     expect(onSaved).toHaveBeenCalledWith(
       expect.objectContaining({ boardId: "board-a", revision: 7 }),
+      8,
     );
   });
 

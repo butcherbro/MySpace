@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canvasNodeInputsEqual,
   cardToNodeLike,
   frameIntersectionRatio,
   movedNodeToCard,
@@ -20,6 +21,12 @@ function card(overrides: Partial<CanvasCard> = {}): CanvasCard {
 }
 
 describe("canvas mapping", () => {
+  it("rebuilds a folder shortcut node when it turns local, without a revision bump (ADR-0012)", () => {
+    const foreign = card({ kind: "filesystem_alias", aliasLocal: false });
+    expect(canvasNodeInputsEqual(foreign, { ...foreign })).toBe(true);
+    expect(canvasNodeInputsEqual(foreign, { ...foreign, aliasLocal: true })).toBe(false);
+  });
+
   it("maps a card frame to a renderer-neutral node", () => {
     const node = cardToNodeLike(card());
     expect(node).toEqual({

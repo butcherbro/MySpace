@@ -1,9 +1,27 @@
-//! Workspace search: the read model behind the top-bar search field. Split out
-//! of `workspace_repository` without changing any SQL or ranking rule.
+//! Workspace search: the read model behind the top-bar search field.
+//!
+//! Matching runs on the FTS5 table `search_index` (migration 0022), which
+//! SQLite triggers keep in step with boards and every searchable card detail
+//! table. One FTS query yields at most [`CANDIDATE_LIMIT`] live candidates
+//! (trashed cards/boards are excluded here, at query time); boards are then
+//! projected here and every card kind projects its own candidates through
+//! `CardKindHandler::search_rows`. Ranking (`rank_and_truncate`) and the
+//! Unicode-safe excerpts are unchanged from the scan-based V1.
+//!
+//! Query semantics: each whitespace-separated chunk of the query becomes a
+//! quoted FTS5 prefix phrase (`"chunk"*`); all chunks must match (AND),
+//! case- and diacritics-insensitively, at a word start. When that finds
+//! nothing for a short query (up to [`SUBSTRING_FALLBACK_MAX_CHARS`]), a
+//! bounded substring scan over the index keeps mid-word matches (e.g. a
+//! single Cyrillic letter inside a word) working.
 
-use rusqlite::Connection;
+use std::collections::HashMap;
 
+use rusqlite::{params_from_iter, Connection, Row};
+
+use crate::domain::card_kind::{handler, CardKind, SearchCandidate, SearchHit};
 use crate::domain::errors::WorkspaceError;
+use crate::domain::kinds::{asset_at, asset_columns};
 use crate::domain::models::{AssetDto, SearchResultDto};
 
 use super::boards::{load_board_summary, load_breadcrumbs};
@@ -14,17 +32,45 @@ const SEARCH_EXCERPT_LIMIT: usize = 120;
 /// Maximum search results returned by the V1 read model.
 const SEARCH_RESULT_LIMIT: usize = 50;
 
-fn bound_text(text: &str) -> String {
+/// Maximum FTS candidates ranked in Rust. Title-level matches are taken
+/// first, then the most recently indexed body matches; the final list is at
+/// most [`SEARCH_RESULT_LIMIT`].
+const CANDIDATE_LIMIT: usize = 200;
+
+/// Longest query (in characters) that falls back to a substring scan when no
+/// word starts with it. The scan reads every indexed row, so it is kept for
+/// the short queries where word-prefix matching most often misses (a single
+/// letter inside a word); a longer query with no word match — typically a
+/// typo — returns nothing at index speed.
+const SUBSTRING_FALLBACK_MAX_CHARS: usize = 3;
+
+/// Chunk size for `IN (?, ?, …)` expansions (well under SQLite's bound
+/// parameter limit).
+const ID_CHUNK: usize = 500;
+
+pub(crate) fn bound_text(text: &str) -> String {
     text.trim().chars().take(SEARCH_EXCERPT_LIMIT).collect()
 }
 
 /// Returns a bounded context snippet centered on the first case-insensitive
 /// match of `query`, with ellipses where text is trimmed. Falls back to the
 /// start of the text when there is no match.
-fn search_excerpt(text: &str, query: &str) -> String {
+///
+/// A multi-word query that does not occur verbatim (the full-text index
+/// matches words in any order) centers on the earliest matching word instead.
+pub(crate) fn search_excerpt(text: &str, query: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let query_folded: Vec<char> = query.to_lowercase().chars().collect();
-    let Some(match_range) = folded_match_range(&chars, &query_folded) else {
+    let match_range = folded_match_range(&chars, &query_folded).or_else(|| {
+        query
+            .split_whitespace()
+            .filter_map(|word| {
+                let folded: Vec<char> = word.to_lowercase().chars().collect();
+                folded_match_range(&chars, &folded)
+            })
+            .min_by_key(|range| range.start)
+    });
+    let Some(match_range) = match_range else {
         return bound_text(text);
     };
 
@@ -77,27 +123,186 @@ fn folded_match_range(chars: &[char], needle_folded: &[char]) -> Option<std::ops
     Some(first..last + 1)
 }
 
-/// Unicode-aware case-insensitive substring test. SQLite's `LIKE` is only
-/// case-insensitive for ASCII, so Cyrillic (and other non-ASCII) must be matched
-/// in Rust via `to_lowercase`.
+/// Unicode-aware case-insensitive substring test (the mid-word fallback).
+/// SQLite's `LIKE` is only case-insensitive for ASCII, so Cyrillic (and other
+/// non-ASCII) must be matched in Rust via `to_lowercase`.
 fn contains_query(haystack: &str, query_lower: &str) -> bool {
     haystack.to_lowercase().contains(query_lower)
 }
 
-/// A search hit plus the rank used to order results deterministically.
-struct SearchHit {
-    entity_id: String,
-    kind: &'static str,
-    title: String,
-    excerpt: Option<String>,
-    board_id: String,
-    rank: i64,
-    thumbnail_asset: Option<AssetDto>,
-    created_at: i64,
+/// Deterministic result order — rank first, then case-folded title, then
+/// entity id — truncated to `limit`. Applied once to the merged hits of
+/// every kind.
+pub(crate) fn rank_and_truncate(hits: &mut Vec<SearchHit>, limit: usize) {
+    hits.sort_by(|a, b| {
+        a.rank
+            .cmp(&b.rank)
+            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            .then_with(|| a.entity_id.cmp(&b.entity_id))
+    });
+    hits.truncate(limit);
+}
+
+/// The FTS5 MATCH expression for `query`, or `None` when it has nothing to
+/// search for (empty or only punctuation). Every whitespace-separated chunk
+/// is quoted as an FTS5 string (inner `"` doubled) with a prefix `*`, so user
+/// text is never parsed as FTS5 syntax; the tokenizer splits a chunk such as
+/// `example.com` into an adjacent-word phrase.
+fn fts_match_expression(query: &str) -> Option<String> {
+    let phrases: Vec<String> = query
+        .split_whitespace()
+        .filter(|chunk| chunk.chars().any(char::is_alphanumeric))
+        .map(|chunk| format!("\"{}\"*", chunk.replace('"', "\"\"")))
+        .collect();
+    (!phrases.is_empty()).then(|| phrases.join(" "))
+}
+
+/// Joins that keep only live entities: a card must be live and on a live
+/// board; a board must be live. Trash is not mirrored in `search_index`.
+const LIVE_FILTER: &str = "
+    LEFT JOIN cards c ON c.id = search_index.entity_id AND search_index.kind <> 'board'
+    JOIN boards b ON b.id = CASE WHEN search_index.kind = 'board'
+                                 THEN search_index.entity_id ELSE c.board_id END
+    WHERE b.deleted_at IS NULL
+      AND (search_index.kind = 'board' OR (c.id IS NOT NULL AND c.deleted_at IS NULL))";
+
+/// One live candidate: `(entity_id, kind, title_hit)`.
+type Candidate = (String, String, bool);
+
+/// FTS candidates for `expression`, at most [`CANDIDATE_LIMIT`]: every
+/// title-level match first (the `title` column), then the remaining matches
+/// newest-indexed first. Both reads walk the FTS index in rowid order and stop
+/// at the limit, so neither sorts or scores the full match set — a prefix that
+/// matches every note costs the same as a rare word. Final ordering is
+/// `rank_and_truncate`'s, in Rust.
+fn fts_candidates(conn: &Connection, expression: &str) -> Result<Vec<Candidate>, WorkspaceError> {
+    let sql = format!(
+        "SELECT search_index.rowid, search_index.entity_id, search_index.kind
+         FROM search_index
+         {LIVE_FILTER}
+           AND search_index MATCH ?1
+         ORDER BY search_index.rowid DESC
+         LIMIT ?2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let limit = CANDIDATE_LIMIT as i64;
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<Candidate> = Vec::new();
+    let title_expression = format!("title : ({expression})");
+    let rows = stmt.query_map(rusqlite::params![title_expression, limit], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get(1)?, row.get(2)?))
+    })?;
+    for row in rows {
+        let (rowid, entity_id, kind) = row?;
+        seen.insert(rowid);
+        out.push((entity_id, kind, true));
+    }
+    if out.len() < CANDIDATE_LIMIT {
+        let rows = stmt.query_map(
+            rusqlite::params![expression, limit + out.len() as i64],
+            |row| Ok((row.get::<_, i64>(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        for row in rows {
+            let (rowid, entity_id, kind) = row?;
+            if out.len() >= CANDIDATE_LIMIT {
+                break;
+            }
+            if !seen.contains(&rowid) {
+                out.push((entity_id, kind, false));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Mid-word fallback when the word-prefix query found nothing: a
+/// case-insensitive (Unicode) substring test over the indexed text of live
+/// entities, bounded to [`CANDIDATE_LIMIT`] hits (title-level hits first).
+fn substring_candidates(conn: &Connection, query: &str) -> Result<Vec<Candidate>, WorkspaceError> {
+    let q = query.to_lowercase();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT search_index.entity_id, search_index.kind, search_index.title, search_index.body
+         FROM search_index
+         {LIVE_FILTER}"
+    ))?;
+    let mut rows = stmt.query([])?;
+    let mut title_hits = Vec::new();
+    let mut body_hits = Vec::new();
+    while let Some(row) = rows.next()? {
+        let title: String = row.get(2)?;
+        if contains_query(&title, &q) {
+            title_hits.push((row.get(0)?, row.get(1)?, true));
+        } else if body_hits.len() < CANDIDATE_LIMIT {
+            let body: String = row.get(3)?;
+            if contains_query(&body, &q) {
+                body_hits.push((row.get(0)?, row.get(1)?, false));
+            }
+        }
+        if title_hits.len() >= CANDIDATE_LIMIT {
+            break;
+        }
+    }
+    title_hits.extend(body_hits);
+    title_hits.truncate(CANDIDATE_LIMIT);
+    Ok(title_hits)
+}
+
+/// Runs `sql_prefix` (a `SELECT … WHERE <id column>` without the `IN` list)
+/// for `ids` in bounded chunks and maps each row. Row order follows SQLite.
+pub(crate) fn query_by_ids<T, F>(
+    conn: &Connection,
+    sql_prefix: &str,
+    ids: &[&str],
+    mut map: F,
+) -> Result<Vec<T>, WorkspaceError>
+where
+    F: FnMut(&Row<'_>) -> rusqlite::Result<T>,
+{
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(ID_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let mut stmt = conn.prepare(&format!("{sql_prefix} IN ({placeholders})"))?;
+        let rows = stmt.query_map(params_from_iter(chunk.iter()), &mut map)?;
+        for row in rows {
+            out.push(row?);
+        }
+    }
+    Ok(out)
+}
+
+/// Board hits (rank 0, title only) for `ids`.
+fn board_hits(conn: &Connection, ids: &[&str]) -> Result<Vec<SearchHit>, WorkspaceError> {
+    query_by_ids(
+        conn,
+        &format!(
+            "SELECT b.id, b.title, b.created_at, {cover}
+             FROM boards b
+             LEFT JOIN assets ca ON ca.id = b.cover_asset_id
+             WHERE b.id",
+            cover = asset_columns("ca")
+        ),
+        ids,
+        |row| {
+            let id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            Ok(SearchHit {
+                entity_id: id.clone(),
+                kind: "board",
+                title: bound_text(&title),
+                excerpt: None,
+                board_id: id,
+                rank: 0,
+                thumbnail_asset: asset_at(row, 3)?,
+                created_at: row.get(2)?,
+            })
+        },
+    )
 }
 
 /// Searches the workspace (Board titles, Note plain text, Link Card title/URL/
-/// description) and returns a bounded, deterministic result set. This is the V1
+/// description, Image caption/file name, File name/preview, Folder alias
+/// name/path) and returns a bounded, deterministic result set. This is the V1
 /// default: global scope and a title-before-body ordering; both are documented
 /// in `docs/specs/search.md` and may be refined after agreement.
 pub fn search_workspace(
@@ -105,277 +310,37 @@ pub fn search_workspace(
     query: &str,
 ) -> Result<Vec<SearchResultDto>, WorkspaceError> {
     let query = query.trim();
-    if query.is_empty() {
+    let Some(expression) = fts_match_expression(query) else {
         return Ok(Vec::new());
-    }
-    let q = query.to_lowercase();
-    let mut hits = Vec::<SearchHit>::new();
+    };
 
-    // Boards by title (rank 0).
-    {
-        let mut stmt = conn.prepare(
-            "SELECT b.id, b.title, b.created_at,
-                    ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
-             FROM boards b
-             LEFT JOIN assets ca ON ca.id = b.cover_asset_id
-             WHERE b.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let cover = if row.get::<_, Option<String>>(3)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(3)?,
-                    file_name: row.get(4)?,
-                    mime_type: row.get(5)?,
-                    width: row.get(6)?,
-                    height: row.get(7)?,
-                    size_bytes: row.get(8)?,
-                    file_path: row.get(9)?,
-                })
-            } else {
-                None
-            };
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                cover,
-            ))
-        })?;
-        for r in rows {
-            let (id, title, created_at, cover) = r?;
-            if contains_query(&title, &q) {
-                hits.push(SearchHit {
-                    entity_id: id.clone(),
-                    kind: "board",
-                    title: bound_text(&title),
-                    excerpt: None,
-                    board_id: id,
-                    rank: 0,
-                    thumbnail_asset: cover,
-                    created_at,
-                });
-            }
-        }
+    let mut candidates = fts_candidates(conn, &expression)?;
+    if candidates.is_empty() && query.chars().count() <= SUBSTRING_FALLBACK_MAX_CHARS {
+        candidates = substring_candidates(conn, query)?;
     }
 
-    // Notes by plain text (rank 1).
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, n.plain_text, c.created_at
-             FROM cards c
-             JOIN note_cards n ON n.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        })?;
-        for r in rows {
-            let (id, board_id, plain_text, created_at) = r?;
-            if contains_query(&plain_text, &q) {
-                hits.push(SearchHit {
-                    entity_id: id,
-                    kind: "note",
-                    title: search_excerpt(&plain_text, query),
-                    excerpt: None,
-                    board_id,
-                    rank: 1,
-                    thumbnail_asset: None,
-                    created_at,
-                });
-            }
-        }
-    }
-
-    // Image cards by caption or file name (rank 1).
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, i.caption_plain_text, c.created_at,
-                    a.id, a.file_name, a.mime_type, a.width, a.height, a.size_bytes, a.file_path
-             FROM cards c
-             JOIN image_cards i ON i.card_id = c.id
-             JOIN assets a ON a.id = i.asset_id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let thumb = AssetDto {
-                id: row.get(4)?,
-                file_name: row.get(5)?,
-                mime_type: row.get(6)?,
-                width: row.get(7)?,
-                height: row.get(8)?,
-                size_bytes: row.get(9)?,
-                file_path: row.get(10)?,
-            };
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                thumb,
-            ))
-        })?;
-        for r in rows {
-            let (id, board_id, caption, created_at, thumb) = r?;
-            let file_name = thumb.file_name.clone();
-            if contains_query(&caption, &q) || contains_query(&file_name, &q) {
-                let title = if caption.trim().is_empty() {
-                    file_name
-                } else {
-                    caption
-                };
-                hits.push(SearchHit {
-                    entity_id: id,
-                    kind: "image",
-                    title: search_excerpt(&title, query),
-                    excerpt: None,
-                    board_id,
-                    rank: 1,
-                    thumbnail_asset: Some(thumb),
-                    created_at,
-                });
-            }
-        }
-    }
-
-    // Folder shortcuts by display name or the display-only path hint.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, a.display_name, a.path_hint, c.created_at
-             FROM cards c
-             JOIN filesystem_aliases a ON a.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-            ))
-        })?;
-        for row in rows {
-            let (id, board_id, display_name, path_hint, created_at) = row?;
-            let name_match = contains_query(&display_name, &q);
-            let path_match = contains_query(&path_hint, &q);
-            if name_match || path_match {
-                hits.push(SearchHit {
-                    entity_id: id,
-                    kind: "folder",
-                    title: bound_text(&display_name),
-                    excerpt: (!name_match).then(|| bound_text(&path_hint)),
-                    board_id,
-                    rank: if name_match { 0 } else { 1 },
-                    thumbnail_asset: None,
-                    created_at,
-                });
-            }
-        }
-    }
-
-    // Link Cards (embed) by title, URL, or description.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.board_id, e.title, e.source_url, e.display_url, e.description_plain_text,
-                    pa.id, pa.file_name, pa.mime_type, pa.width, pa.height, pa.size_bytes, pa.file_path,
-                    fa.id, fa.file_name, fa.mime_type, fa.width, fa.height, fa.size_bytes, fa.file_path,
-                    c.created_at
-             FROM cards c
-             JOIN embed_cards e ON e.card_id = c.id
-             JOIN boards b ON b.id = c.board_id AND b.deleted_at IS NULL
-             LEFT JOIN assets pa ON pa.id = e.asset_id
-             LEFT JOIN assets fa ON fa.id = e.favicon_asset_id
-             WHERE c.deleted_at IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let preview = if row.get::<_, Option<String>>(6)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(6)?,
-                    file_name: row.get(7)?,
-                    mime_type: row.get(8)?,
-                    width: row.get(9)?,
-                    height: row.get(10)?,
-                    size_bytes: row.get(11)?,
-                    file_path: row.get(12)?,
-                })
-            } else {
-                None
-            };
-            let favicon = if row.get::<_, Option<String>>(13)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(13)?,
-                    file_name: row.get(14)?,
-                    mime_type: row.get(15)?,
-                    width: row.get(16)?,
-                    height: row.get(17)?,
-                    size_bytes: row.get(18)?,
-                    file_path: row.get(19)?,
-                })
-            } else {
-                None
-            };
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                preview.or(favicon),
-                row.get::<_, i64>(20)?,
-            ))
-        })?;
-        for r in rows {
-            let (id, board_id, title_raw, source_url, display_url, description, thumb, created_at) =
-                r?;
-            let title = title_raw
-                .filter(|t| !t.trim().is_empty())
-                .unwrap_or_else(|| source_url.clone());
-
-            let title_match = contains_query(&title, &q);
-            let source_match = contains_query(&source_url, &q);
-            let display_match = contains_query(&display_url, &q);
-            let desc_match = contains_query(&description, &q);
-
-            if !(title_match || source_match || display_match || desc_match) {
-                continue;
-            }
-
-            let (rank, excerpt) = if title_match || source_match || display_match {
-                (0, None)
-            } else {
-                (2, Some(search_excerpt(&description, query)))
-            };
-
-            hits.push(SearchHit {
-                entity_id: id,
-                kind: "link",
-                title,
-                excerpt,
-                board_id,
-                rank,
-                thumbnail_asset: thumb,
-                created_at,
+    // Group by kind, keeping the index's order inside each group.
+    let mut board_ids: Vec<&str> = Vec::new();
+    let mut by_kind: HashMap<CardKind, Vec<SearchCandidate>> = HashMap::new();
+    for (entity_id, kind, title_hit) in &candidates {
+        if kind == "board" {
+            board_ids.push(entity_id);
+        } else if let Ok(card_kind) = kind.parse::<CardKind>() {
+            by_kind.entry(card_kind).or_default().push(SearchCandidate {
+                entity_id: entity_id.clone(),
+                title_hit: *title_hit,
             });
         }
     }
 
-    // Deterministic ordering: rank first, then title, then entity id.
-    hits.sort_by(|a, b| {
-        a.rank
-            .cmp(&b.rank)
-            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-            .then_with(|| a.entity_id.cmp(&b.entity_id))
-    });
-    hits.truncate(SEARCH_RESULT_LIMIT);
+    let mut hits = board_hits(conn, &board_ids)?;
+    for card_kind in CardKind::ALL {
+        if let Some(group) = by_kind.get(card_kind) {
+            hits.extend(handler(*card_kind).search_rows(conn, query, group)?);
+        }
+    }
+
+    rank_and_truncate(&mut hits, SEARCH_RESULT_LIMIT);
 
     // Fetch each board's identity once, so results carry the same cover/icon/
     // acronym fallback as the rest of the UI (no duplicated identity logic).

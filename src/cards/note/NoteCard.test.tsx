@@ -68,11 +68,38 @@ describe("NoteCard", () => {
     expect(card).toHaveAttribute("data-error", "false");
   });
 
-  it("passes the authoritative document and editable flag to the editor", () => {
+  it("renders an idle note as static HTML without mounting an editor (P1.8)", () => {
+    (NoteEditor as unknown as ReturnType<typeof vi.fn>).mockClear();
     render(
       <NoteCard note={makeNote()} editing={false} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
     );
-    expect(lastEditorProps()?.editable).toBe(false);
+    expect(NoteEditor).not.toHaveBeenCalled();
+    const card = screen.getByTestId("note-card");
+    expect(card.querySelector("[data-static-document] p")?.textContent).toBe("hello");
+  });
+
+  it("mounts the editor on the persisted document when editing starts, and unmounts it after", () => {
+    const m = NoteEditor as unknown as ReturnType<typeof vi.fn>;
+    m.mockClear();
+    const { rerender } = render(
+      <NoteCard note={makeNote()} editing={false} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
+    );
+    const card = screen.getByTestId("note-card");
+    fireEvent.pointerDown(card, { clientX: 12, clientY: 34 });
+    rerender(
+      <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
+    );
+    expect(lastEditorProps()?.editable).toBe(true);
+    expect(lastEditorProps()?.document).toEqual(makeNote().documentJson);
+    // The click that started editing is forwarded so the caret lands there.
+    expect((lastEditorProps() as { initialCaretPoint?: unknown }).initialCaretPoint).toEqual({ x: 12, y: 34 });
+    expect(screen.getByTestId("mock-editor")).toBeInTheDocument();
+
+    rerender(
+      <NoteCard note={makeNote()} editing={false} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
+    );
+    expect(screen.queryByTestId("mock-editor")).toBeNull();
+    expect(card.querySelector("[data-static-document]")).not.toBeNull();
   });
 
   it("passes editable=true when the note is being edited", () => {

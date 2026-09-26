@@ -52,8 +52,26 @@
 }
 
 .trash-drawer__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   border-top: 1px solid var(--edge-subtle);
   padding: 10px 14px;
+}
+
+.trash-drawer__restore-from-backup {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink);
+  font: 500 12px/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.trash-drawer__restore-from-backup:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
 .trash-drawer__empty {

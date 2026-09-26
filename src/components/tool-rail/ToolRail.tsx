@@ -1,4 +1,5 @@
 import { ToolButton } from "./ToolButton";
+import { BoardTileIcon } from "../icons/BoardTileIcon";
 import { TEXT_COLOR_OPTIONS, type TextColorId } from "../../editor/text-color";
 import { NOTE_COLOR_OPTIONS, type NoteColorId } from "../../cards/note/note-color";
 import "./tool-rail.css";
@@ -161,6 +162,7 @@ export function ToolRail({
             label="New board"
             visibleLabel="Board"
             tone="board"
+            glyph={<BoardTileIcon className="tool-button__icon tool-button__icon--tile" />}
             onMouseDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();

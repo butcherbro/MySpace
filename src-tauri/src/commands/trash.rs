@@ -1,88 +1,99 @@
 //! Trash-related Tauri commands.
+//!
+//! Every command is `async` and touches the database only through the
+//! [`Workspace`] handle: reads on the pool, writes as a [`Mutation`] on the
+//! writer thread. The `State` is cloned before the first `await` so no borrow
+//! of Tauri state crosses an await point.
 
-use std::sync::Mutex;
-
-use rusqlite::Connection;
 use tauri::State;
 
+use crate::app::Workspace;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{EmptyTrashResult, TrashSelectionInput, TrashSummaryDto};
+use crate::domain::mutation::Mutation;
 use crate::domain::trash_service;
-use crate::AppPaths;
-
-/// The application-wide SQLite connection, guarded so commands can share it.
-pub type DbState<'a> = State<'a, Mutex<Connection>>;
+use crate::telemetry::instrument_async;
 
 /// Trashes a note card, returning its trash batch id.
 #[tauri::command]
-pub fn trash_note(db: DbState<'_>, card_id: String) -> Result<String, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::trash_note(&mut conn, &card_id)
+pub async fn trash_note(
+    ws: State<'_, Workspace>,
+    card_id: String,
+) -> Result<String, WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("trash_note", async move {
+        ws.apply(Mutation::TrashNote { card_id }).await?.into_id()
+    })
+    .await
 }
 
 /// Trashes a board and its subtree, returning the trash batch id.
 #[tauri::command]
-pub fn trash_board(db: DbState<'_>, board_id: String) -> Result<String, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::trash_board(&mut conn, &board_id)
+pub async fn trash_board(
+    ws: State<'_, Workspace>,
+    board_id: String,
+) -> Result<String, WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("trash_board", async move {
+        ws.apply(Mutation::TrashBoard { board_id }).await?.into_id()
+    })
+    .await
 }
 
 /// Restores a trash batch.
 #[tauri::command]
-pub fn restore_trash_batch(db: DbState<'_>, batch_id: String) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::restore_trash_batch(&mut conn, &batch_id)
+pub async fn restore_trash_batch(
+    ws: State<'_, Workspace>,
+    batch_id: String,
+) -> Result<(), WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("restore_trash_batch", async move {
+        ws.apply(Mutation::RestoreTrashBatch { batch_id })
+            .await?
+            .into_unit()
+    })
+    .await
 }
 
 /// Atomically trashes a mixed selection (leaf cards + boards) in one
 /// transaction, returning the single trash batch id.
 #[tauri::command]
-pub fn trash_selection(
-    db: DbState<'_>,
+pub async fn trash_selection(
+    ws: State<'_, Workspace>,
     input: TrashSelectionInput,
 ) -> Result<String, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::trash_selection(&mut conn, &input)
+    let ws = ws.inner().clone();
+    instrument_async("trash_selection", async move {
+        ws.apply(Mutation::TrashSelection(input)).await?.into_id()
+    })
+    .await
 }
 
 /// Lists recoverable Trash batches (newest first) without mutating data.
 #[tauri::command]
-pub fn list_trash(db: DbState<'_>) -> Result<TrashSummaryDto, WorkspaceError> {
-    let conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::list_trash(&conn)
+pub async fn list_trash(ws: State<'_, Workspace>) -> Result<TrashSummaryDto, WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("list_trash", async move {
+        ws.read(trash_service::list_trash).await
+    })
+    .await
 }
 
 /// Permanently empties the Trash. Requires the exact token `EMPTY`. A fresh
-/// validated backup is created first; if it cannot be created or validated the
-/// operation is refused before anything is deleted. Hard-deletes trashed
-/// relational rows and returns the affected counts (asset GC follows on startup).
+/// validated backup is created first (on the writer thread, see
+/// `Mutation::EmptyTrash`); if it cannot be created or validated the operation
+/// is refused before anything is deleted. Returns the affected counts (asset GC
+/// follows on startup).
 #[tauri::command]
-pub fn empty_trash(
-    db: DbState<'_>,
-    paths: State<'_, AppPaths>,
+pub async fn empty_trash(
+    ws: State<'_, Workspace>,
     confirmation: String,
 ) -> Result<EmptyTrashResult, WorkspaceError> {
-    let db_path = paths.data_dir.join("workspace.sqlite3");
-    let assets_dir = paths.data_dir.join("assets");
-    let backup_dir = paths.data_dir.join("backups");
-
-    // Mandatory pre-empty backup gate: refuse to mutate unless a fresh validated
-    // snapshot is on disk.
-    crate::db::backup::snapshot_before_destructive_operation(&db_path, &assets_dir, &backup_dir)
-        .map_err(WorkspaceError::Database)?;
-
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    trash_service::empty_trash(&mut conn, &confirmation)
+    let ws = ws.inner().clone();
+    instrument_async("empty_trash", async move {
+        ws.apply(Mutation::EmptyTrash { confirmation })
+            .await?
+            .into_empty_trash()
+    })
+    .await
 }

@@ -1,164 +1,184 @@
 //! Board-related Tauri commands.
+//!
+//! Every command is `async` and touches the database only through the
+//! [`Workspace`] handle: reads on the pool, writes as a [`Mutation`] on the
+//! writer thread.
 
-use std::sync::Mutex;
-
-use rusqlite::Connection;
 use tauri::State;
 
+use crate::app::Workspace;
 pub use crate::domain::board_service;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     BoardSnapshot, BoardSummary, CreateChildBoardInput, DuplicateBoardInput, DuplicateBoardReceipt,
-    MoveBoardInput, UpdateViewportInput,
+    MoveBoardInput, UpdateViewportInput, ViewportReceipt,
 };
+use crate::domain::mutation::Mutation;
+use crate::repositories::boards as boards_repository;
+use crate::repositories::boards::BoardChangeSeq;
 use crate::repositories::workspace_repository;
-
-/// The application-wide SQLite connection, guarded so commands can share it.
-pub type DbState<'a> = State<'a, Mutex<Connection>>;
+use crate::telemetry::instrument_async;
 
 /// Loads the full snapshot of a board by id.
 #[tauri::command]
-pub fn load_board_snapshot(
-    db: DbState<'_>,
+pub async fn load_board_snapshot(
+    ws: State<'_, Workspace>,
     board_id: String,
 ) -> Result<BoardSnapshot, WorkspaceError> {
-    let conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::load_board_snapshot(&conn, &board_id)
+    let ws = ws.inner().clone();
+    instrument_async("load_board_snapshot", async move {
+        ws.read(move |conn| workspace_repository::load_board_snapshot(conn, &board_id))
+            .await
+    })
+    .await
 }
 
 /// Returns the Home (root) board summary.
 #[tauri::command]
-pub fn get_home_board(db: DbState<'_>) -> Result<BoardSummary, WorkspaceError> {
-    let conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    let root_id: String =
-        conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
-            r.get(0)
-        })?;
-
-    conn.query_row(
-        "SELECT b.id, b.title, b.parent_board_id, b.revision, b.color_token, b.symbol,
-                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
-         FROM boards b
-         LEFT JOIN assets ca ON ca.id = b.cover_asset_id
-         WHERE b.id = ?1",
-        [root_id],
-        |row| {
-            let cover_asset = if row.get::<_, Option<String>>(6)?.is_some() {
-                Some(crate::domain::models::AssetDto {
-                    id: row.get(6)?,
-                    file_name: row.get(7)?,
-                    mime_type: row.get(8)?,
-                    width: row.get(9)?,
-                    height: row.get(10)?,
-                    size_bytes: row.get(11)?,
-                    file_path: row.get(12)?,
-                })
-            } else {
-                None
-            };
-            Ok(BoardSummary {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                parent_board_id: row.get(2)?,
-                revision: row.get(3)?,
-                color_token: row.get(4)?,
-                symbol: row.get(5)?,
-                cover_asset,
-            })
-        },
-    )
-    .map_err(WorkspaceError::from)
+pub async fn get_home_board(ws: State<'_, Workspace>) -> Result<BoardSummary, WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("get_home_board", async move {
+        ws.read(workspace_repository::load_home_board).await
+    })
+    .await
 }
 
 /// Persists a board's viewport.
 #[tauri::command]
-pub fn save_viewport(db: DbState<'_>, input: UpdateViewportInput) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    workspace_repository::update_viewport(&mut conn, &input)
+pub async fn save_viewport(
+    ws: State<'_, Workspace>,
+    input: UpdateViewportInput,
+) -> Result<ViewportReceipt, WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("save_viewport", async move {
+        ws.apply(Mutation::SaveViewport(input))
+            .await?
+            .into_viewport_receipt()
+    })
+    .await
 }
 
-/// Returns SQLite's `PRAGMA data_version`, which changes whenever another
-/// connection commits. The frontend polls it to detect external (agent) writes.
+/// Returns what the frontend polls to detect external writes to the open
+/// board (P1.6): `PRAGMA data_version` and the board's `change_seq`, both read
+/// on the *writer* connection in one job.
+///
+/// `data_version` changes whenever *another* connection commits (the MCP
+/// server, a second app instance), never on this process's own writes. It must
+/// run on the writer connection on purpose: a pooled reader would report every
+/// own commit as external. `change_seq` is bumped by triggers (migration 0023)
+/// for every write that touches what the board renders, whoever made it. The
+/// frontend reloads the open board only when BOTH moved since its last poll:
+/// someone else wrote, and what they wrote touched this board. Own writes
+/// (same `data_version`) never trigger a reload even though they bump
+/// `change_seq`. Reading both in one closure keeps them a consistent pair.
+///
+/// `NotFound` if the board does not exist.
 #[tauri::command]
-pub fn get_data_version(db: DbState<'_>) -> Result<i64, WorkspaceError> {
-    let conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    conn.query_row("PRAGMA data_version", [], |r| r.get(0))
-        .map_err(WorkspaceError::from)
+pub async fn get_board_change_seq(
+    ws: State<'_, Workspace>,
+    board_id: String,
+) -> Result<BoardChangeSeq, WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("get_board_change_seq", async move {
+        ws.inspect_writer(move |conn| boards_repository::get_board_change_seq(conn, &board_id))
+            .await
+    })
+    .await
 }
 
 /// Creates a child board and its primary portal card atomically.
 #[tauri::command]
-pub fn create_child_board(
-    db: DbState<'_>,
+pub async fn create_child_board(
+    ws: State<'_, Workspace>,
     input: CreateChildBoardInput,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    board_service::create_child_board(&mut conn, &input)
+    let ws = ws.inner().clone();
+    instrument_async("create_child_board", async move {
+        ws.apply(Mutation::CreateChildBoard(input))
+            .await?
+            .into_unit()
+    })
+    .await
 }
 
 /// Renames a board (portal title and breadcrumbs derive from this record).
 #[tauri::command]
-pub fn rename_board(
-    db: DbState<'_>,
+pub async fn rename_board(
+    ws: State<'_, Workspace>,
     board_id: String,
     title: String,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    board_service::rename_board(&mut conn, &board_id, &title)
+    let ws = ws.inner().clone();
+    instrument_async("rename_board", async move {
+        ws.apply(Mutation::RenameBoard { board_id, title })
+            .await?
+            .into_unit()
+    })
+    .await
 }
 
 /// Atomically reparents a Board and its portal card to a new parent board.
 #[tauri::command]
-pub fn move_board(db: DbState<'_>, input: MoveBoardInput) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    board_service::move_board(&mut conn, &input)
+pub async fn move_board(
+    ws: State<'_, Workspace>,
+    input: MoveBoardInput,
+) -> Result<(), WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("move_board", async move {
+        ws.apply(Mutation::MoveBoard(input)).await?.into_unit()
+    })
+    .await
 }
 
 /// Sets a Board's cover image from an already-imported asset id.
 #[tauri::command]
-pub fn set_board_cover(
-    db: DbState<'_>,
+pub async fn set_board_cover(
+    ws: State<'_, Workspace>,
     board_id: String,
     asset_id: String,
 ) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    board_service::set_board_cover(&mut conn, &board_id, Some(&asset_id))
+    let ws = ws.inner().clone();
+    instrument_async("set_board_cover", async move {
+        ws.apply(Mutation::SetBoardCover {
+            board_id,
+            asset_id: Some(asset_id),
+        })
+        .await?
+        .into_unit()
+    })
+    .await
 }
 
 /// Removes a Board's cover image, returning to the color/symbol tile.
 #[tauri::command]
-pub fn remove_board_cover(db: DbState<'_>, board_id: String) -> Result<(), WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    board_service::set_board_cover(&mut conn, &board_id, None)
+pub async fn remove_board_cover(
+    ws: State<'_, Workspace>,
+    board_id: String,
+) -> Result<(), WorkspaceError> {
+    let ws = ws.inner().clone();
+    instrument_async("remove_board_cover", async move {
+        ws.apply(Mutation::SetBoardCover {
+            board_id,
+            asset_id: None,
+        })
+        .await?
+        .into_unit()
+    })
+    .await
 }
 
 /// Duplicates a Board Portal's whole subtree, recursively, in one atomic
 /// transaction (todo.md №16).
 #[tauri::command]
-pub fn duplicate_board(
-    db: DbState<'_>,
+pub async fn duplicate_board(
+    ws: State<'_, Workspace>,
     input: DuplicateBoardInput,
 ) -> Result<DuplicateBoardReceipt, WorkspaceError> {
-    let mut conn = db
-        .lock()
-        .map_err(|_| WorkspaceError::Database("db lock poisoned".into()))?;
-    crate::domain::duplicate_board::duplicate_board(&mut conn, &input)
+    let ws = ws.inner().clone();
+    instrument_async("duplicate_board", async move {
+        ws.apply(Mutation::DuplicateBoard(input))
+            .await?
+            .into_duplicate_board_receipt()
+    })
+    .await
 }

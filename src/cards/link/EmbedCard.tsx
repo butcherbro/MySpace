@@ -1,15 +1,19 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { EmbedCardDto } from "../../services/workspace-gateway";
 import { HighlightedText } from "../../components/HighlightedText";
 import { NoteEditor } from "../../editor/NoteEditor";
+import { StaticDocument } from "../../editor/StaticDocument";
+import { DamagedDocument } from "../../editor/DamagedDocument";
+import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { openExternalUrl } from "../../services/url-opener";
 import "./link-card.css";
+import { assetUrl } from "../../services/asset-url";
 
 interface EmbedCardProps {
   embed: EmbedCardDto;
   /** Persist the description body as an authoritative document. Rejects on failure. */
-  onUpdate: (id: string, document: unknown) => Promise<void>;
+  onUpdate: DocumentSave;
   /** Persist a manual resize. */
   onResize: (id: string, width: number, height: number) => void;
   /** Request a context menu (right-click). */
@@ -26,7 +30,7 @@ interface EmbedCardProps {
  * source line, and an editable rich-text description body. The preview image
  * and favicon render when present (Slice B populates them).
  */
-export function EmbedCard({
+export const EmbedCard = memo(function EmbedCard({
   embed,
   onUpdate,
   onResize,
@@ -40,12 +44,21 @@ export function EmbedCard({
   const previewAsset = embed.previewAsset;
   const hasPreview = previewAsset !== null;
 
-  const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
+  // P1.7: a corrupt description shows its recovered text and never
+  // autosaves until the user starts a repair (see editor/corrupt-document.ts).
+  const repair = useCorruptRepair({ corrupt: embed.corrupt === true, onUpdate });
+  const { draft, saving, error, handleChange, handleBlur, replaceDraft } = useDocumentDraft({
     id: embed.id,
     persistedDocument: embed.descriptionJson,
-    onUpdate,
+    onUpdate: repair.onUpdate,
     onSaved: () => setEditing(false),
+    corrupt: repair.damaged,
   });
+  const startRepair = () => {
+    repair.beginRepair();
+    replaceDraft(recoveredDocument(embed.descriptionPlainText));
+    setEditing(true);
+  };
 
   const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
@@ -134,7 +147,7 @@ export function EmbedCard({
       {previewAsset && embed.metadataStatus !== "pending" && (
         <img
           className="link-card__preview"
-          src={`myspace-asset://localhost/${previewAsset.filePath}`}
+          src={assetUrl(previewAsset.filePath)}
           alt={embed.title}
           onLoad={fitEnrichedContent}
         />
@@ -148,7 +161,7 @@ export function EmbedCard({
           {embed.faviconAsset && (
             <img
               className="link-card__favicon"
-              src={`myspace-asset://localhost/${embed.faviconAsset.filePath}`}
+              src={assetUrl(embed.faviconAsset.filePath)}
               alt=""
             />
           )}
@@ -198,10 +211,17 @@ export function EmbedCard({
           data-testid="link-description"
           onDoubleClick={(e) => {
             e.stopPropagation();
-            setEditing(true);
+            if (!repair.damaged) setEditing(true);
           }}
         >
-          {editing ? (
+          {repair.damaged ? (
+            <DamagedDocument
+              label="description"
+              plainText={embed.descriptionPlainText}
+              onRepair={startRepair}
+              highlightQuery={highlightQuery}
+            />
+          ) : editing ? (
             <NoteEditor
               document={draft}
               editable
@@ -210,15 +230,11 @@ export function EmbedCard({
               highlightQuery={highlightQuery}
             />
           ) : embed.descriptionPlainText ? (
-            // Read-only ветка раньше показывала descriptionPlainText (без marks) —
-            // тот же Tiptap-рендерер, что в режиме редактирования, только
-            // editable=false, чтобы bold/italic/strike/списки не терялись после blur.
-            <NoteEditor
-              document={embed.descriptionJson}
-              editable={false}
-              onChange={() => {}}
-              highlightQuery={highlightQuery}
-            />
+            // Read-only ветка раньше показывала plain text (без marks), потом —
+            // read-only Tiptap. P1.8: статический HTML из того же документа и тех же
+            // расширений (marks/списки сохраняются), без экземпляра редактора на
+            // каждую неактивную карточку; редактор монтируется только в режиме правки.
+            <StaticDocument document={embed.descriptionJson} highlightQuery={highlightQuery} />
           ) : (
             <div className="link-card__description-display">Add notes…</div>
           )}
@@ -235,4 +251,4 @@ export function EmbedCard({
       />
     </div>
   );
-}
+});

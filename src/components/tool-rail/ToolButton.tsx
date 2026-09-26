@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { Icon, type IconName } from "../icons/Icon";
 
 interface ToolButtonProps {
@@ -11,6 +12,8 @@ interface ToolButtonProps {
   onMouseDown?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   /** Distinct accent tone (e.g. "board" — reads as a board even amid other tools). */
   tone?: "board";
+  /** Custom glyph drawn instead of the monochrome `icon` (e.g. the colored Board tile). */
+  glyph?: ReactElement;
 }
 
 export function ToolButton({
@@ -21,6 +24,7 @@ export function ToolButton({
   active = false,
   onMouseDown,
   tone,
+  glyph,
 }: ToolButtonProps) {
   return (
     <button
@@ -34,7 +38,7 @@ export function ToolButton({
       aria-label={label}
       aria-pressed={active ? "true" : undefined}
     >
-      <Icon name={icon} className="tool-button__icon" />
+      {glyph ?? <Icon name={icon} className="tool-button__icon" />}
       <span className="tool-button__label">{visibleLabel}</span>
     </button>
   );

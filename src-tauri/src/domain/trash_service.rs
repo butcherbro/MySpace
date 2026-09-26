@@ -5,12 +5,15 @@
 //! a recursive CTE and trashed atomically; restore reverses a whole batch with
 //! original placement preserved.
 
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Connection};
 
+use crate::domain::card_kind::{registry, sql_in_list, CardKind};
 use crate::domain::errors::WorkspaceError;
+use crate::domain::kinds::{asset_at, asset_columns};
 use crate::domain::models::{
     AssetDto, EmptyTrashResult, TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto,
 };
+use crate::repositories::immediate_tx;
 
 use super::super::db;
 
@@ -20,8 +23,11 @@ pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, Worksp
     let now = db::migrations::now_millis();
     let batch_id = uuid::Uuid::now_v7().to_string();
     let changed = conn.execute(
-        "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-         WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut') AND deleted_at IS NULL",
+        &format!(
+            "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
+             WHERE id = ?3 AND kind IN {} AND deleted_at IS NULL",
+            sql_in_list(CardKind::LEAF)
+        ),
         params![now, batch_id, card_id],
     )?;
     if changed == 0 {
@@ -34,7 +40,14 @@ pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, Worksp
 /// card, in one transaction. Returns the trash batch id. The root cannot be
 /// trashed.
 pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, WorkspaceError> {
-    let is_root: i64 = conn.query_row(
+    let now = db::migrations::now_millis();
+    let batch_id = uuid::Uuid::now_v7().to_string();
+
+    // BEGIN IMMEDIATE before the root guard so the check and the trash are
+    // atomic against another writer process.
+    let tx = immediate_tx(conn)?;
+
+    let is_root: i64 = tx.query_row(
         "SELECT COUNT(*) FROM workspaces WHERE root_board_id = ?1",
         [board_id],
         |r| r.get(0),
@@ -42,11 +55,6 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
     if is_root > 0 {
         return Err(WorkspaceError::RootBoardProtected);
     }
-
-    let now = db::migrations::now_millis();
-    let batch_id = uuid::Uuid::now_v7().to_string();
-
-    let tx = conn.transaction()?;
 
     // Collect the board subtree (target + descendants) via recursive CTE.
     let collected: i64 = tx.query_row(
@@ -58,7 +66,12 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
         return Err(WorkspaceError::NotFound(board_id.to_string()));
     }
 
-    // Mark all boards in the subtree.
+    // Mark all boards in the subtree. A previously-trashed sub-board (trashed in
+    // an earlier batch) is still walked by the CTE so its own still-active
+    // descendants and cards are reachable, but the UPDATE must not touch a board
+    // that is already trashed — otherwise its `trash_batch_id` would be
+    // overwritten with this new batch, silently emptying the earlier batch and
+    // making restore of either batch resurrect/re-trash the wrong rows.
     tx.execute(
         "WITH RECURSIVE subtree(id) AS (
             SELECT id FROM boards WHERE id = ?1
@@ -67,11 +80,12 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
          )
          UPDATE boards
          SET deleted_at = ?2, trash_batch_id = ?3
-         WHERE id IN (SELECT id FROM subtree)",
+         WHERE id IN (SELECT id FROM subtree) AND deleted_at IS NULL",
         params![board_id, now, batch_id],
     )?;
 
-    // Mark all cards belonging to those boards.
+    // Mark all cards belonging to those boards — but only cards not already
+    // trashed under an earlier batch (see comment above).
     tx.execute(
         "UPDATE cards
          SET deleted_at = ?2, trash_batch_id = ?3
@@ -82,7 +96,8 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
                 SELECT b.id FROM boards b JOIN subtree s ON b.parent_board_id = s.id
             )
             SELECT id FROM subtree
-         )",
+         )
+         AND deleted_at IS NULL",
         params![board_id, now, batch_id],
     )?;
 
@@ -123,11 +138,14 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
 /// inside an existing transaction. Assumes the board exists and is not trashed;
 /// callers are responsible for those checks.
 fn trash_board_in_tx(
-    tx: &Transaction,
+    tx: &Connection,
     board_id: &str,
     batch_id: &str,
     now: i64,
 ) -> Result<(), WorkspaceError> {
+    // See the identical comment in `trash_board`: the CTE may still traverse an
+    // already-trashed sub-board, but the UPDATE must skip rows already trashed
+    // so an earlier batch keeps its own `trash_batch_id`.
     tx.execute(
         "WITH RECURSIVE subtree(id) AS (
             SELECT id FROM boards WHERE id = ?1
@@ -136,7 +154,7 @@ fn trash_board_in_tx(
          )
          UPDATE boards
          SET deleted_at = ?2, trash_batch_id = ?3
-         WHERE id IN (SELECT id FROM subtree)",
+         WHERE id IN (SELECT id FROM subtree) AND deleted_at IS NULL",
         params![board_id, now, batch_id],
     )?;
 
@@ -150,7 +168,8 @@ fn trash_board_in_tx(
                 SELECT b.id FROM boards b JOIN subtree s ON b.parent_board_id = s.id
             )
             SELECT id FROM subtree
-         )",
+         )
+         AND deleted_at IS NULL",
         params![board_id, now, batch_id],
     )?;
 
@@ -194,7 +213,7 @@ pub fn trash_selection(
     let now = db::migrations::now_millis();
     let batch_id = uuid::Uuid::now_v7().to_string();
 
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     for item in &input.items {
         match item.kind.as_str() {
@@ -220,8 +239,11 @@ pub fn trash_selection(
             _ => {
                 // leaf card: note / image / embed / filesystem alias
                 let changed = tx.execute(
-                    "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
-                     WHERE id = ?3 AND kind IN ('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut') AND deleted_at IS NULL",
+                    &format!(
+                        "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
+                         WHERE id = ?3 AND kind IN {} AND deleted_at IS NULL",
+                        sql_in_list(CardKind::LEAF)
+                    ),
                     params![now, batch_id, item.id],
                 )?;
                 if changed == 0 {
@@ -238,7 +260,42 @@ pub fn trash_selection(
 /// Restores a trash batch: clears `deleted_at`/`trash_batch_id` on all boards,
 /// cards in the batch, restoring original placement.
 pub fn restore_trash_batch(conn: &mut Connection, batch_id: &str) -> Result<(), WorkspaceError> {
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
+
+    // Refuse when restoring this batch would surface a card or board whose
+    // parent is still trashed in a *different* batch: the card would become an
+    // invisible orphan on a trashed board, or the board would be unreachable
+    // from any active ancestor. A parent trashed in this very same batch is
+    // fine — it is restored together, right here.
+    let orphaned_card: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM cards c
+         JOIN boards p ON p.id = c.board_id
+         WHERE c.trash_batch_id = ?1
+           AND p.deleted_at IS NOT NULL
+           AND (p.trash_batch_id IS NULL OR p.trash_batch_id != ?1)",
+        [batch_id],
+        |r| r.get(0),
+    )?;
+    if orphaned_card > 0 {
+        return Err(WorkspaceError::ConstraintViolation(
+            "restore the parent board first".to_string(),
+        ));
+    }
+
+    let orphaned_board: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM boards b
+         JOIN boards p ON p.id = b.parent_board_id
+         WHERE b.trash_batch_id = ?1
+           AND p.deleted_at IS NOT NULL
+           AND (p.trash_batch_id IS NULL OR p.trash_batch_id != ?1)",
+        [batch_id],
+        |r| r.get(0),
+    )?;
+    if orphaned_board > 0 {
+        return Err(WorkspaceError::ConstraintViolation(
+            "restore the parent board first".to_string(),
+        ));
+    }
 
     tx.execute(
         "UPDATE boards SET deleted_at = NULL, trash_batch_id = NULL WHERE trash_batch_id = ?1",
@@ -270,9 +327,14 @@ pub fn empty_trash(
         ));
     }
 
+    // BEGIN IMMEDIATE before the guard and the counts so the reported counts
+    // match exactly what is deleted, even with another writer process.
+    let tx = immediate_tx(conn)?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
+
     // Never repair a broken root invariant inside a destructive command: if the
     // root board is somehow trashed, refuse to empty.
-    let root_trashed: i64 = conn.query_row(
+    let root_trashed: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards b
          JOIN workspaces w ON w.root_board_id = b.id
          WHERE b.deleted_at IS NOT NULL",
@@ -283,49 +345,27 @@ pub fn empty_trash(
         return Err(WorkspaceError::RootBoardProtected);
     }
 
-    let board_count: i64 = conn.query_row(
+    let board_count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards WHERE deleted_at IS NOT NULL",
         [],
         |r| r.get(0),
     )?;
-    let card_count: i64 = conn.query_row(
+    let card_count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM cards WHERE deleted_at IS NOT NULL",
         [],
         |r| r.get(0),
     )?;
 
-    let tx = conn.transaction()?;
-    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
-
-    // Detail rows for trashed cards, leaves -> roots.
-    tx.execute(
-        "DELETE FROM note_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM image_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM embed_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM file_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM filesystem_aliases WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM board_shortcut_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
-    tx.execute(
-        "DELETE FROM board_portal_cards WHERE card_id IN (SELECT id FROM cards WHERE deleted_at IS NOT NULL)",
-        [],
-    )?;
+    // Detail rows for trashed cards: every registered kind deletes its own
+    // (foreign keys are deferred, so the order does not matter).
+    let trashed_card_ids: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id FROM cards WHERE deleted_at IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for handler in registry() {
+        handler.delete_details(&tx, &trashed_card_ids)?;
+    }
     // Board-referencing rows for trashed boards.
     tx.execute(
         "DELETE FROM board_view_states WHERE board_id IN (SELECT id FROM boards WHERE deleted_at IS NOT NULL)",
@@ -376,29 +416,25 @@ struct TrashedCard {
 
 /// Projects an optional asset from the joined columns, keyed off the owning
 /// card's asset id. No asset when that id is NULL — a Link Card enriched before
-/// any favicon was fetched, for instance.
-#[allow(clippy::too_many_arguments)]
+/// any favicon was fetched, for instance. The asset's other columns are
+/// aliased `{prefix}_file_name`, `{prefix}_mime_type`, … `{prefix}_sha256`.
 fn asset_from_row(
     row: &rusqlite::Row<'_>,
     id_column: &str,
-    file_name_column: &str,
-    mime_type_column: &str,
-    width_column: &str,
-    height_column: &str,
-    size_bytes_column: &str,
-    file_path_column: &str,
+    prefix: &str,
 ) -> rusqlite::Result<Option<AssetDto>> {
     let Some(id) = row.get::<_, Option<String>>(id_column)? else {
         return Ok(None);
     };
     Ok(Some(AssetDto {
         id,
-        file_name: row.get(file_name_column)?,
-        mime_type: row.get(mime_type_column)?,
-        width: row.get(width_column)?,
-        height: row.get(height_column)?,
-        size_bytes: row.get(size_bytes_column)?,
-        file_path: row.get(file_path_column)?,
+        file_name: row.get(format!("{prefix}_file_name").as_str())?,
+        mime_type: row.get(format!("{prefix}_mime_type").as_str())?,
+        width: row.get(format!("{prefix}_width").as_str())?,
+        height: row.get(format!("{prefix}_height").as_str())?,
+        size_bytes: row.get(format!("{prefix}_size_bytes").as_str())?,
+        file_path: row.get(format!("{prefix}_file_path").as_str())?,
+        sha256: row.get(format!("{prefix}_sha256").as_str())?,
     }))
 }
 
@@ -413,28 +449,16 @@ fn bound_excerpt(text: &str) -> String {
 pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> {
     let mut boards = Vec::<TrashedBoard>::new();
     {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT b.id, b.parent_board_id, b.title, b.trash_batch_id, b.deleted_at,
-                    b.color_token, b.symbol,
-                    ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                    b.color_token, b.symbol, {cover}
              FROM boards b
              LEFT JOIN assets ca ON ca.id = b.cover_asset_id
              WHERE b.deleted_at IS NOT NULL",
-        )?;
+            cover = asset_columns("ca")
+        ))?;
         let rows = stmt.query_map([], |row| {
-            let cover_asset = if row.get::<_, Option<String>>(7)?.is_some() {
-                Some(AssetDto {
-                    id: row.get(7)?,
-                    file_name: row.get(8)?,
-                    mime_type: row.get(9)?,
-                    width: row.get(10)?,
-                    height: row.get(11)?,
-                    size_bytes: row.get(12)?,
-                    file_path: row.get(13)?,
-                })
-            } else {
-                None
-            };
+            let cover_asset = asset_at(row, 7)?;
             Ok(TrashedBoard {
                 id: row.get(0)?,
                 parent_board_id: row.get(1)?,
@@ -467,14 +491,17 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     ia.file_name AS image_file_name, ia.mime_type AS image_mime_type,
                     ia.width AS image_width, ia.height AS image_height,
                     ia.size_bytes AS image_size_bytes, ia.file_path AS image_file_path,
+                    ia.sha256 AS image_sha256,
                     e.title AS embed_title, e.source_url AS embed_source_url,
                     e.asset_id AS embed_asset_id, e.favicon_asset_id AS embed_favicon_asset_id,
                     pa.file_name AS preview_file_name, pa.mime_type AS preview_mime_type,
                     pa.width AS preview_width, pa.height AS preview_height,
                     pa.size_bytes AS preview_size_bytes, pa.file_path AS preview_file_path,
+                    pa.sha256 AS preview_sha256,
                     fa.file_name AS favicon_file_name, fa.mime_type AS favicon_mime_type,
                     fa.width AS favicon_width, fa.height AS favicon_height,
                     fa.size_bytes AS favicon_size_bytes, fa.file_path AS favicon_file_path,
+                    fa.sha256 AS favicon_sha256,
                     fsa.display_name AS alias_display_name,
                     filea.file_name AS file_asset_file_name,
                     fpa.file_name AS file_preview_file_name,
@@ -482,6 +509,7 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     fpa.width AS file_preview_width, fpa.height AS file_preview_height,
                     fpa.size_bytes AS file_preview_size_bytes,
                     fpa.file_path AS file_preview_file_path,
+                    fpa.sha256 AS file_preview_sha256,
                     fcard.preview_asset_id AS file_preview_asset_id,
                     shortcut_board.title AS shortcut_target_title
              FROM cards c
@@ -537,52 +565,16 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
             };
 
             let thumbnail_asset = match kind.as_str() {
-                "image" => asset_from_row(
-                    row,
-                    "image_asset_id",
-                    "image_file_name",
-                    "image_mime_type",
-                    "image_width",
-                    "image_height",
-                    "image_size_bytes",
-                    "image_file_path",
-                )?,
+                "image" => asset_from_row(row, "image_asset_id", "image")?,
                 "embed" => {
                     // Prefer the preview image, then the favicon.
-                    let preview = asset_from_row(
-                        row,
-                        "embed_asset_id",
-                        "preview_file_name",
-                        "preview_mime_type",
-                        "preview_width",
-                        "preview_height",
-                        "preview_size_bytes",
-                        "preview_file_path",
-                    )?;
-                    let favicon = asset_from_row(
-                        row,
-                        "embed_favicon_asset_id",
-                        "favicon_file_name",
-                        "favicon_mime_type",
-                        "favicon_width",
-                        "favicon_height",
-                        "favicon_size_bytes",
-                        "favicon_file_path",
-                    )?;
+                    let preview = asset_from_row(row, "embed_asset_id", "preview")?;
+                    let favicon = asset_from_row(row, "embed_favicon_asset_id", "favicon")?;
                     preview.or(favicon)
                 }
                 // A File Card's own asset is the document, not an image: only the
                 // generated thumbnail may be shown as one.
-                "file" => asset_from_row(
-                    row,
-                    "file_preview_asset_id",
-                    "file_preview_file_name",
-                    "file_preview_mime_type",
-                    "file_preview_width",
-                    "file_preview_height",
-                    "file_preview_size_bytes",
-                    "file_preview_file_path",
-                )?,
+                "file" => asset_from_row(row, "file_preview_asset_id", "file_preview")?,
                 _ => None,
             };
 
@@ -687,12 +679,12 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
         });
     }
 
-    batches.truncate(MAX_BATCHES);
     batches.sort_by(|a, b| {
         b.deleted_at
             .cmp(&a.deleted_at)
             .then_with(|| b.batch_id.cmp(&a.batch_id))
     });
+    batches.truncate(MAX_BATCHES);
 
     let batch_count = batches.len() as i64;
     let board_count = batches.iter().map(|b| b.board_count).sum();

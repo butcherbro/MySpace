@@ -15,6 +15,11 @@ import { EmbedCard } from "./link/EmbedCard";
 import { FolderShortcutCard } from "./folder/FolderShortcutCard";
 import { FileCard } from "./file/FileCard";
 import { BoardShortcutCard } from "./board/BoardShortcutCard";
+import type { DocumentSave } from "../editor/corrupt-document";
+// The single card-kind list and per-kind capability registry live in
+// ./card-kinds.ts (kept out of this JSX-heavy file so importing the plain
+// data doesn't pull in every card component, and so react-refresh's
+// components-only-exports rule stays happy here).
 
 export interface CardRenderContext {
   /** Whether the card (if a note) is currently being edited. */
@@ -22,13 +27,13 @@ export interface CardRenderContext {
   /** Exit note editing. */
   onDeactivate: () => void;
   /** Persist note content as an authoritative document. */
-  onUpdateNote: (id: string, document: unknown) => Promise<void>;
+  onUpdateNote: DocumentSave;
   /** Finalize note editing and optionally convert the note into a Link Card. */
-  onFinalizeNote: (id: string, document: unknown) => Promise<void>;
+  onFinalizeNote: DocumentSave;
   /** Persist an image card's caption. */
-  onUpdateImageCaption: (id: string, document: unknown) => Promise<void>;
+  onUpdateImageCaption: DocumentSave;
   /** Persist an embed (Link) card's description body. */
-  onUpdateEmbedDescription: (id: string, document: unknown) => Promise<void>;
+  onUpdateEmbedDescription: DocumentSave;
   /** Retry metadata enrichment for a failed Link Card. */
   onRetryEmbedMetadata: (id: string) => void;
   /** Open a board portal. */
@@ -49,6 +54,8 @@ export interface CardRenderContext {
   onLoadFolderPreview: (id: string) => Promise<import("../services/workspace-gateway").FolderPreviewDto>;
   /** Reveal the resolved bookmark in Finder without exposing its path to JS. */
   onOpenFolderInFinder: (id: string) => void;
+  /** Pick a folder on this computer for a shortcut made on another device (ADR-0012). */
+  onPointFolderShortcutHere: (id: string) => void;
   /** Open a File Card's stored copy in the default external app. */
   onOpenFileCard: (id: string) => void;
   /** Reveal a File Card's original source in Finder (selected). */
@@ -119,7 +126,7 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
   }
 
   if (card.kind === "filesystem_alias") {
-    return <FolderShortcutCard alias={card} loadPreview={ctx.onLoadFolderPreview} onOpenFinder={ctx.onOpenFolderInFinder} onResize={ctx.onResizeFilesystemAlias} onContextMenu={ctx.onContextMenu} />;
+    return <FolderShortcutCard alias={card} loadPreview={ctx.onLoadFolderPreview} onOpenFinder={ctx.onOpenFolderInFinder} onResize={ctx.onResizeFilesystemAlias} onContextMenu={ctx.onContextMenu} onPointToLocalFolder={ctx.onPointFolderShortcutHere} />;
   }
 
   if (card.kind === "board_shortcut") {

@@ -203,7 +203,6 @@ describe("PasteCardsCommand", () => {
           frame: noteFrame,
           zIndex: 0,
           documentJson: { type: "doc" },
-          plainText: "hello",
         },
       },
       { fn: "setNoteColor", args: { id: "note-copy-1", colorToken: "yellow" } },
@@ -216,7 +215,6 @@ describe("PasteCardsCommand", () => {
           zIndex: 1,
           assetId: "asset-shared-1",
           captionJson: { type: "doc" },
-          captionPlainText: "",
         },
       },
     ]);

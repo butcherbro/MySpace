@@ -6,9 +6,9 @@
   box-shadow: var(--shadow-paper);
   padding: 12px 14px;
   color: var(--ink);
-  font-family: var(--font-content);
-  font-size: 14px;
-  line-height: 1.48;
+  font-family: var(--font-text);
+  font-size: var(--text-note-size);
+  line-height: var(--text-note-leading);
   cursor: text;
   min-width: 120px;
   /* Ширина всегда пользовательская — по горизонтали клипуем. По вертикали

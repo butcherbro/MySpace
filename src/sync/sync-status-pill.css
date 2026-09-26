@@ -1,0 +1,52 @@
+/* Top-bar sync status (ADR-0011 S3). Self-contained: it does not restyle the
+   top bar, it only sits in it. */
+.sync-status-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-secondary);
+  font: 500 11px/1 var(--font-ui);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sync-status-pill:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+
+.sync-status-pill .sync-status-pill__icon {
+  width: 15px;
+  height: 15px;
+}
+
+.sync-status-pill[data-state="idle"] .sync-status-pill__icon {
+  color: var(--success, #2f9e5b);
+}
+
+.sync-status-pill[data-state="error"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.sync-status-pill[data-state="syncing"] .sync-status-pill__icon {
+  animation: sync-status-pill-spin 1s linear infinite;
+}
+
+@keyframes sync-status-pill-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sync-status-pill[data-state="syncing"] .sync-status-pill__icon {
+    animation: none;
+  }
+}

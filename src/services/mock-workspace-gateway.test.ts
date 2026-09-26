@@ -1,16 +1,70 @@
 import { describe, expect, it } from "vitest";
 import { MockWorkspaceGateway } from "./mock-workspace-gateway";
+import type { CardDto } from "./workspace-gateway";
+import { plainTextToDocument } from "../editor/document-codec";
 
 const noteInput = (id: string, plainText: string) => ({
   id,
   boardId: "home",
   frame: { x: 0, y: 0, width: 200, height: 80 },
   zIndex: 0,
-  documentJson: { type: "doc" },
-  plainText,
+  documentJson: plainTextToDocument(plainText),
 });
 
 describe("MockWorkspaceGateway", () => {
+  it("derives plainText from the document JSON and returns it on the receipts", async () => {
+    const gateway = new MockWorkspaceGateway();
+
+    const created = await gateway.createNote(noteInput("n1", "hello world"));
+    expect(created).toEqual({ id: "n1", revision: 1 });
+
+    const updated = await gateway.updateNote({
+      id: "n1",
+      expectedRevision: 1,
+      documentJson: plainTextToDocument("updated text"),
+    });
+    expect(updated).toEqual({ id: "n1", revision: 2, plainText: "updated text" });
+
+    const card = await gateway.readCard("n1");
+    expect(card.kind === "note" && card.plainText).toBe("updated text");
+  });
+
+  it("returns a card receipt from moveCard/placeUnsortedCard and a cards receipt from moveCards", async () => {
+    const gateway = new MockWorkspaceGateway();
+    await gateway.createNote(noteInput("n1", "a"));
+    await gateway.createNote(noteInput("n2", "b"));
+
+    const moved = await gateway.moveCard({
+      id: "n1",
+      expectedRevision: 1,
+      frame: { x: 10, y: 10, width: 200, height: 80 },
+    });
+    expect(moved).toEqual({ id: "n1", revision: 2 });
+
+    const batch = await gateway.moveCards({
+      cards: [
+        { id: "n1", expectedRevision: 2, frame: { x: 20, y: 20, width: 200, height: 80 } },
+        { id: "n2", expectedRevision: 1, frame: { x: 30, y: 30, width: 200, height: 80 } },
+      ],
+    });
+    expect(batch.cards).toEqual([
+      { id: "n1", revision: 3 },
+      { id: "n2", revision: 2 },
+    ]);
+  });
+
+  it("returns a viewport receipt from saveViewport", async () => {
+    const gateway = new MockWorkspaceGateway();
+    const receipt = await gateway.saveViewport({
+      boardId: "home",
+      expectedRevision: 1,
+      x: 0,
+      y: 0,
+      zoom: 2,
+    });
+    expect(receipt).toEqual({ revision: 2 });
+  });
+
   it("loads a created child board snapshot", async () => {
     const gateway = new MockWorkspaceGateway();
 
@@ -115,8 +169,7 @@ describe("MockWorkspaceGateway", () => {
       sourceUrl: "https://example.com",
       displayUrl: "example.com",
       title: "Example Domain",
-      descriptionJson: { type: "doc" },
-      descriptionPlainText: "A useful example",
+      descriptionJson: plainTextToDocument("A useful example"),
     });
 
     const boards = await gateway.searchWorkspace("RESEARCH");
@@ -140,12 +193,39 @@ describe("MockWorkspaceGateway", () => {
       frame: { x: 0, y: 200, width: 320, height: 240 },
       zIndex: 0,
       assetId: "asset-1",
-      captionJson: { type: "doc" },
-      captionPlainText: "Screenshot of dashboard",
+      captionJson: plainTextToDocument("Screenshot of dashboard"),
     });
     const images = await gateway.searchWorkspace("dashboard");
     expect(images).toHaveLength(1);
     expect(images[0].kind).toBe("image");
+  });
+
+  it("keeps a shortcut from another device closed until it is pointed at a folder here (ADR-0012)", async () => {
+    const gateway = new MockWorkspaceGateway();
+    const created = await gateway.createFolderAlias({
+      id: "f1",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 300, height: 220 },
+      zIndex: 0,
+      sourcePath: "/Users/me/Research",
+    });
+    const me = await gateway.getDeviceIdentity();
+    expect(created).toMatchObject({ local: true, originDeviceId: me.deviceId, originDeviceName: me.deviceName });
+
+    // Simulate the card arriving from another device (no locator here).
+    Object.assign(
+      (gateway as unknown as { snapshot: { cards: CardDto[] } }).snapshot.cards.find((c) => c.id === "f1")!,
+      { local: false, originDeviceId: "studio-mac", originDeviceName: "Studio Mac" },
+    );
+    await expect(gateway.listFolderPreview("f1", 50)).resolves.toMatchObject({ status: "foreign_device", entries: [] });
+    await expect(gateway.openFolderInFinder("f1")).rejects.toThrow(/another device/);
+
+    const pointed = await gateway.setFilesystemAliasLocalTarget("f1", "/mock/home/Research");
+    expect(pointed).toMatchObject({ local: true, originDeviceName: "Studio Mac", revision: 1, pathHint: "/Users/me/Research" });
+    await expect(gateway.listFolderPreview("f1", 50)).resolves.toMatchObject({ status: "ready" });
+    await expect(gateway.openFolderInFinder("f1")).resolves.toBeUndefined();
+
+    await expect(gateway.renameDevice("  Desk PC ")).resolves.toEqual({ deviceId: me.deviceId, deviceName: "Desk PC" });
   });
 
   it("creates a persistent folder alias with deterministic preview states", async () => {

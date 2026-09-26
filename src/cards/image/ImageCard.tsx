@@ -1,15 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ImageCardDto } from "../../services/workspace-gateway";
 import { NoteEditor } from "../../editor/NoteEditor";
+import { StaticDocument } from "../../editor/StaticDocument";
+import { DamagedDocument } from "../../editor/DamagedDocument";
+import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { computeResizedImageFrameSize } from "./image-card-geometry";
 import "./image-card.css";
+import { assetUrl } from "../../services/asset-url";
 
 interface ImageCardProps {
   image: ImageCardDto;
   /** Persist the caption as an authoritative document. Rejects on failure. */
-  onUpdate: (id: string, document: unknown) => Promise<void>;
+  onUpdate: DocumentSave;
   /** Persist a manual resize (width/height in CSS px). */
   onResize: (id: string, width: number, height: number) => void;
   /** Request a context menu (right-click). */
@@ -24,7 +28,7 @@ interface ImageCardProps {
  * caption opens it for editing. The caption draft lifecycle is shared with notes
  * via `useDocumentDraft`.
  */
-export function ImageCard({
+export const ImageCard = memo(function ImageCard({
   image,
   onUpdate,
   onResize,
@@ -35,12 +39,21 @@ export function ImageCard({
   const [preview, setPreview] = useState(false);
   const hasCaption = image.captionPlainText.trim().length > 0;
 
-  const { draft, saving, error, handleChange, handleBlur } = useDocumentDraft({
+  // P1.7: a corrupt caption shows its recovered text and never autosaves
+  // until the user starts a repair (see editor/corrupt-document.ts).
+  const repair = useCorruptRepair({ corrupt: image.corrupt === true, onUpdate });
+  const { draft, saving, error, handleChange, handleBlur, replaceDraft } = useDocumentDraft({
     id: image.id,
     persistedDocument: image.captionJson,
-    onUpdate,
+    onUpdate: repair.onUpdate,
     onSaved: () => setEditing(false),
+    corrupt: repair.damaged,
   });
+  const startRepair = () => {
+    repair.beginRepair();
+    replaceDraft(recoveredDocument(image.captionPlainText));
+    setEditing(true);
+  };
 
   const cardClassName = [
     "image-card",
@@ -65,7 +78,7 @@ export function ImageCard({
 
   const appliedWidth = draftSize?.width ?? image.frame.width;
   const appliedHeight = draftSize?.height ?? image.frame.height;
-  const src = `myspace-asset://localhost/${image.asset.filePath}`;
+  const src = assetUrl(image.asset.filePath);
 
   // Close the preview on Escape.
   useEffect(() => {
@@ -171,10 +184,17 @@ export function ImageCard({
         data-testid="image-caption"
         onDoubleClick={(e) => {
           e.stopPropagation();
-          setEditing(true);
+          if (!repair.damaged) setEditing(true);
         }}
       >
-        {editing ? (
+        {repair.damaged ? (
+          <DamagedDocument
+            label="caption"
+            plainText={image.captionPlainText}
+            onRepair={startRepair}
+            highlightQuery={highlightQuery}
+          />
+        ) : editing ? (
           <NoteEditor
             document={draft}
             editable
@@ -183,15 +203,11 @@ export function ImageCard({
             highlightQuery={highlightQuery}
           />
         ) : hasCaption ? (
-          // Read-only ветка раньше показывала captionPlainText (без marks) —
-          // тот же Tiptap-рендерер, что в режиме редактирования, только
-          // editable=false, чтобы bold/italic/strike/списки не терялись после blur.
-          <NoteEditor
-            document={image.captionJson}
-            editable={false}
-            onChange={() => {}}
-            highlightQuery={highlightQuery}
-          />
+          // Read-only ветка раньше показывала plain text (без marks), потом —
+          // read-only Tiptap. P1.8: статический HTML из того же документа и тех же
+          // расширений (marks/списки сохраняются), без экземпляра редактора на
+          // каждую неактивную карточку; редактор монтируется только в режиме правки.
+          <StaticDocument document={image.captionJson} highlightQuery={highlightQuery} />
         ) : (
           <div className="image-card__caption-display">Add caption…</div>
         )}
@@ -222,4 +238,4 @@ export function ImageCard({
       />
     </div>
   );
-}
+});

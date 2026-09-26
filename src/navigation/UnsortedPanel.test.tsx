@@ -29,6 +29,9 @@ function folder(id: string): CardDto {
     targetKind: "folder",
     pathHint: "/Volumes/Studio/Video project",
     displayName: "Video project",
+    originDeviceId: "mock-device",
+    originDeviceName: "This Mac",
+    local: true,
   };
 }
 

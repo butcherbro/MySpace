@@ -105,7 +105,7 @@ fn filesystem_alias_migration_adds_detail_table_and_kind_without_fk_debt() {
         [],
     ).unwrap();
     conn.execute(
-        "INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES ('alias-card', 'folder', X'0102', '/display-only', 'Folder')",
+        "INSERT INTO filesystem_aliases (card_id, target_kind, path_hint, display_name) VALUES ('alias-card', 'folder', '/display-only', 'Folder')",
         [],
     ).unwrap();
     let preserved: (i64, i64) = conn
@@ -286,7 +286,7 @@ fn cards_accept_filesystem_alias_kind_and_foreign_keys_stay_clean() {
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name) VALUES ('fa1', 'folder', X'0102', '/tmp/demo', 'demo')",
+        "INSERT INTO filesystem_aliases (card_id, target_kind, path_hint, display_name) VALUES ('fa1', 'folder', '/tmp/demo', 'demo')",
         [],
     )
     .unwrap();
@@ -338,4 +338,449 @@ fn cards_accept_file_kind_and_foreign_keys_stay_clean() {
     let mut stmt = conn.prepare("PRAGMA foreign_key_check").unwrap();
     let violations = stmt.query_map([], |_| Ok(())).unwrap().count();
     assert_eq!(violations, 0);
+}
+
+#[test]
+fn migration_creates_the_0019_lookup_indexes() {
+    let conn = open_in_memory().unwrap();
+    let indexes = index_names(&conn);
+
+    for expected in [
+        "idx_image_cards_asset",
+        "idx_embed_cards_asset",
+        "idx_embed_cards_favicon_asset",
+        "idx_file_cards_asset",
+        "idx_file_cards_preview_asset",
+        "idx_boards_cover_asset",
+        "idx_favicon_cache_asset",
+        "idx_mutation_receipts_batch",
+        "idx_cards_trashed",
+        "idx_boards_trashed",
+    ] {
+        assert!(
+            indexes.iter().any(|t| t == expected),
+            "missing index: {expected}; got {indexes:?}"
+        );
+    }
+}
+
+/// A database that already has a migration version newer than this build
+/// knows about must never be migrated by an older build.
+#[test]
+fn run_migrations_refuses_a_database_newer_than_this_build() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    migrations::run_migrations(&mut conn).unwrap();
+
+    conn.execute(
+        "INSERT INTO schema_migrations (version, name, applied_at) VALUES (9999, 'from_the_future', 0)",
+        [],
+    )
+    .unwrap();
+
+    let err = migrations::run_migrations(&mut conn).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("newer"),
+        "expected error message to mention 'newer', got: {message}"
+    );
+}
+
+#[test]
+fn schema_status_is_up_to_date_after_open_in_memory() {
+    let conn = open_in_memory().unwrap();
+    assert_eq!(
+        migrations::schema_status(&conn).unwrap(),
+        migrations::SchemaStatus::UpToDate
+    );
+}
+
+#[test]
+fn schema_status_reports_newer_without_mutating() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    migrations::run_migrations(&mut conn).unwrap();
+    conn.execute(
+        "INSERT INTO schema_migrations (version, name, applied_at) VALUES (9999, 'from_the_future', 0)",
+        [],
+    )
+    .unwrap();
+
+    match migrations::schema_status(&conn).unwrap() {
+        migrations::SchemaStatus::Newer { db, .. } => assert_eq!(db, 9999),
+        other => panic!("expected SchemaStatus::Newer, got {other:?}"),
+    }
+}
+
+#[test]
+fn schema_status_reports_pending_before_migrating() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(include_str!("../migrations/0001_workspace.sql"))
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);
+         INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'workspace', 0);",
+    )
+    .unwrap();
+
+    match migrations::schema_status(&conn).unwrap() {
+        migrations::SchemaStatus::Pending(count) => assert!(count > 0),
+        other => panic!("expected SchemaStatus::Pending, got {other:?}"),
+    }
+}
+
+/// Migration 0021 is the last `cards` rebuild: the kind and frame-size CHECKs
+/// are gone (the guard is Rust: `CardKind`, `Frame::validate`), every other
+/// constraint and every index on `cards` survives, and existing rows carry over.
+#[test]
+fn migration_0021_drops_the_kind_check_and_keeps_every_cards_index() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    // Apply 1..=20 by hand-picking the runner's list, seed data, then run 21.
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 21) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(migration.sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws', 'Home', 'home', 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at) VALUES ('home', 'ws', NULL, 'Home', 'default', NULL, 1, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at, deleted_at, trash_batch_id, unsorted)
+         VALUES ('old', 'home', 'note', 1.5, 2.5, 200, 80, 4, 9, 11, 12, 13, 'batch', 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO note_cards (card_id, document_json, plain_text) VALUES ('old', '{}', 'kept')",
+        [],
+    )
+    .unwrap();
+    // Before 0021 the CHECK still rejects an unknown kind.
+    assert!(conn
+        .execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at) VALUES ('pre', 'home', 'test_kind', 0, 0, 200, 80, 0, 0)",
+            [],
+        )
+        .is_err());
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let row: (String, f64, f64, i64, i64, Option<i64>, Option<String>, i64) = conn
+        .query_row(
+            "SELECT kind, x, y, z_index, revision, deleted_at, trash_batch_id, unsorted FROM cards WHERE id = 'old'",
+            [],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            "note".to_string(),
+            1.5,
+            2.5,
+            4,
+            9,
+            Some(13),
+            Some("batch".to_string()),
+            1
+        )
+    );
+
+    // The guard is Rust now: SQL accepts a new kind and any size.
+    conn.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at) VALUES ('new', 'home', 'test_kind', 0, 0, 5, 5, 0, 0)",
+        [],
+    )
+    .unwrap();
+    // Other constraints survive: the board FK, NOT NULL and the unsorted CHECK.
+    assert!(conn
+        .execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at) VALUES ('fk', 'nowhere', 'note', 0, 0, 200, 80, 0, 0)",
+            [],
+        )
+        .is_err());
+    assert!(conn
+        .execute(
+            "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at, unsorted) VALUES ('u', 'home', 'note', 0, 0, 200, 80, 0, 0, 2)",
+            [],
+        )
+        .is_err());
+    assert!(conn
+        .execute(
+            "INSERT INTO cards (id, board_id, x, y, width, height, created_at, updated_at) VALUES ('k', 'home', 0, 0, 200, 80, 0, 0)",
+            [],
+        )
+        .is_err());
+
+    let mut stmt = conn.prepare("PRAGMA index_list(cards)").unwrap();
+    let mut indexes: Vec<(String, bool)> = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(1)?, r.get::<_, i64>(4)? == 1))
+        })
+        .unwrap()
+        .map(|r| r.unwrap())
+        .filter(|(name, _)| !name.starts_with("sqlite_autoindex"))
+        .collect();
+    indexes.sort();
+    assert_eq!(
+        indexes,
+        vec![
+            ("idx_cards_board_active".to_string(), false),
+            ("idx_cards_trash_batch".to_string(), false),
+            ("idx_cards_trashed".to_string(), true),
+        ],
+        "(name, partial) of every index on cards"
+    );
+
+    let violations = conn
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .query_map([], |_| Ok(()))
+        .unwrap()
+        .count();
+    assert_eq!(violations, 0);
+}
+
+#[test]
+fn migration_0020_adds_asset_sha256_and_its_partial_index() {
+    let conn = open_in_memory().unwrap();
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('assets')")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(
+        columns.iter().any(|c| c == "sha256"),
+        "assets.sha256 missing; got {columns:?}"
+    );
+
+    let index_sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_assets_sha256'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("idx_assets_sha256 exists");
+    assert!(
+        index_sql.contains("WHERE sha256 IS NOT NULL"),
+        "{index_sql}"
+    );
+
+    let recorded: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 20 AND name = 'asset_sha256'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(recorded, 1);
+}
+
+#[test]
+fn migration_0022_creates_search_index_and_backfills_existing_rows() {
+    assert!(
+        migrations::MIGRATIONS
+            .iter()
+            .any(|m| m.version == 22 && m.name == "search_index"),
+        "migration 0022 is registered"
+    );
+
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 22) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(migration.sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at)
+             VALUES ('home', 'ws', NULL, 'Home', 'default', NULL, 1, 0, 0);
+         INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at)
+             VALUES ('n1', 'home', 'note', 0, 0, 200, 80, 0, 0),
+                    ('n2', 'home', 'note', 0, 0, 200, 80, 0, 0),
+                    ('e1', 'home', 'embed', 0, 0, 200, 80, 0, 0),
+                    ('fa1', 'home', 'filesystem_alias', 0, 0, 200, 80, 0, 0);
+         UPDATE cards SET deleted_at = 5 WHERE id = 'n2';
+         INSERT INTO note_cards (card_id, document_json, plain_text) VALUES ('n1', '{}', 'Legacy galaxy note'), ('n2', '{}', 'Trashed galaxy');
+         INSERT INTO embed_cards (card_id, source_url, display_url, title, description_plain_text)
+             VALUES ('e1', 'https://example.com/a', 'example.com/a', 'Galaxy link', 'about stars');
+         INSERT INTO filesystem_aliases (card_id, target_kind, locator_blob, path_hint, display_name)
+             VALUES ('fa1', 'folder', x'00', '/Volumes/Galaxy', 'Footage');",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let indexed: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT entity_id, kind FROM search_index ORDER BY entity_id")
+            .unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(
+        indexed,
+        vec![
+            ("e1".to_string(), "embed".to_string()),
+            ("fa1".to_string(), "filesystem_alias".to_string()),
+            ("home".to_string(), "board".to_string()),
+            ("n1".to_string(), "note".to_string()),
+            ("n2".to_string(), "note".to_string()),
+        ],
+        "every pre-existing searchable row is indexed, trashed ones included"
+    );
+
+    let matched: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM search_index WHERE search_index MATCH '\"galax\"*'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(matched, 4, "n1, n2, e1 (title) and fa1 (path hint)");
+
+    // Search itself excludes the trashed note at query time.
+    let ids: Vec<String> =
+        myspace_lib::repositories::workspace_repository::search_workspace(&conn, "galaxy")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.entity_id)
+            .collect();
+    assert_eq!(ids.len(), 3);
+    assert!(!ids.contains(&"n2".to_string()));
+}
+
+/// Migration 0023 adds `boards.change_seq` (default 0 for existing rows) and
+/// the triggers that bump it; the viewport table is not a change source.
+#[test]
+fn migration_0023_adds_board_change_seq_and_its_triggers() {
+    assert!(
+        migrations::MIGRATIONS
+            .iter()
+            .any(|m| m.version == 23 && m.name == "board_change_seq"),
+        "migration 0023 is registered"
+    );
+
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 23) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(migration.sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at)
+             VALUES ('home', 'ws', NULL, 'Home', 'default', NULL, 1, 0, 0),
+                    ('child', 'ws', 'home', 'Child', 'default', NULL, 1, 0, 0);",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let seq = |conn: &rusqlite::Connection, id: &str| -> i64 {
+        conn.query_row("SELECT change_seq FROM boards WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(seq(&conn, "home"), 0, "existing rows start at 0");
+    assert_eq!(seq(&conn, "child"), 0);
+
+    let triggers: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'change_seq_%'")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    for table in [
+        "note_cards",
+        "image_cards",
+        "embed_cards",
+        "file_cards",
+        "filesystem_aliases",
+        "board_portal_cards",
+        "board_shortcut_cards",
+    ] {
+        for op in ["ai", "au", "ad"] {
+            let name = format!("change_seq_{table}_{op}");
+            assert!(triggers.contains(&name), "missing trigger {name}");
+        }
+    }
+
+    // A note on the child bumps the child and (portal counts) its parent.
+    conn.execute_batch(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at)
+             VALUES ('n1', 'child', 'note', 0, 0, 200, 80, 0, 0);
+         INSERT INTO note_cards (card_id, document_json, plain_text) VALUES ('n1', '{}', 'x');",
+    )
+    .unwrap();
+    assert_eq!(seq(&conn, "child"), 2, "card insert + detail insert");
+    assert_eq!(seq(&conn, "home"), 1, "parent bumped once for the count");
+
+    // Bumping change_seq itself does not recurse through the boards trigger.
+    conn.execute(
+        "UPDATE boards SET change_seq = change_seq + 1 WHERE id = 'child'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(seq(&conn, "child"), 3);
+    assert_eq!(seq(&conn, "home"), 1);
+
+    // Viewport writes are not changes.
+    conn.execute(
+        "INSERT INTO board_view_states (board_id, updated_at) VALUES ('home', 0)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(seq(&conn, "home"), 1);
 }

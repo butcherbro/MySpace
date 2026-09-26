@@ -30,13 +30,14 @@
   padding: 7px 10px 8px;
   min-height: 26px;
   color: var(--ink-secondary);
-  font-family: var(--font-content);
+  font-family: var(--font-text);
   font-size: 13px;
   line-height: 1.35;
   white-space: pre-wrap;
   word-break: break-word;
   background: transparent;
   border-top: 1px solid transparent;
+  font-feature-settings: var(--font-text-features);
 }
 
 .image-card--has-caption,

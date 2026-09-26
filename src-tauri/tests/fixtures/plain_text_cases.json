@@ -1,0 +1,710 @@
+[
+  {
+    "name": "_README (also a valid case: null doc)",
+    "note": "Shared fixtures for the ProseMirror -> plain-text codec. Rust: src-tauri/src/domain/plain_text.rs (pinned by src-tauri/tests/plain_text.rs). TypeScript: src/editor/document-codec.ts documentToPlainText (tests in src/editor/document-codec.test.ts). The two codecs MUST stay in sync: change both and this file together. Cases prefixed 'ts:' mirror the TS unit tests; expected values were produced by running the TS codec.",
+    "doc": null,
+    "expected": ""
+  },
+  {
+    "name": "ts: round-trips plain text",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello world"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "hello world"
+  },
+  {
+    "name": "ts: encodes empty text as an empty paragraph",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": []
+        }
+      ]
+    },
+    "expected": ""
+  },
+  {
+    "name": "ts: extracts text from headings",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "heading",
+          "attrs": {
+            "level": 1
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Title"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "Title"
+  },
+  {
+    "name": "ts: extracts text with marks (bold/italic) as plain text",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "bold",
+              "marks": [
+                {
+                  "type": "bold"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": " plain"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "bold plain"
+  },
+  {
+    "name": "ts: renders bullet lists with markers",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "a"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "b"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "• a\n• b"
+  },
+  {
+    "name": "ts: joins multiple blocks with newlines",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "one\ntwo"
+  },
+  {
+    "name": "ts: malformed null",
+    "doc": null,
+    "expected": ""
+  },
+  {
+    "name": "ts: malformed number",
+    "doc": 42,
+    "expected": ""
+  },
+  {
+    "name": "ts: malformed non-doc root",
+    "doc": {
+      "type": "not-doc"
+    },
+    "expected": ""
+  },
+  {
+    "name": "malformed string",
+    "doc": "hello",
+    "expected": ""
+  },
+  {
+    "name": "malformed array",
+    "doc": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    ],
+    "expected": ""
+  },
+  {
+    "name": "doc without content",
+    "doc": {
+      "type": "doc"
+    },
+    "expected": ""
+  },
+  {
+    "name": "doc with empty content",
+    "doc": {
+      "type": "doc",
+      "content": []
+    },
+    "expected": ""
+  },
+  {
+    "name": "bare paragraph node (no content)",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph"
+        }
+      ]
+    },
+    "expected": ""
+  },
+  {
+    "name": "hard break inside a paragraph",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            },
+            {
+              "type": "hardBreak"
+            },
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "a\nb"
+  },
+  {
+    "name": "empty blocks between text are dropped",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "content": []
+        },
+        {
+          "type": "paragraph"
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "a\nb"
+  },
+  {
+    "name": "ordered list",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "orderedList",
+          "attrs": {
+            "start": 1
+          },
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "first"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "second"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "• first\n• second"
+  },
+  {
+    "name": "nested list inside a list item",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "x"
+                    }
+                  ]
+                },
+                {
+                  "type": "bulletList",
+                  "content": [
+                    {
+                      "type": "listItem",
+                      "content": [
+                        {
+                          "type": "paragraph",
+                          "content": [
+                            {
+                              "type": "text",
+                              "text": "y"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "listItem",
+                      "content": [
+                        {
+                          "type": "paragraph",
+                          "content": [
+                            {
+                              "type": "text",
+                              "text": "z"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "• x • y\n• z"
+  },
+  {
+    "name": "list item text is trimmed",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "  spaced  "
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "• spaced"
+  },
+  {
+    "name": "list item with two paragraphs joins with a space",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "one"
+                    }
+                  ]
+                },
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "two"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "• one two"
+  },
+  {
+    "name": "empty list item keeps its marker",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "• "
+  },
+  {
+    "name": "non-listItem children of a list are ignored",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "kept"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "dropped"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "• kept"
+  },
+  {
+    "name": "code block keeps inner newlines",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "codeBlock",
+          "attrs": {
+            "language": "rust"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "fn main() {\n}"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "fn main() {\n}"
+  },
+  {
+    "name": "horizontal rule between paragraphs",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "type": "horizontalRule"
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "a\n---\nb"
+  },
+  {
+    "name": "blockquote concatenates its paragraphs",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "blockquote",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "q1"
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "q2"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "q1q2"
+  },
+  {
+    "name": "unknown block falls back to inline text",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "callout",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "inside"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "inside"
+  },
+  {
+    "name": "unknown inline atom contributes nothing",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            },
+            {
+              "type": "image",
+              "attrs": {
+                "src": "x"
+              }
+            },
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "ab"
+  },
+  {
+    "name": "text node without text",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text"
+            },
+            {
+              "type": "text",
+              "text": "z"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "z"
+  },
+  {
+    "name": "unicode text passes through",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "мой комментарий 🚀"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "мой комментарий 🚀"
+  },
+  {
+    "name": "whitespace-only paragraph is kept",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "   "
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "x"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "   \nx"
+  }
+]

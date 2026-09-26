@@ -3,6 +3,7 @@
 
 import type { BoardPortalDto, BoardShortcutDto, Frame, WorkspaceGateway } from "../services/workspace-gateway";
 import type { WorkspaceCommand } from "./workspace-command";
+import type { TrashItem } from "./trash-commands";
 
 export interface PasteNoteSpec {
   kind: "note";
@@ -61,6 +62,20 @@ export interface PasteShortcutSpec {
 export type PasteCardSpec = PasteNoteSpec | PasteImageSpec | PasteBoardSpec | PasteShortcutSpec;
 
 /**
+ * Maps a paste spec's own `kind` (which names the clipboard shape, e.g.
+ * "board" for a duplicated Board Portal) to the `TrashItem` kind its created
+ * card/board is trashed as on undo — a registry lookup in place of a
+ * hand-written switch, kept alongside `PasteCardSpec` since the two kind
+ * vocabularies (spec-shape vs. persisted card kind) only line up here.
+ */
+const PASTE_KIND_TO_TRASH_KIND: Record<PasteCardSpec["kind"], TrashItem["kind"]> = {
+  note: "note",
+  image: "image",
+  board: "board_portal",
+  shortcut: "board_shortcut",
+};
+
+/**
  * Creates a group of pasted cards (notes/images/board duplicates) as one
  * gesture. Notes carry their documentJson/plainText plus a follow-up color
  * write (creation itself has no color field); images reuse the source asset
@@ -112,7 +127,6 @@ export class PasteCardsCommand implements WorkspaceCommand<PasteCardsResult> {
           frame: spec.frame,
           zIndex: spec.zIndex,
           documentJson: spec.documentJson,
-          plainText: spec.plainText,
         });
         if (spec.colorToken !== "default") {
           await gateway.setNoteColor({ id: spec.id, colorToken: spec.colorToken });
@@ -125,7 +139,6 @@ export class PasteCardsCommand implements WorkspaceCommand<PasteCardsResult> {
           zIndex: spec.zIndex,
           assetId: spec.assetId,
           captionJson: spec.captionJson,
-          captionPlainText: spec.captionPlainText,
         });
       } else if (spec.kind === "shortcut") {
         const created = await gateway.createBoardShortcut({
@@ -152,11 +165,10 @@ export class PasteCardsCommand implements WorkspaceCommand<PasteCardsResult> {
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
     this.trashBatchId = await gateway.trashSelection({
-      items: this.specs.map((s) => {
-        if (s.kind === "board") return { id: s.newBoardId, kind: "board_portal" as const };
-        if (s.kind === "shortcut") return { id: s.id, kind: "board_shortcut" as const };
-        return { id: s.id, kind: s.kind };
-      }),
+      items: this.specs.map((s) => ({
+        id: s.kind === "board" ? s.newBoardId : s.id,
+        kind: PASTE_KIND_TO_TRASH_KIND[s.kind],
+      })),
     });
   }
 }

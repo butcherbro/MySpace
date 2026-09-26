@@ -1,0 +1,22 @@
+# Configuration for `cargo audit` (https://docs.rs/cargo-audit).
+#
+# NOTE: cargo-audit does not read this file from an arbitrary path — it only
+# looks at `./.cargo/audit.toml` (relative to the directory it's invoked
+# from) or `$CARGO_HOME/audit.toml`. CI stages this file into
+# `src-tauri/.cargo/audit.toml` before running `cargo audit`; if you run it
+# locally from `src-tauri/`, do the same:
+#   mkdir -p .cargo && cp audit.toml .cargo/audit.toml && cargo audit
+#
+# This lets us allow-list a specific RUSTSEC advisory when it is a known
+# false positive, unexploitable in how we use the crate, or already tracked
+# with an upstream fix in progress. Prefer upgrading the dependency first;
+# only add an advisory here as a documented, deliberate exception.
+#
+# Example:
+# [advisories]
+# ignore = [
+#     "RUSTSEC-2024-0001", # unexploitable: we never call the affected API; tracked in issue #123
+# ]
+
+[advisories]
+ignore = []

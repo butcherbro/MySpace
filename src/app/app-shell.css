@@ -3,7 +3,11 @@
   grid-template-columns: 56px minmax(0, 1fr);
   grid-template-rows: 44px minmax(0, 1fr);
   height: 100vh;
-  width: 100vw;
+  /* `100%` of the (already window-sized) html/body, not `100vw`: on Windows,
+     WebView2 draws classic (non-overlay) scrollbars, so `100vw` can measure
+     wider than the actually visible content box and get clipped off the
+     right edge by `overflow: hidden` below. `100%` tracks the real box. */
+  width: 100%;
   overflow: hidden;
   background: var(--desk);
 }
@@ -26,17 +30,27 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  background: var(--chrome-surface);
-  border-bottom: 1px solid var(--edge-subtle);
+  /* The top bar (Home + breadcrumbs) is the lightest chrome surface, a step
+     above the tab strip / rails below it, closed off by a 1px hairline. */
+  background: var(--surface-topbar);
+  border-bottom: 1px solid var(--edge-topbar);
   user-select: none;
   z-index: 20;
 }
 
 /* Empty drag region under the macOS traffic lights. The whole title bar is a
-   drag surface; interactive chrome below opts out. */
+   drag surface; interactive chrome below opts out. Only macOS's overlay title
+   bar draws traffic lights over our content (`titleBarStyle: "Overlay"` in
+   tauri.conf.json) — Windows/Linux are undecorated and draw their caption
+   buttons at the right end instead (WindowControls), so the 78px inset is
+   scoped to macOS only. */
 .app-shell__titlebar-drag {
-  flex: 0 0 78px;
+  flex: 0 0 0;
   align-self: stretch;
+}
+
+html[data-platform="macos"] .app-shell__titlebar-drag {
+  flex: 0 0 78px;
 }
 
 .app-shell__titlebar-content {

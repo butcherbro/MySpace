@@ -1,14 +1,32 @@
 //! Service-layer tests: entity addressing and read/write journeys through
 //! `WorkspaceService`.
 
-use myspace_lib::db::{bootstrap, open_in_memory};
+use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::domain::models::{CreateLinkBatchInput, CreateNoteInput, Frame, LinkBatchItem};
-use myspace_lib::repositories::workspace_repository;
+use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::services::workspace_service::{parse_address, WorkspaceService};
 
-fn root_board_id(conn: &rusqlite::Connection) -> String {
-    conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
-        r.get(0)
+fn temp_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "myspace-workspace-service-{}-{}",
+        tag,
+        uuid::Uuid::now_v7()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn open_workspace(tag: &str) -> Workspace {
+    let dir = temp_dir(tag);
+    Workspace::open(WorkspacePaths::new(dir)).unwrap()
+}
+
+fn root_board_id(ws: &Workspace) -> String {
+    ws.read_blocking(|conn| {
+        conn.query_row("SELECT root_board_id FROM workspaces LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .map_err(myspace_lib::domain::errors::WorkspaceError::from)
     })
     .unwrap()
 }
@@ -38,30 +56,28 @@ fn parse_address_rejects_invalid_shapes() {
 
 #[test]
 fn list_boards_and_resolve_board_read_journey() {
-    let mut conn = open_in_memory().unwrap();
-    bootstrap::bootstrap(&mut conn).unwrap();
-    let home = root_board_id(&conn);
+    let ws = open_workspace("list-boards");
+    let home = root_board_id(&ws);
 
-    let boards = WorkspaceService::list_boards(&conn).unwrap();
+    let boards = WorkspaceService::list_boards(&ws).unwrap();
     assert_eq!(boards.len(), 1);
     assert_eq!(boards[0].id, home);
 
     let resolved =
-        WorkspaceService::resolve_board(&conn, &format!("myspace://board/{home}")).unwrap();
+        WorkspaceService::resolve_board(&ws, &format!("myspace://board/{home}")).unwrap();
     assert_eq!(resolved.id, home);
 
-    let snapshot = WorkspaceService::read_board(&conn, &format!("myspace://board/{home}")).unwrap();
+    let snapshot = WorkspaceService::read_board(&ws, &format!("myspace://board/{home}")).unwrap();
     assert_eq!(snapshot.board.id, home);
 }
 
 #[test]
 fn create_link_batch_write_journey_through_service() {
-    let mut conn = open_in_memory().unwrap();
-    bootstrap::bootstrap(&mut conn).unwrap();
-    let home = root_board_id(&conn);
+    let ws = open_workspace("create-link-batch");
+    let home = root_board_id(&ws);
 
     let result = WorkspaceService::create_link_batch(
-        &mut conn,
+        &ws,
         &CreateLinkBatchInput {
             idempotency_key: "service-req-1".to_string(),
             board_id: home.clone(),
@@ -86,18 +102,17 @@ fn create_link_batch_write_journey_through_service() {
     assert_eq!(result.card_ids.len(), 2);
 
     // Read back: the board now contains the two embed cards.
-    let snapshot = WorkspaceService::read_board(&conn, &home).unwrap();
+    let snapshot = WorkspaceService::read_board(&ws, &home).unwrap();
     assert_eq!(snapshot.cards.len(), 2);
 }
 
 #[test]
 fn trash_link_batch_removes_all_cards_as_one_unit() {
-    let mut conn = open_in_memory().unwrap();
-    bootstrap::bootstrap(&mut conn).unwrap();
-    let home = root_board_id(&conn);
+    let ws = open_workspace("trash-link-batch");
+    let home = root_board_id(&ws);
 
     let result = WorkspaceService::create_link_batch(
-        &mut conn,
+        &ws,
         &CreateLinkBatchInput {
             idempotency_key: "req-3".to_string(),
             board_id: home.clone(),
@@ -119,34 +134,39 @@ fn trash_link_batch_removes_all_cards_as_one_unit() {
     )
     .unwrap();
 
-    let trash_batch_id = WorkspaceService::trash_link_batch(&mut conn, &result.batch_id).unwrap();
+    let trash_batch_id = WorkspaceService::trash_link_batch(&ws, &result.batch_id).unwrap();
     assert!(!trash_batch_id.is_empty());
 
     // Both cards are now trashed.
-    let active: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM cards WHERE kind = 'embed' AND deleted_at IS NULL",
-            [],
-            |r| r.get(0),
-        )
+    let active: i64 = ws
+        .read_blocking(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM cards WHERE kind = 'embed' AND deleted_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(myspace_lib::domain::errors::WorkspaceError::from)
+        })
         .unwrap();
     assert_eq!(active, 0);
-    let trashed: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM cards WHERE kind = 'embed' AND deleted_at IS NOT NULL",
-            [],
-            |r| r.get(0),
-        )
+    let trashed: i64 = ws
+        .read_blocking(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM cards WHERE kind = 'embed' AND deleted_at IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(myspace_lib::domain::errors::WorkspaceError::from)
+        })
         .unwrap();
     assert_eq!(trashed, 2);
 }
 
 #[test]
 fn trash_link_batch_rejects_unknown_batch() {
-    let mut conn = open_in_memory().unwrap();
-    bootstrap::bootstrap(&mut conn).unwrap();
+    let ws = open_workspace("trash-link-batch-unknown");
 
-    let result = WorkspaceService::trash_link_batch(&mut conn, "does-not-exist");
+    let result = WorkspaceService::trash_link_batch(&ws, "does-not-exist");
     assert!(matches!(
         result,
         Err(myspace_lib::domain::errors::WorkspaceError::NotFound(_))
@@ -155,30 +175,27 @@ fn trash_link_batch_rejects_unknown_batch() {
 
 #[test]
 fn read_card_resolves_card_address_back_to_content() {
-    let mut conn = open_in_memory().unwrap();
-    bootstrap::bootstrap(&mut conn).unwrap();
-    let home = root_board_id(&conn);
+    let ws = open_workspace("read-card");
+    let home = root_board_id(&ws);
 
-    workspace_repository::create_note(
-        &mut conn,
-        &CreateNoteInput {
-            id: "note-1".to_string(),
-            board_id: home.clone(),
-            frame: Frame {
-                x: 10.0,
-                y: 20.0,
-                width: 200.0,
-                height: 80.0,
-            },
-            z_index: 0,
-            document_json: serde_json::json!({"type": "doc", "content": []}),
-            plain_text: "hello".to_string(),
+    ws.apply_blocking(Mutation::CreateNote(CreateNoteInput {
+        id: "note-1".to_string(),
+        board_id: home.clone(),
+        frame: Frame {
+            x: 10.0,
+            y: 20.0,
+            width: 200.0,
+            height: 80.0,
         },
-    )
+        z_index: 0,
+        document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}]}),
+    }))
+    .unwrap()
+    .into_card_receipt()
     .unwrap();
 
     // Resolve via a full myspace://card/<id> address.
-    let card = WorkspaceService::read_card(&conn, "myspace://card/note-1").unwrap();
+    let card = WorkspaceService::read_card(&ws, "myspace://card/note-1").unwrap();
     match card {
         myspace_lib::domain::models::CardDto::Note(note) => {
             assert_eq!(note.id, "note-1");
@@ -189,13 +206,13 @@ fn read_card_resolves_card_address_back_to_content() {
     }
 
     // A bare card id works too.
-    let card = WorkspaceService::read_card(&conn, "note-1").unwrap();
+    let card = WorkspaceService::read_card(&ws, "note-1").unwrap();
     assert!(matches!(
         card,
         myspace_lib::domain::models::CardDto::Note(_)
     ));
 
     // A board address must be rejected for a card read.
-    let wrong = WorkspaceService::read_card(&conn, &format!("myspace://board/{home}"));
+    let wrong = WorkspaceService::read_card(&ws, &format!("myspace://board/{home}"));
     assert!(wrong.is_err());
 }

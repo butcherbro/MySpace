@@ -1,6 +1,7 @@
 import type { TrashSummaryDto } from "../../services/workspace-gateway";
 import { BoardIdentityThumbnail } from "../../boards/BoardIdentityThumbnail";
 import "./trash-drawer.css";
+import { assetUrl } from "../../services/asset-url";
 
 interface TrashDrawerProps {
   summary: TrashSummaryDto | null;
@@ -11,6 +12,12 @@ interface TrashDrawerProps {
   onRestore: (batchId: string) => void;
   /** Open the empty-Trash confirmation dialog. */
   onEmptyTrash?: () => void;
+  /** Open the "Backups…" (restore from snapshot) dialog. */
+  onRestoreFromBackup?: () => void;
+  /** Open the "Devices…" (LAN sync, ADR-0011 S3) dialog. */
+  onOpenDevices?: () => void;
+  /** Run a manual update check (desktop builds only; the result shows in the update banner). */
+  onCheckForUpdates?: () => void;
 }
 
 function formatDeletedAt(millis: number): string {
@@ -40,6 +47,9 @@ export function TrashDrawer({
   onClose,
   onRestore,
   onEmptyTrash = () => {},
+  onRestoreFromBackup,
+  onOpenDevices,
+  onCheckForUpdates,
 }: TrashDrawerProps) {
   const empty = !loading && !error && summary && summary.batches.length === 0;
   const populated = !loading && !error && summary && summary.batches.length > 0;
@@ -100,7 +110,7 @@ export function TrashDrawer({
                           ) : item.thumbnailAsset ? (
                             <img
                               className="trash-drawer__thumb-img"
-                              src={`myspace-asset://localhost/${item.thumbnailAsset.filePath}`}
+                              src={assetUrl(item.thumbnailAsset.filePath)}
                               alt=""
                             />
                           ) : (
@@ -132,6 +142,35 @@ export function TrashDrawer({
         )}
       </div>
       <footer className="trash-drawer__footer">
+        {onRestoreFromBackup && (
+          <button
+            type="button"
+            className="trash-drawer__restore-from-backup"
+            onClick={onRestoreFromBackup}
+          >
+            Backups…
+          </button>
+        )}
+        {onOpenDevices && (
+          <button
+            type="button"
+            className="trash-drawer__restore-from-backup trash-drawer__devices"
+            data-testid="trash-drawer-devices"
+            onClick={onOpenDevices}
+          >
+            Devices…
+          </button>
+        )}
+        {onCheckForUpdates && (
+          <button
+            type="button"
+            className="trash-drawer__restore-from-backup trash-drawer__check-updates"
+            data-testid="trash-drawer-check-updates"
+            onClick={onCheckForUpdates}
+          >
+            Check for updates…
+          </button>
+        )}
         <button
           type="button"
           className="trash-drawer__empty"

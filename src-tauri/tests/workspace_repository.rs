@@ -62,7 +62,7 @@ fn stale_alias_refresh_replaces_authority_and_display_metadata_atomically() {
         .unwrap();
     assert_eq!(
         workspace_repository::load_filesystem_alias_locator(&conn, &id).unwrap(),
-        (b"new".to_vec(), "/new".into(), "New".into())
+        (Some(b"new".to_vec()), "/new".into(), "New".into())
     );
 }
 use myspace_lib::domain::asset_service;
@@ -96,7 +96,7 @@ fn create_note_then_load_snapshot_roundtrips() {
     bootstrap::bootstrap(&mut conn).unwrap();
     let board_id = root_board_id(&conn);
 
-    let doc = serde_json::json!({"type":"doc","content":[{"type":"paragraph"}]});
+    let doc = serde_json::json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"hello"}]}]});
     let input = CreateNoteInput {
         id: "note-1".to_string(),
         board_id: board_id.clone(),
@@ -108,7 +108,6 @@ fn create_note_then_load_snapshot_roundtrips() {
         },
         z_index: 0,
         document_json: doc.clone(),
-        plain_text: "hello".to_string(),
     };
     workspace_repository::create_note(&mut conn, &input).unwrap();
 
@@ -155,7 +154,6 @@ fn snapshot_serializes_as_camel_case() {
             },
             z_index: 1,
             document_json: serde_json::json!({"type":"doc"}),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -201,7 +199,6 @@ fn failed_note_insert_leaves_no_orphan_card() {
         },
         z_index: 0,
         document_json: serde_json::json!({"type":"doc"}),
-        plain_text: "".to_string(),
     };
     let result = workspace_repository::create_note(&mut conn, &bad);
     assert!(result.is_err(), "width violation must be rejected");
@@ -240,8 +237,7 @@ fn update_note_changes_content_and_bumps_revision() {
                 height: 80.0,
             },
             z_index: 0,
-            document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "first".to_string(),
+            document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "first"}]}]}),
         },
     )
     .unwrap();
@@ -251,8 +247,8 @@ fn update_note_changes_content_and_bumps_revision() {
         &UpdateNoteInput {
             id: "note-x".to_string(),
             expected_revision: 1,
-            document_json: serde_json::json!({ "type": "doc", "content": [1] }),
-            plain_text: "second".to_string(),
+            document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "second"}]}]}),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();
@@ -285,8 +281,7 @@ fn update_note_with_stale_revision_is_rejected() {
                 height: 80.0,
             },
             z_index: 0,
-            document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "v1".to_string(),
+            document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "v1"}]}]}),
         },
     )
     .unwrap();
@@ -297,8 +292,8 @@ fn update_note_with_stale_revision_is_rejected() {
         &UpdateNoteInput {
             id: "note-s".to_string(),
             expected_revision: 1,
-            document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "v2".to_string(),
+            document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "v2"}]}]}),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();
@@ -309,8 +304,8 @@ fn update_note_with_stale_revision_is_rejected() {
         &UpdateNoteInput {
             id: "note-s".to_string(),
             expected_revision: 1,
-            document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "should not apply".to_string(),
+            document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "should not apply"}]}]}),
+            acknowledge_corrupt: false,
         },
     );
     assert!(matches!(
@@ -338,7 +333,6 @@ fn move_card_updates_frame_and_bumps_revision() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -390,7 +384,6 @@ fn move_card_with_stale_revision_is_rejected() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -508,7 +501,6 @@ fn move_cards_moves_multiple_atomically() {
                 },
                 z_index: 0,
                 document_json: serde_json::json!({ "type": "doc" }),
-                plain_text: "".to_string(),
             },
         )
         .unwrap();
@@ -576,7 +568,6 @@ fn move_cards_rolls_back_whole_batch_on_stale_revision() {
                 },
                 z_index: 0,
                 document_json: serde_json::json!({ "type": "doc" }),
-                plain_text: "".to_string(),
             },
         )
         .unwrap();
@@ -680,7 +671,6 @@ fn create_image_card_then_load_snapshot_roundtrips() {
             z_index: 0,
             asset_id: asset_id.clone(),
             caption_json: serde_json::json!({"type": "doc"}),
-            caption_plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -721,7 +711,6 @@ fn create_image_card_with_unknown_asset_is_rejected() {
             z_index: 0,
             asset_id: "does-not-exist".to_string(),
             caption_json: serde_json::json!({"type": "doc"}),
-            caption_plain_text: "".to_string(),
         },
     );
     assert!(matches!(
@@ -769,7 +758,6 @@ fn update_image_caption_persists_and_bumps_revision() {
             z_index: 0,
             asset_id,
             caption_json: serde_json::json!({ "type": "doc" }),
-            caption_plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -780,7 +768,7 @@ fn update_image_caption_persists_and_bumps_revision() {
             id: "cap-card-1".to_string(),
             expected_revision: 1,
             caption_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello caption"}]}]}),
-            caption_plain_text: "hello caption".to_string(),
+            acknowledge_corrupt: false,
         },
     )
     .unwrap();
@@ -833,7 +821,6 @@ fn move_card_to_board_changes_board_and_resets_position() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -899,7 +886,6 @@ fn move_card_to_board_places_card_at_requested_frame() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -951,7 +937,6 @@ fn move_card_to_board_rejects_unknown_target() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -985,8 +970,7 @@ fn create_test_note(conn: &mut rusqlite::Connection) -> String {
                 height: 80.0,
             },
             z_index: 3,
-            document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "https://example.com".to_string(),
+            document_json: serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "https://example.com"}]}]}),
         },
     )
     .unwrap();
@@ -1008,7 +992,6 @@ fn convert_note_to_embed_preserves_identity_and_kind() {
             display_url: "example.com".to_string(),
             title: "https://example.com".to_string(),
             description_json: serde_json::json!({ "type": "doc" }),
-            description_plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -1054,7 +1037,6 @@ fn convert_note_to_embed_roundtrips_through_snapshot() {
             display_url: "example.com".to_string(),
             title: "https://example.com".to_string(),
             description_json: serde_json::json!({ "type": "doc" }),
-            description_plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -1089,7 +1071,6 @@ fn embed_card_serializes_as_a_flat_tagged_object() {
             display_url: "example.com".to_string(),
             title: "https://example.com".to_string(),
             description_json: serde_json::json!({ "type": "doc" }),
-            description_plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -1126,7 +1107,6 @@ fn convert_note_to_embed_rejects_stale_revision() {
             display_url: "example.com".to_string(),
             title: "https://example.com".to_string(),
             description_json: serde_json::json!({ "type": "doc" }),
-            description_plain_text: "".to_string(),
         },
     );
     assert!(matches!(
@@ -1157,7 +1137,6 @@ fn convert_note_to_embed_errors_on_non_note() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();
@@ -1168,7 +1147,6 @@ fn convert_note_to_embed_errors_on_non_note() {
         display_url: "example.com".to_string(),
         title: "https://example.com".to_string(),
         description_json: serde_json::json!({ "type": "doc" }),
-        description_plain_text: "".to_string(),
     };
     workspace_repository::convert_note_to_embed(&mut conn, &input).unwrap();
 
@@ -1355,7 +1333,6 @@ fn move_cards_to_board_unsorted_batches_and_hides_from_canvas() {
                 },
                 z_index: 0,
                 document_json: serde_json::json!({ "type": "doc" }),
-                plain_text: "".to_string(),
             },
         )
         .unwrap();
@@ -1433,7 +1410,6 @@ fn move_cards_to_board_unsorted_rejects_stale_revision_atomically() {
                 },
                 z_index: 0,
                 document_json: serde_json::json!({ "type": "doc" }),
-                plain_text: "".to_string(),
             },
         )
         .unwrap();
@@ -1486,7 +1462,6 @@ fn place_unsorted_card_puts_it_on_canvas_at_frame() {
             },
             z_index: 0,
             document_json: serde_json::json!({ "type": "doc" }),
-            plain_text: "".to_string(),
         },
     )
     .unwrap();

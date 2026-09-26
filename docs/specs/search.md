@@ -28,7 +28,7 @@ V1 indexes exactly these fields, nothing more:
 | Image | caption `caption_plain_text`, asset `file_name` |
 | Board | `title` |
 
-Explicitly out of scope for V1: asset file contents, full-text over `document_json`
+Explicitly out of scope: asset file *contents* (binary), full-text over `document_json`
 beyond the derived `plain_text`, tags, and any external filesystem content.
 
 Trashed entities (non-null `deleted_at`) are never returned.
@@ -108,3 +108,14 @@ longer matches the previous query.
 - A Board is found by `title` and navigates to it.
 - Trashed entities never appear.
 - Matches are highlighted; clearing the query removes the highlight.
+## 2026-09-24 update — FTS5 (P1.4)
+
+Search is backed by an FTS5 table `search_index` (migration 0022) maintained by
+SQLite triggers on `boards`, `note_cards`, `embed_cards`, `image_cards`,
+`file_cards` and `filesystem_aliases`, so writes from the UI, the MCP process
+and future journal replay index identically. File cards are now searchable by
+file name and preview text. Matching is word-prefix (`proj` finds "Project",
+diacritics ignored, Cyrillic-safe); a substring fallback runs only for queries
+of at most three characters that had no prefix hit. Trashed rows stay in the
+index and are filtered at query time. Ranking rules (title before body, then
+recency) and excerpts are unchanged; candidates are capped at 200.

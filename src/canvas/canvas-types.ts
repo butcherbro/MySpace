@@ -5,14 +5,11 @@
 // canvas emits. No React Flow `Node` or viewport type may appear here or leak
 // into domain, persistence, or repository modules.
 
-export type CanvasCardKind =
-  | "note"
-  | "board_portal"
-  | "image"
-  | "embed"
-  | "filesystem_alias"
-  | "file"
-  | "board_shortcut";
+import type { CardKind } from "../cards/card-kinds";
+
+/** The canvas's own vocabulary for a card's kind, derived from `CardKind`
+ *  (cards/card-kinds.ts) so the two lists cannot drift apart. */
+export type CanvasCardKind = CardKind;
 
 /** A card's placement rectangle in board-space coordinates. */
 export interface CanvasFrame {
@@ -40,6 +37,11 @@ export interface CanvasCard {
   portalTitle?: string;
   /** For board portals: the id of the cover asset, if any (re-render key). */
   portalCoverAssetId?: string;
+  /**
+   * For folder shortcuts: whether this device holds a locator (ADR-0012).
+   * A re-render key: pointing a shortcut at a local folder bumps no revision.
+   */
+  aliasLocal?: boolean;
 }
 
 /** A point in board-space coordinates. */

@@ -3,6 +3,7 @@ import { BoardIdentityThumbnail } from "../boards/BoardIdentityThumbnail";
 import { HighlightedText } from "../components/HighlightedText";
 import type { SearchResultDto } from "../services/workspace-gateway";
 import "./search-bar.css";
+import { assetUrl } from "../services/asset-url";
 
 interface SearchBarProps {
   query: string;
@@ -173,7 +174,7 @@ export function SearchBar({ query, onQueryChange, results, loading, onSelect }: 
                             ) : result.thumbnailAsset ? (
                               <img
                                 className="search-bar__thumb-img"
-                                src={`myspace-asset://localhost/${result.thumbnailAsset.filePath}`}
+                                src={assetUrl(result.thumbnailAsset.filePath)}
                                 alt=""
                               />
                             ) : (

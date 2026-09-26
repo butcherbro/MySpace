@@ -49,9 +49,9 @@ export function useViewportController(options: ViewportControllerOptions): Viewp
 
   const persistence = useViewportPersistence(gateway, {
     delayMs,
-    onSaved: (save) => {
+    onSaved: (save, revision) => {
       if (boardId !== save.boardId) return;
-      onSaved(save.revision + 1);
+      onSaved(revision);
     },
     onError: (error, save) => {
       // A rejection belongs to the board that scheduled it; surfacing it on the

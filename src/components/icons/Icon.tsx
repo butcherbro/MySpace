@@ -15,7 +15,8 @@ export type IconName =
   | "bold"
   | "italic"
   | "strike"
-  | "shortcut-arrow";
+  | "shortcut-arrow"
+  | "sync";
 
 interface IconProps {
   name: IconName;
@@ -115,6 +116,14 @@ const ICONS: Record<IconName, () => React.JSX.Element> = {
   ),
   // The Finder-alias arrow badge for a board shortcut card (todo.md №17):
   // a small arrow inside a rounded square, drawn in a card's corner.
+  sync: () => (
+    <>
+      <path d="M18.5 9.5A7 7 0 0 0 6.2 7.8L5 9" />
+      <path d="M5 5.5V9h3.5" />
+      <path d="M5.5 14.5a7 7 0 0 0 12.3 1.7L19 15" />
+      <path d="M19 18.5V15h-3.5" />
+    </>
+  ),
   "shortcut-arrow": () => (
     <>
       <rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" stroke="none" />

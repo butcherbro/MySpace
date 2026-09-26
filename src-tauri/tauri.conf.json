@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "myspace",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "identifier": "com.bro.myspace",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -23,8 +23,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' myspace-asset:; frame-src myspace-asset:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' myspace-asset: data:; frame-src myspace-asset:; font-src 'self'; connect-src 'self' ws://localhost:1420 http://localhost:1420 ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' myspace-asset: http://myspace-asset.localhost; frame-src myspace-asset: http://myspace-asset.localhost; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' myspace-asset: http://myspace-asset.localhost data:; frame-src myspace-asset: http://myspace-asset.localhost; font-src 'self'; connect-src 'self' ws://localhost:1420 http://localhost:1420 ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'"
     }
   },
   "bundle": {
@@ -36,6 +36,21 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/butcherbro/MySpace-releases/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY1Rjg4MUJFMjlERDlBQUQKUldTdG10MHB2b0g0WlNkWGVxSFRYQUJrekd6UitiTlExSEJRZDZXRFNIMGlibVBVaGJpS3dLWXcK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -1,0 +1,31 @@
+/* P1.7: read-only state of a card whose stored document is corrupt. */
+.damaged-document {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.damaged-document__banner {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--danger-surface);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.damaged-document__repair {
+  align-self: flex-start;
+  padding: 2px 10px;
+  border: 1px solid var(--edge-strong);
+  border-radius: 4px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.damaged-document__repair:hover {
+  border-color: var(--edge-focus);
+}

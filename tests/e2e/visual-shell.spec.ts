@@ -49,3 +49,93 @@ test("context menu stays within the viewport on a dense board", async ({ page })
     expect(menu.y + menu.height).toBeLessThanOrEqual(viewport.height);
   }
 });
+
+test.describe("Windows undecorated window (custom controls, no macOS traffic-light inset)", () => {
+  test.use({ viewport: { width: 1180, height: 800 } });
+
+  test("the top bar's right-most button stays inside the viewport", async ({ page }) => {
+    // Force the Windows code path regardless of the host OS running this
+    // suite: the app stamps this attribute on <html> at startup from
+    // navigator.userAgentData/platform (src/app/platform.ts), and CSS scopes
+    // the macOS traffic-light inset to `html[data-platform="macos"]`.
+    await page.addInitScript(() => {
+      document.documentElement?.setAttribute("data-platform", "windows");
+      document.addEventListener("DOMContentLoaded", () => {
+        document.documentElement.setAttribute("data-platform", "windows");
+      });
+    });
+
+    await page.goto("/?fixture=dense");
+
+    const rightMostButton = page.locator(".topbar-actions button").last();
+    await expect(rightMostButton).toBeVisible();
+    const box = await rightMostButton.boundingBox();
+    const viewport = page.viewportSize();
+    expect(box).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    if (box && viewport) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    }
+  });
+
+  test("draws its own min/max/close controls inside the viewport", async ({ page }) => {
+    await page.addInitScript(() => {
+      document.documentElement?.setAttribute("data-platform", "windows");
+      document.addEventListener("DOMContentLoaded", () => {
+        document.documentElement.setAttribute("data-platform", "windows");
+      });
+    });
+
+    await page.goto("/?fixture=dense");
+
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    for (const name of ["Minimize", "Maximize", "Close"]) {
+      const control = page.getByTestId("window-controls").getByRole("button", { name });
+      await expect(control).toBeVisible();
+      const box = await control.boundingBox();
+      expect(box).not.toBeNull();
+      if (box && viewport) {
+        expect(Math.round(box.width)).toBe(46);
+        expect(Math.round(box.height)).toBe(32);
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+      }
+    }
+
+    // Close sits flush with the right edge of the window.
+    const close = await page.getByTestId("window-control-close").boundingBox();
+    if (close && viewport) expect(Math.round(close.x + close.width)).toBe(viewport.width);
+
+    // The top bar is the drag region; the controls opt out of it.
+    await expect(page.getByTestId("title-bar-region")).toHaveAttribute("data-tauri-drag-region", "deep");
+    await expect(page.getByTestId("window-controls")).toHaveAttribute("data-tauri-drag-region", "false");
+  });
+});
+
+for (const colorScheme of ["light", "dark"] as const) {
+  test(`the breadcrumb bar is lighter than the rail chrome (${colorScheme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme });
+    await page.goto("/?fixture=dense");
+    await expect(page.getByTestId("breadcrumbs")).toBeVisible();
+
+    const luminance = (selector: string) =>
+      page.locator(selector).evaluate((el) => {
+        const match = getComputedStyle(el).backgroundColor.match(/[\d.]+/g) ?? [];
+        const [r, g, b] = match.map(Number);
+        return { css: getComputedStyle(el).backgroundColor, value: 0.2126 * r + 0.7152 * g + 0.0722 * b };
+      });
+
+    const bar = await luminance('[data-testid="title-bar-region"]');
+    const rail = await luminance('[data-testid="tool-rail-region"]');
+    expect(bar.css).not.toBe(rail.css);
+    expect(bar.value).toBeGreaterThan(rail.value);
+
+    const border = await page
+      .getByTestId("title-bar-region")
+      .evaluate((el) => getComputedStyle(el).borderBottomWidth);
+    expect(border).toBe("1px");
+  });
+}

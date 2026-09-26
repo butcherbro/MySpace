@@ -4,7 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Только .app: шаг .dmg падает в sandbox-оболочке (hdiutil), а для запуска он не нужен
-npm run tauri build -- --bundles app
+# Updater-артефакты (.app.tar.gz + .sig) нужны только CI-релизу (docs/release.md):
+# без TAURI_SIGNING_PRIVATE_KEY `tauri build` с createUpdaterArtifacts падает.
+npm run tauri build -- --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 SRC="src-tauri/target/release/bundle/macos/myspace.app"
 DEST="/Applications/MySpace.app"
 [ -d "$SRC" ] || { echo "bundle not found: $SRC" >&2; exit 1; }

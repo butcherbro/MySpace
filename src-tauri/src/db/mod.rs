@@ -8,7 +8,9 @@ pub mod backup;
 pub mod bootstrap;
 pub mod migrations;
 
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, Error, Result};
+
+use migrations::SchemaStatus;
 
 /// Applies the V1 connection pragmas.
 pub fn apply_pragmas(conn: &Connection) -> Result<()> {
@@ -38,11 +40,55 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Opens the database at `path` for a secondary process (e.g. the MCP
+/// server) that must never migrate the workspace database out from under the
+/// main app. Applies the standard pragmas, but if the schema is not already
+/// fully up to date — either pending migrations this build would apply, or a
+/// schema newer than this build understands — returns an error instead of
+/// touching the schema.
+pub fn open_readonly_checked(path: &std::path::Path) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    apply_pragmas(&conn)?;
+
+    match migrations::schema_status(&conn)? {
+        SchemaStatus::UpToDate => Ok(conn),
+        SchemaStatus::Pending(count) => Err(Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some(format!(
+                "database schema has {count} pending migration(s); refusing to open without migrating (run the main MySpace app first)"
+            )),
+        )),
+        SchemaStatus::Newer { db, app } => Err(Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some(format!(
+                "database schema version {db} is newer than this build supports ({app}); update MySpace"
+            )),
+        )),
+    }
+}
+
 /// Opens (or creates) the database at `path`, applies pragmas and migrations,
 /// then runs first-run bootstrap so exactly one workspace and Home root board
 /// exist.
 pub fn open_and_bootstrap(path: &std::path::Path) -> Result<Connection> {
     let mut conn = open(path)?;
     bootstrap::bootstrap(&mut conn)?;
+    // Migration 0024 already minted the identity. This binds it to this
+    // machine's fingerprint (host + OS + data dir): a database copied to
+    // another machine gets a new identity here, so its shortcuts render as
+    // foreign. Also refreshes `known_devices.last_seen_at` (ADR-0012).
+    let data_dir = path.parent().unwrap_or(std::path::Path::new(""));
+    let fingerprint = crate::domain::device::current_machine_fingerprint(data_dir);
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    crate::repositories::devices::ensure_device_identity(&tx, Some(&fingerprint))?;
+    // One-time journal backfill (ADR-0011 S1, migration 0025): needs the
+    // final device identity, hence here and not in the migration step.
+    crate::sync::snapshot::ensure_journal_snapshot(&tx).map_err(|e| {
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some(format!("journal snapshot failed: {e}")),
+        )
+    })?;
+    tx.commit()?;
     Ok(conn)
 }

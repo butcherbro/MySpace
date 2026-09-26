@@ -7,7 +7,12 @@
 // Mutations are optimistic: actions apply immediately and the caller is
 // responsible for reconciliation on failure (see `rollback`/`reconcile`).
 
-import type { BoardSummary, CardDto, Breadcrumb } from "../services/workspace-gateway";
+import type {
+  BoardSummary,
+  CardDto,
+  Breadcrumb,
+  FilesystemAliasDto,
+} from "../services/workspace-gateway";
 import type { CanvasViewport } from "../canvas/canvas-types";
 
 export interface CurrentBoardState {
@@ -41,8 +46,10 @@ export type CurrentBoardAction =
   | { type: "imageCaptionUpdated"; id: string; revision: number; captionJson: unknown; captionPlainText: string }
   | { type: "embedDescriptionUpdated"; id: string; revision: number; descriptionJson: unknown; descriptionPlainText: string }
   | { type: "cardReplaced"; id: string; card: CardDto }
+  /** A shortcut's device-local state changed (ADR-0012: pointed at a local folder). */
+  | { type: "filesystemAliasUpdated"; alias: FilesystemAliasDto }
   | { type: "unsortedCardPlaced"; id: string; revision: number; frame: CardDto["frame"] }
-  | { type: "cardMovedToUnsorted"; id: string }
+  | { type: "cardMovedToUnsorted"; id: string; revision: number }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "noteColorChanged"; id: string; colorToken: string }
   | { type: "cardsRemoved"; ids: string[] }
@@ -78,10 +85,37 @@ export function reducer(
       return { ...state, loading: true, error: null };
 
     case "snapshotLoaded": {
-      // The board always reopens pinned to its top-left origin: one fixed
-      // visible surface, growing right/down only. Ignore any persisted viewport
-      // position so a prior pan never reopens the board scrolled away from the
-      // user's primary content.
+      // A reload of the board that is already open (undo/redo, rename, the
+      // `change_seq` poll after an agent write) is not a
+      // board switch: the user's pan, the note being edited and the selection
+      // must survive it. Bumping `boardOpenRevision` here is what made the
+      // canvas snap back to the origin "at random" (todo.md №26, second cause):
+      // CanvasAdapter re-applies the pinned (0,0) viewport on every bump.
+      const sameBoard = state.board?.id === action.board.id;
+      if (sameBoard) {
+        const ids = new Set([...action.cards, ...action.unsortedCards].map((c) => c.id));
+        return {
+          ...state,
+          board: action.board,
+          breadcrumbs: action.breadcrumbs,
+          viewport: { ...state.viewport, zoom: action.viewport.zoom },
+          viewportRevision: action.viewportRevision,
+          cards: action.cards,
+          unsortedCards: action.unsortedCards,
+          selection: state.selection.filter((id) => ids.has(id)),
+          editingCardId:
+            state.editingCardId !== null && ids.has(state.editingCardId)
+              ? state.editingCardId
+              : null,
+          loading: false,
+          error: null,
+        };
+      }
+
+      // A genuine board switch reopens the board pinned to its top-left
+      // origin: one fixed visible surface, growing right/down only. Ignore any
+      // persisted viewport position so a prior pan never reopens the board
+      // scrolled away from the user's primary content.
       const viewport: CanvasViewport = {
         x: 0,
         y: 0,
@@ -116,6 +150,8 @@ export function reducer(
                 revision: action.revision,
                 documentJson: action.documentJson,
                 plainText: action.plainText,
+                // A successful write stored a valid document (P1.7).
+                corrupt: false,
               }
             : c,
         ),
@@ -131,6 +167,8 @@ export function reducer(
                 revision: action.revision,
                 captionJson: action.captionJson,
                 captionPlainText: action.captionPlainText,
+                // A successful write stored a valid document (P1.7).
+                corrupt: false,
               }
             : c,
         ),
@@ -146,6 +184,8 @@ export function reducer(
                 revision: action.revision,
                 descriptionJson: action.descriptionJson,
                 descriptionPlainText: action.descriptionPlainText,
+                // A successful write stored a valid document (P1.7).
+                corrupt: false,
               }
             : c,
         ),
@@ -157,6 +197,27 @@ export function reducer(
         cards: state.cards.map((c) => (c.id === action.id ? action.card : c)),
         editingCardId: state.editingCardId === action.id ? null : state.editingCardId,
       };
+
+    case "filesystemAliasUpdated": {
+      // Only the device-scoped fields move: the frame, z-order and revision
+      // the UI holds stay authoritative (a local re-point bumps no revision).
+      const update = (c: CardDto): CardDto =>
+        c.id === action.alias.id && c.kind === "filesystem_alias"
+          ? {
+              ...c,
+              local: action.alias.local,
+              originDeviceId: action.alias.originDeviceId,
+              originDeviceName: action.alias.originDeviceName,
+              pathHint: action.alias.pathHint,
+              displayName: action.alias.displayName,
+            }
+          : c;
+      return {
+        ...state,
+        cards: state.cards.map(update),
+        unsortedCards: state.unsortedCards.map(update),
+      };
+    }
 
     case "unsortedCardPlaced": {
       const card = state.unsortedCards.find((c) => c.id === action.id);
@@ -172,9 +233,9 @@ export function reducer(
     case "cardMovedToUnsorted": {
       const card = state.cards.find((c) => c.id === action.id);
       if (!card) return state;
-      // The backend bumped the card's revision on the move; reflect it so a
-      // later Place uses the current revision.
-      const moved = { ...card, revision: card.revision + 1 };
+      // The backend bumped the card's revision on the move; the receipt
+      // carries the authoritative value so a later Place uses it.
+      const moved = { ...card, revision: action.revision };
       return {
         ...state,
         cards: state.cards.filter((c) => c.id !== action.id),

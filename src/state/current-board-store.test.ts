@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { initialState, reducer, type CurrentBoardState } from "./current-board-store";
-import type { BoardSummary, EmbedCardDto, NoteCardDto } from "../services/workspace-gateway";
+import type {
+  BoardSummary,
+  EmbedCardDto,
+  FilesystemAliasDto,
+  NoteCardDto,
+} from "../services/workspace-gateway";
 
 const home: BoardSummary = {
   id: "home",
@@ -50,7 +55,47 @@ function embed(id: string): EmbedCardDto {
   };
 }
 
+function foreignAlias(id: string): FilesystemAliasDto {
+  return {
+    kind: "filesystem_alias",
+    id,
+    boardId: "home",
+    frame: { x: 10, y: 20, width: 300, height: 220 },
+    zIndex: 3,
+    revision: 4,
+    targetKind: "folder",
+    pathHint: "/Users/me/Research",
+    displayName: "Research",
+    originDeviceId: "studio-mac",
+    originDeviceName: "Studio Mac",
+    local: false,
+  };
+}
+
 describe("current board reducer", () => {
+  it("marks a shortcut local after it is pointed at a folder here (ADR-0012)", () => {
+    const onCanvas = foreignAlias("f1");
+    const inUnsorted = foreignAlias("f2");
+    const state: CurrentBoardState = {
+      ...initialState,
+      cards: [onCanvas, note("n1")],
+      unsortedCards: [inUnsorted],
+    };
+    // The backend answer carries a stale frame on purpose: only the
+    // device-scoped fields may move.
+    const answer = { ...onCanvas, local: true, frame: { x: 0, y: 0, width: 280, height: 180 } };
+    const next = reducer(state, { type: "filesystemAliasUpdated", alias: answer });
+    expect(next.cards[0]).toEqual({ ...onCanvas, local: true });
+    expect(next.cards[1]).toBe(state.cards[1]);
+    expect(next.unsortedCards[0]).toEqual(inUnsorted);
+
+    const unsorted = reducer(next, {
+      type: "filesystemAliasUpdated",
+      alias: { ...inUnsorted, local: true },
+    });
+    expect(unsorted.unsortedCards[0]).toMatchObject({ id: "f2", local: true });
+  });
+
   it("loads a snapshot and clears selection", () => {
     const state = reducer(
       { ...initialState, selection: ["x"] },
@@ -90,6 +135,14 @@ describe("current board reducer", () => {
 
     expect(state.unsortedCards).toEqual([]);
     expect(state.cards).toEqual([{ ...unsorted, frame, revision: 2 }]);
+  });
+
+  it("moves a card to Unsorted using the revision carried by the action", () => {
+    let state = reducer(initialState, { type: "cardAdded", card: note("a") });
+    state = reducer(state, { type: "cardMovedToUnsorted", id: "a", revision: 5 });
+    expect(state.cards).toEqual([]);
+    expect(state.unsortedCards).toHaveLength(1);
+    expect(state.unsortedCards[0].revision).toBe(5);
   });
 
   it("moves a card and bumps its revision", () => {
@@ -156,6 +209,93 @@ describe("current board reducer", () => {
         unsortedCards: [],
       },
     );
+    expect(state.editingCardId).toBeNull();
+    expect(state.selection).toEqual([]);
+  });
+
+  it("keeps pan, editing and selection when the same board is reloaded", () => {
+    // todo.md №26 (second cause): undo/redo, rename and the data_version poll
+    // reload the open board; that is not a board switch and must not snap the
+    // canvas back to the origin or close the note being edited.
+    let state = reducer(initialState, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [note("a"), note("b")],
+      unsortedCards: [],
+    });
+    const openRevision = state.boardOpenRevision;
+    state = reducer(state, { type: "viewportChanged", viewport: { x: 0, y: 0, zoom: 1.5 } });
+    state = reducer(state, { type: "editingStarted", id: "a" });
+    state = reducer(state, { type: "selectionChanged", ids: ["a", "b"] });
+
+    state = reducer(state, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1.5 },
+      viewportRevision: 2,
+      cards: [note("a")],
+      unsortedCards: [],
+    });
+    expect(state.boardOpenRevision).toBe(openRevision);
+    expect(state.viewport.zoom).toBe(1.5);
+    expect(state.viewportRevision).toBe(2);
+    expect(state.editingCardId).toBe("a");
+    // A card that vanished from the snapshot leaves the selection.
+    expect(state.selection).toEqual(["a"]);
+    expect(state.cards).toHaveLength(1);
+  });
+
+  it("drops editing when the edited card is gone from the reloaded snapshot", () => {
+    let state = reducer(initialState, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [note("a")],
+      unsortedCards: [],
+    });
+    state = reducer(state, { type: "editingStarted", id: "a" });
+    state = reducer(state, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [],
+      unsortedCards: [],
+    });
+    expect(state.editingCardId).toBeNull();
+    expect(state.selection).toEqual([]);
+  });
+
+  it("switching to another board resets pan, editing and selection", () => {
+    let state = reducer(initialState, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [note("a")],
+      unsortedCards: [],
+    });
+    const openRevision = state.boardOpenRevision;
+    state = reducer(state, { type: "editingStarted", id: "a" });
+    state = reducer(state, {
+      type: "snapshotLoaded",
+      board: { ...home, id: "other" },
+      breadcrumbs: [],
+      viewport: { x: 300, y: 200, zoom: 2 },
+      viewportRevision: 1,
+      cards: [note("a")],
+      unsortedCards: [],
+    });
+    expect(state.boardOpenRevision).toBe(openRevision + 1);
+    expect(state.viewport).toEqual({ x: 0, y: 0, zoom: 2 });
     expect(state.editingCardId).toBeNull();
     expect(state.selection).toEqual([]);
   });

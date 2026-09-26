@@ -17,6 +17,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Full debuginfo and incremental artifacts filled the ubuntu runner's disk
+  # (ld: Bus error, "No space left on device") on an uncached build. CI never
+  # attaches a debugger; line tables keep file:line in panic backtraces.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   gates:
@@ -32,7 +37,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
 
@@ -65,3 +70,150 @@ jobs:
 
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  linux-cargo:
+    # Runs the Rust gates on Linux too (P0 already made clippy pass here).
+    # This is separate from `gates` because the macOS job owns the
+    # frontend checks (typecheck/lint/vitest/e2e) and we don't want to
+    # duplicate those; this job only proves the Rust side builds and
+    # passes its gates on Linux.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            pkg-config \
+            libssl-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # The Rust build embeds the frontend bundle, so it has to exist before
+      # any cargo command runs. Frontend correctness itself (typecheck/lint/
+      # vitest/e2e) is already covered by the macOS `gates` job.
+      - name: Build the frontend bundle
+        run: npm run build
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust lints
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  windows-cargo:
+    # Proves the app builds and the Rust gates pass on Windows (path folder
+    # locator, opener, arboard clipboard, `cfg(windows)` path tests). Like
+    # `linux-cargo` it only builds the frontend bundle the Rust build embeds;
+    # frontend correctness stays with the macOS `gates` job, which remains the
+    # required one. No `tauri build` here: packaging is too slow for CI, and
+    # `cargo test` already compiles and links the app.
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # The Rust build embeds the frontend bundle, so it has to exist before
+      # any cargo command runs.
+      - name: Build the frontend bundle
+        run: npm run build
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust lints
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  security-audit:
+    # Dependency vulnerability scan. Deliberately NOT a `needs:` dependency
+    # of `gates`/`linux-cargo`/`windows-cargo` and they don't depend on it either, so a
+    # newly-introduced advisory (including ones that show up the first time
+    # this job runs, before anyone has triaged them) does not block those
+    # jobs or the ability to merge while the finding is being triaged.
+    # The job itself still fails on a real finding (continue-on-error is
+    # explicitly false below) rather than silently passing — to allow-list
+    # a specific advisory that has been reviewed and accepted, add its
+    # RUSTSEC id to `src-tauri/audit.toml` (see the comment in that file).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: npm audit (high and critical only)
+        run: npm audit --audit-level=high
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Prebuilt binary install (no compile) instead of `cargo install
+      # cargo-audit --locked`, which takes several minutes to build from
+      # source on every cache miss.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # cargo-audit only looks for its config at `./.cargo/audit.toml`
+      # (relative to the cwd it's run from) or `$CARGO_HOME/audit.toml` —
+      # it has no `--config` flag. We keep the human-edited file at
+      # `src-tauri/audit.toml` and stage it into the path cargo-audit
+      # actually reads.
+      - name: cargo audit
+        working-directory: src-tauri
+        run: |
+          mkdir -p .cargo
+          cp audit.toml .cargo/audit.toml
+          cargo audit

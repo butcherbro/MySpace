@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { isWindowsAbsolutePath, stripWrappingQuotes } from "../services/platform-path";
 
 export interface CanvasPasteData {
   html: string;
@@ -16,17 +17,27 @@ export interface CanvasPasteOptions {
   onPasteCards?: () => boolean;
   /**
    * Checked second, before text/html: a single-line clipboard text that looks
-   * like a filesystem path (`/…` or `~/…`, todo.md №23). Resolves to whether
+   * like a filesystem path (`/…`, `~/…`, or on Windows `C:\…` / `\\server\share…`,
+   * todo.md №23). Resolves to whether
    * it was handled (an existing folder/file became a shortcut/file card) — a
    * missing path resolves `false`, and the paste falls through to the normal
    * text/html note below.
    */
   onPastePath?: (path: string) => Promise<boolean>;
+  /**
+   * Called when the clipboard holds an image (a bitmap such as a screenshot,
+   * or a copied image file) and no plain text. The handler reads the image
+   * from the OS clipboard itself; the webview's `clipboardData` does not
+   * expose copied files' contents on every platform.
+   */
+  onPasteImage?: () => void;
 }
 
 /**
  * A single-line clipboard string shaped like an absolute or home-relative
- * filesystem path. Multi-line text is never a path candidate — even one that
+ * filesystem path — posix (`/…`, `~`, `~/…`) or Windows (`C:\…`, `C:/…`,
+ * `\\server\share…`, `~\…`), optionally wrapped in the double quotes that
+ * Explorer's "Copy as path" adds. Multi-line text is never a path candidate — even one that
  * starts with `/` — so a copied code snippet or log excerpt keeps going to
  * the normal note paste instead of a (failed) existence check.
  */
@@ -34,7 +45,9 @@ export function extractPathCandidate(text: string): string | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
   if (trimmed.includes("\n") || trimmed.includes("\r")) return null;
-  if (trimmed.startsWith("/") || trimmed.startsWith("~/") || trimmed === "~") return trimmed;
+  const path = stripWrappingQuotes(trimmed);
+  if (path.startsWith("/") || path.startsWith("~/") || path.startsWith("~\\") || path === "~") return path;
+  if (isWindowsAbsolutePath(path)) return path;
   return null;
 }
 
@@ -52,7 +65,24 @@ export function extractPathCandidate(text: string): string | null {
  * canvas-paste path existed before this hook, and building it is out of scope
  * for formatted-text paste (todo.md №13).
  */
-export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath }: CanvasPasteOptions): void {
+/**
+ * True when the paste carries an image and no plain text. Images win over
+ * HTML because "Copy image" in browsers puts an `<img>` tag next to the
+ * bitmap; plain text wins over images because Office apps add a rendered
+ * picture next to the real text.
+ */
+export function isImagePaste(data: DataTransfer | null): boolean {
+  if (!data) return false;
+  const text = data.getData("text/plain");
+  if (text.trim()) return false;
+  const items = Array.from(data.items ?? []);
+  if (items.some((i) => i.kind === "file" && i.type.startsWith("image/"))) return true;
+  if (Array.from(data.files ?? []).some((f) => f.type.startsWith("image/"))) return true;
+  // A file copied in Finder/Explorer can arrive as an untyped "Files" entry.
+  return Array.from(data.types ?? []).includes("Files");
+}
+
+export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath, onPasteImage }: CanvasPasteOptions): void {
   useEffect(() => {
     if (!enabled) return;
 
@@ -90,6 +120,12 @@ export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath }: 
         return;
       }
 
+      if (onPasteImage && isImagePaste(e.clipboardData)) {
+        e.preventDefault();
+        onPasteImage();
+        return;
+      }
+
       const html = e.clipboardData?.getData("text/html") ?? "";
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!html.trim() && !text.trim()) return;
@@ -112,5 +148,5 @@ export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath }: 
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [enabled, onPaste, onPasteCards, onPastePath]);
+  }, [enabled, onPaste, onPasteCards, onPastePath, onPasteImage]);
 }

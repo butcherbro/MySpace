@@ -7,6 +7,7 @@ function gatewaySpy() {
   const gateway = {
     moveCardToBoard: vi.fn(async (input: MoveCardToBoardInput) => {
       calls.push(input);
+      return { id: input.id, revision: input.expectedRevision + 1 };
     }),
   } as unknown as WorkspaceGateway;
   return { gateway, calls };
@@ -77,7 +78,12 @@ describe("MoveCardsCommand", () => {
   it("uses the current revision through repeated undo and redo", async () => {
     const calls: MoveCardsInput[] = [];
     const gateway = {
-      moveCards: vi.fn(async (input: MoveCardsInput) => { calls.push(input); }),
+      moveCards: vi.fn(async (input: MoveCardsInput) => {
+        calls.push(input);
+        return {
+          cards: input.cards.map((c) => ({ id: c.id, revision: c.expectedRevision + 1 })),
+        };
+      }),
     } as unknown as WorkspaceGateway;
     const cmd = new MoveCardsCommand("move", [
       { id: "note-1", revision: 7, before: sourceFrame, after: targetFrame },
@@ -94,7 +100,7 @@ describe("MoveCardsCommand", () => {
 describe("CreateNoteCommand", () => {
   it("redoes a soft-deleted note by restoring its trash batch", async () => {
     const gateway = {
-      createNote: vi.fn(async () => {}),
+      createNote: vi.fn(async () => ({ id: "note-1", revision: 1 })),
       trashNote: vi.fn(async () => "batch-note"),
       restoreTrashBatch: vi.fn(async () => {}),
     } as unknown as WorkspaceGateway;
@@ -104,7 +110,6 @@ describe("CreateNoteCommand", () => {
       frame: sourceFrame,
       zIndex: 0,
       documentJson: { type: "doc" },
-      plainText: "",
     });
 
     await cmd.execute(gateway);
@@ -130,7 +135,6 @@ describe("CreateImageCardCommand", () => {
       zIndex: 0,
       assetId: "asset-1",
       captionJson: { type: "doc" },
-      captionPlainText: "",
     });
 
     await cmd.execute(gateway);
@@ -154,7 +158,6 @@ describe("CreateImageCardCommand", () => {
       zIndex: 0,
       assetId: "asset-1",
       captionJson: { type: "doc" },
-      captionPlainText: "",
     });
 
     await cmd.execute(gateway);

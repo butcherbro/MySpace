@@ -7,6 +7,7 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{AddQuickBoardInput, AssetDto, QuickBoardDto, ReorderQuickBoardsInput};
 
 use super::super::db;
+use super::immediate_tx;
 
 // --- Quick Boards (persistent references, ADR-0005 entity addressing) ---
 
@@ -15,7 +16,8 @@ use super::super::db;
 pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, WorkspaceError> {
     let mut stmt = conn.prepare(
         "SELECT qb.board_id, b.title, b.color_token, b.symbol, qb.sort_order,
-                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path
+                ca.id, ca.file_name, ca.mime_type, ca.width, ca.height, ca.size_bytes, ca.file_path,
+                ca.sha256
          FROM quick_boards qb
          JOIN boards b ON b.id = qb.board_id
          LEFT JOIN assets ca ON ca.id = b.cover_asset_id
@@ -32,6 +34,7 @@ pub fn list_quick_boards(conn: &Connection) -> Result<Vec<QuickBoardDto>, Worksp
                 height: row.get(9)?,
                 size_bytes: row.get(10)?,
                 file_path: row.get(11)?,
+                sha256: row.get(12)?,
             })
         } else {
             None
@@ -60,7 +63,11 @@ pub fn add_quick_board(
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
 
-    let is_root: i64 = conn.query_row(
+    // BEGIN IMMEDIATE before the guards so the root/active/pinned checks, the
+    // next sort order and the insert are atomic against another writer.
+    let tx = immediate_tx(conn)?;
+
+    let is_root: i64 = tx.query_row(
         "SELECT COUNT(*) FROM workspaces WHERE root_board_id = ?1",
         [input.board_id.as_str()],
         |r| r.get(0),
@@ -69,7 +76,7 @@ pub fn add_quick_board(
         return Err(WorkspaceError::RootBoardProtected);
     }
 
-    let active: i64 = conn.query_row(
+    let active: i64 = tx.query_row(
         "SELECT COUNT(*) FROM boards WHERE id = ?1 AND deleted_at IS NULL",
         [input.board_id.as_str()],
         |r| r.get(0),
@@ -79,7 +86,7 @@ pub fn add_quick_board(
     }
 
     // Idempotent: already pinned -> no-op.
-    let pinned: i64 = conn.query_row(
+    let pinned: i64 = tx.query_row(
         "SELECT COUNT(*) FROM quick_boards WHERE board_id = ?1",
         [input.board_id.as_str()],
         |r| r.get(0),
@@ -88,25 +95,29 @@ pub fn add_quick_board(
         return Ok(());
     }
 
-    let next: i64 = conn.query_row(
+    let next: i64 = tx.query_row(
         "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM quick_boards",
         [],
         |r| r.get(0),
     )?;
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO quick_boards (board_id, sort_order, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?3)",
         params![input.board_id, next, now],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
 /// Removes a Quick Board reference. Removing an unpinned Board is a no-op.
 pub fn remove_quick_board(conn: &mut Connection, board_id: &str) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
+    // BEGIN IMMEDIATE before reading the position so the renumbering uses the
+    // position that is actually deleted.
+    let tx = immediate_tx(conn)?;
     // Delete the reference; renumber subsequent positions so the order stays dense.
-    let removed = conn
+    let removed = tx
         .prepare("SELECT sort_order FROM quick_boards WHERE board_id = ?1")
         .and_then(|mut stmt| {
             let mut rows = stmt.query([board_id])?;
@@ -120,7 +131,6 @@ pub fn remove_quick_board(conn: &mut Connection, board_id: &str) -> Result<(), W
         return Ok(()); // no-op
     }
 
-    let tx = conn.transaction()?;
     tx.execute("DELETE FROM quick_boards WHERE board_id = ?1", [board_id])?;
     tx.execute(
         "UPDATE quick_boards SET sort_order = sort_order - 1, updated_at = ?1 WHERE sort_order > ?2",
@@ -137,7 +147,7 @@ pub fn reorder_quick_boards(
     input: &ReorderQuickBoardsInput,
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
-    let tx = conn.transaction()?;
+    let tx = immediate_tx(conn)?;
 
     let current_count: i64 = tx.query_row("SELECT COUNT(*) FROM quick_boards", [], |r| r.get(0))?;
     if current_count as usize != input.board_ids.len() {

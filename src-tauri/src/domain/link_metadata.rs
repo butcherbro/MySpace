@@ -1,12 +1,22 @@
 //! Link Card metadata enrichment.
 //!
 //! Conversion from Note to Embed is intentionally local and immediate. This
-//! service runs later: fetches bounded web metadata, imports preview/favicons
-//! as managed assets, then applies a short revision-guarded DB transaction.
+//! service runs later, in two halves (single-writer model, P1.1):
+//!
+//! 1. [`plan_embed_enrichment`] — off the writer thread: reads the card and the
+//!    favicon cache on a pooled reader, fetches bounded web metadata, stages
+//!    preview/favicon images as files. Produces an [`EmbedEnrichmentPlan`].
+//! 2. `Mutation::ApplyEmbedMetadata(Box::new(plan))` — on the writer thread, no network:
+//!    [`commit_embed_enrichment`] records the asset and favicon-cache rows and
+//!    applies the revision-guarded card update.
+//!
+//! [`enrich_embed`] (async, Tauri) and [`enrich_embed_blocking`] (MCP, tests)
+//! compose the two halves through a [`Workspace`].
 
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::blocking::Client;
@@ -14,12 +24,15 @@ use reqwest::redirect::Policy;
 use serde_json::Value;
 use url::{form_urlencoded, Host, Url};
 
-use crate::domain::asset_service;
+use crate::app::Workspace;
+use crate::domain::asset_service::{self, StagedAsset};
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::ApplyEmbedMetadataInput;
+use crate::domain::models::{ApplyEmbedMetadataInput, EmbedCardDto};
+use crate::domain::mutation::Mutation;
+use crate::domain::plain_text::plain_text_to_document as plain_text_document;
 use crate::repositories::workspace_repository;
 
-use rusqlite::OptionalExtension;
+use rusqlite::{Connection, OptionalExtension};
 
 const MAX_REDIRECTS: usize = 5;
 const TEXT_LIMIT: usize = 2 * 1024 * 1024;
@@ -284,6 +297,11 @@ pub fn extract_html_metadata(base_url: &str, html: &str) -> Result<LinkMetadata,
 /// Collapses existing duplicate favicons onto one stored asset each, so the
 /// regular asset GC can delete the redundant copies. Runs once at startup.
 ///
+/// Retired by hash dedup (P1.2): enrichment now reuses any asset with the same
+/// SHA-256, so no new duplicates appear. Kept for one more release to clean up
+/// duplicates created before migration 0020; delete it (and
+/// `Mutation::CollapseFaviconDuplicates`) in the next release.
+///
 /// Identity is the stored bytes. The runtime cache keys favicons by their source
 /// URL, but a card's favicon URL was never recorded, so for an asset already on
 /// disk the bytes are the only identity that can be verified: two assets merge
@@ -332,7 +350,7 @@ pub fn collapse_favicon_duplicates(
     }
 
     let mut collapsed = 0i64;
-    let tx = conn.transaction().map_err(WorkspaceError::from)?;
+    let tx = crate::repositories::immediate_tx(conn).map_err(WorkspaceError::from)?;
     for (_, asset_ids) in groups.iter().filter(|(_, ids)| ids.len() > 1) {
         let Some(canonical) = asset_ids.first() else {
             continue;
@@ -363,90 +381,237 @@ pub fn collapse_favicon_duplicates(
     Ok(collapsed)
 }
 
-pub fn enrich_embed_with_metadata(
-    conn: &mut rusqlite::Connection,
+/// A favicon-cache row to record when the enrichment is applied: the favicon
+/// URL (the cache key) and the asset that now holds its bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaviconCacheEntry {
+    pub source_url: String,
+    pub asset_id: String,
+}
+
+/// The result of the network half of link enrichment, ready for the writer.
+///
+/// Produced by [`plan_embed_enrichment`] (read-only DB access, network I/O,
+/// staged files) and consumed by `Mutation::ApplyEmbedMetadata`, which records
+/// the staged asset rows, the favicon-cache rows and the card update. Whoever
+/// holds the plan owns the staged files: [`EmbedEnrichmentPlan::discard`]
+/// removes them if the plan is never applied.
+pub struct EmbedEnrichmentPlan {
+    pub update: ApplyEmbedMetadataInput,
+    /// Downloaded images already written under the asset dir, without rows.
+    pub staged_assets: Vec<StagedAsset>,
+    pub favicon_cache_entries: Vec<FaviconCacheEntry>,
+}
+
+impl EmbedEnrichmentPlan {
+    /// Removes every staged file. Only for a plan that will not be applied.
+    pub fn discard(&self) {
+        for staged in &self.staged_assets {
+            asset_service::discard_staged(staged);
+        }
+    }
+}
+
+/// Network half of link enrichment. Reads the card and the favicon cache from
+/// `conn` (a pooled reader: this function never writes to the database),
+/// fetches the page metadata and images, and stages downloaded images as files.
+///
+/// A failed page fetch is not an error: it yields a `"failed"` update with no
+/// staged assets, exactly as before the single-writer split. On an `Err`
+/// return nothing is left staged on disk.
+pub fn plan_embed_enrichment(
+    conn: &Connection,
     asset_dir: &Path,
     fetcher: &dyn MetadataFetcher,
     id: &str,
     expected_revision: i64,
-) -> Result<crate::domain::models::EmbedCardDto, WorkspaceError> {
+) -> Result<EmbedEnrichmentPlan, WorkspaceError> {
     let embed = workspace_repository::load_embed_for_metadata(conn, id, expected_revision)?;
     let source_url = embed.source_url.clone();
 
-    let result = fetch_link_metadata(fetcher, &source_url);
-    let update = match result {
-        Ok(metadata) => {
-            let preview_asset_id = download_optional_image(
-                conn,
-                asset_dir,
-                fetcher,
-                metadata.preview_url.as_deref(),
-                "preview",
-                None,
-            )?;
-            let favicon_asset_id = download_optional_image(
-                conn,
-                asset_dir,
-                fetcher,
-                metadata.favicon_url.as_deref(),
-                "favicon",
-                metadata.favicon_url.as_deref(),
-            )?;
-            // A user-authored description is authoritative and never overwritten
-            // by site metadata. Fall back to the site description only when empty.
-            let user_description = embed.description_plain_text.trim();
-            let is_user_origin = embed.description_origin.as_deref() == Some("user");
-            let (description, description_origin) =
-                if !user_description.is_empty() && is_user_origin {
-                    (user_description.to_string(), Some("user".to_string()))
-                } else if user_description.is_empty() {
-                    let site = metadata.description.unwrap_or_default();
-                    (
-                        site.clone(),
-                        if site.is_empty() {
-                            None
-                        } else {
-                            Some("site".to_string())
-                        },
-                    )
-                } else {
-                    // Non-empty but not user-marked (legacy rows): keep it, mark as user.
-                    (user_description.to_string(), Some("user".to_string()))
-                };
-            ApplyEmbedMetadataInput {
-                id: id.to_string(),
-                expected_revision,
-                display_url: display_url(&metadata.final_url).unwrap_or(embed.display_url),
-                site_name: metadata.site_name,
-                title: metadata.title.unwrap_or(embed.title),
-                provider: metadata.provider,
-                description_json: plain_text_document(&description),
-                description_plain_text: description,
-                description_origin,
-                preview_asset_id,
-                favicon_asset_id,
-                metadata_status: "ready".to_string(),
-                metadata_error: None,
-            }
-        }
-        Err(error) => ApplyEmbedMetadataInput {
+    let mut plan = EmbedEnrichmentPlan {
+        update: ApplyEmbedMetadataInput {
             id: id.to_string(),
             expected_revision,
-            display_url: embed.display_url,
+            display_url: embed.display_url.clone(),
             site_name: None,
-            title: embed.title,
+            title: embed.title.clone(),
             provider: None,
             description_json: plain_text_document(&embed.description_plain_text),
-            description_plain_text: embed.description_plain_text.clone(),
             description_origin: embed.description_origin.clone(),
             preview_asset_id: None,
             favicon_asset_id: None,
             metadata_status: "failed".to_string(),
-            metadata_error: Some(error.to_string()),
+            metadata_error: None,
         },
+        staged_assets: Vec::new(),
+        favicon_cache_entries: Vec::new(),
     };
 
-    workspace_repository::apply_embed_metadata(conn, &update)
+    let metadata = match fetch_link_metadata(fetcher, &source_url) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            plan.update.metadata_error = Some(error.to_string());
+            return Ok(plan);
+        }
+    };
+
+    let images = stage_optional_image(
+        conn,
+        asset_dir,
+        fetcher,
+        metadata.preview_url.as_deref(),
+        "preview",
+        false,
+        &mut plan,
+    )
+    .and_then(|preview| {
+        let favicon = stage_optional_image(
+            conn,
+            asset_dir,
+            fetcher,
+            metadata.favicon_url.as_deref(),
+            "favicon",
+            true,
+            &mut plan,
+        )?;
+        Ok((preview, favicon))
+    });
+    let (preview_asset_id, favicon_asset_id) = match images {
+        Ok(ids) => ids,
+        Err(err) => {
+            plan.discard();
+            return Err(err);
+        }
+    };
+
+    // A user-authored description is authoritative and never overwritten by
+    // site metadata. Fall back to the site description only when empty.
+    let user_description = embed.description_plain_text.trim();
+    let is_user_origin = embed.description_origin.as_deref() == Some("user");
+    let (description, description_origin) = if !user_description.is_empty() && is_user_origin {
+        (user_description.to_string(), Some("user".to_string()))
+    } else if user_description.is_empty() {
+        let site = metadata.description.unwrap_or_default();
+        let origin = if site.is_empty() {
+            None
+        } else {
+            Some("site".to_string())
+        };
+        (site, origin)
+    } else {
+        // Non-empty but not user-marked (legacy rows): keep it, mark as user.
+        (user_description.to_string(), Some("user".to_string()))
+    };
+
+    plan.update = ApplyEmbedMetadataInput {
+        id: id.to_string(),
+        expected_revision,
+        display_url: display_url(&metadata.final_url).unwrap_or(embed.display_url),
+        site_name: metadata.site_name,
+        title: metadata.title.unwrap_or(embed.title),
+        provider: metadata.provider,
+        description_json: plain_text_document(&description),
+        description_origin,
+        preview_asset_id,
+        favicon_asset_id,
+        metadata_status: "ready".to_string(),
+        metadata_error: None,
+    };
+    Ok(plan)
+}
+
+/// Records one favicon-cache row. Takes `&Connection` so it runs inside the
+/// caller's transaction.
+pub fn insert_favicon_cache_entry(
+    conn: &Connection,
+    entry: &FaviconCacheEntry,
+) -> Result<(), WorkspaceError> {
+    conn.execute(
+        "INSERT OR REPLACE INTO favicon_cache (source_url, asset_id) VALUES (?1, ?2)",
+        rusqlite::params![entry.source_url, entry.asset_id],
+    )?;
+    Ok(())
+}
+
+/// Records an enrichment plan on the writer connection in ONE immediate
+/// transaction: asset rows for the staged files, favicon-cache rows, then the
+/// card update with its revision guard. No network I/O.
+///
+/// Failure handling follows the writer's retry contract: on a busy database
+/// nothing was written and the staged files stay on disk for the re-run; on
+/// any other error the transaction rolled back, so the staged files are
+/// deleted here (there are never rows without files, and no files without
+/// rows once this returns).
+pub fn commit_embed_enrichment(
+    conn: &mut Connection,
+    plan: &EmbedEnrichmentPlan,
+) -> Result<EmbedCardDto, WorkspaceError> {
+    let outcome = commit_embed_enrichment_rows(conn, plan);
+    if let Err(err) = &outcome {
+        if !err.is_busy() {
+            plan.discard();
+        }
+    }
+    outcome
+}
+
+fn commit_embed_enrichment_rows(
+    conn: &mut Connection,
+    plan: &EmbedEnrichmentPlan,
+) -> Result<EmbedCardDto, WorkspaceError> {
+    let tx = crate::repositories::immediate_tx(conn)?;
+    for staged in &plan.staged_assets {
+        asset_service::insert_asset_row(&tx, &staged.asset)?;
+    }
+    for entry in &plan.favicon_cache_entries {
+        insert_favicon_cache_entry(&tx, entry)?;
+    }
+    workspace_repository::apply_embed_metadata_in_tx(&tx, &plan.update)?;
+    tx.commit()?;
+    workspace_repository::load_embed_card(conn, &plan.update.id)
+}
+
+/// Async entry point for the Tauri command: plans on a pooled reader off the
+/// async runtime, then applies the plan on the writer thread.
+pub async fn enrich_embed(
+    ws: &Workspace,
+    fetcher: Arc<dyn MetadataFetcher + Send + Sync>,
+    id: String,
+    expected_revision: i64,
+) -> Result<EmbedCardDto, WorkspaceError> {
+    let reader = ws.clone();
+    // TODO(P1.x): the network phase holds one of the READ_POOL_SIZE (2) pooled
+    // connections for the whole fetch (up to ~10 s per request). Split the
+    // favicon-cache lookup into its own short read so the fetch runs with no
+    // connection checked out.
+    let plan = tokio::task::spawn_blocking(move || {
+        let asset_dir = reader.paths().assets_dir();
+        reader.read_blocking(|conn| {
+            plan_embed_enrichment(conn, &asset_dir, fetcher.as_ref(), &id, expected_revision)
+        })
+    })
+    .await
+    .map_err(|e| WorkspaceError::Database(format!("metadata task failed: {e}")))??;
+    ws.apply(Mutation::ApplyEmbedMetadata(Box::new(plan)))
+        .await?
+        .into_embed()
+}
+
+/// Blocking entry point for synchronous callers (the MCP stdio binary, tests).
+/// Never call it from inside the async runtime.
+pub fn enrich_embed_blocking(
+    ws: &Workspace,
+    fetcher: &dyn MetadataFetcher,
+    id: &str,
+    expected_revision: i64,
+) -> Result<EmbedCardDto, WorkspaceError> {
+    let asset_dir = ws.paths().assets_dir();
+    let plan = ws.read_blocking(|conn| {
+        plan_embed_enrichment(conn, &asset_dir, fetcher, id, expected_revision)
+    })?;
+    ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))?
+        .into_embed()
 }
 
 fn fetch_link_metadata(
@@ -508,13 +673,19 @@ fn parse_oembed(source_url: &str, response: &FetchResponse) -> Result<LinkMetada
     })
 }
 
-fn download_optional_image(
-    conn: &mut rusqlite::Connection,
+/// Resolves one optional image for a plan. A favicon (`use_cache`) first
+/// consults `favicon_cache`: a hit whose asset row still exists is reused and
+/// nothing is staged. Otherwise the image is fetched and staged as a file; the
+/// row (and, for a favicon, the cache row) is added to the plan for the writer.
+/// A failed image fetch is not an error: the card simply has no image.
+fn stage_optional_image(
+    conn: &Connection,
     asset_dir: &Path,
     fetcher: &dyn MetadataFetcher,
     url: Option<&str>,
     fallback_name: &str,
-    cache_key: Option<&str>,
+    use_cache: bool,
+    plan: &mut EmbedEnrichmentPlan,
 ) -> Result<Option<String>, WorkspaceError> {
     let Some(url) = url else {
         return Ok(None);
@@ -522,27 +693,19 @@ fn download_optional_image(
     validate_public_http_url(url)
         .map_err(|e| WorkspaceError::ConstraintViolation(e.to_string()))?;
 
-    // Favicon dedup: reuse one stored asset per source URL.
-    if let Some(key) = cache_key {
+    // Favicon dedup: reuse one stored asset per favicon URL.
+    if use_cache {
         let existing: Option<String> = conn
             .query_row(
-                "SELECT asset_id FROM favicon_cache WHERE source_url = ?1",
-                [key],
+                "SELECT c.asset_id FROM favicon_cache c
+                 JOIN assets a ON a.id = c.asset_id
+                 WHERE c.source_url = ?1",
+                [url],
                 |r| r.get(0),
             )
             .optional()?;
         if let Some(asset_id) = existing {
-            // Confirm the asset row still exists (it may have been GC'd).
-            let still = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM assets WHERE id = ?1",
-                    [&asset_id],
-                    |r| r.get::<_, i64>(0),
-                )
-                .unwrap_or(0);
-            if still > 0 {
-                return Ok(Some(asset_id));
-            }
+            return Ok(Some(asset_id));
         }
     }
 
@@ -552,20 +715,47 @@ fn download_optional_image(
     };
     let file_name =
         filename_from_url(&response.final_url).unwrap_or_else(|| fallback_name.to_string());
-    let asset = asset_service::store_asset_bytes(
-        conn,
+    let staged = asset_service::stage_asset_bytes(
         asset_dir,
         &file_name,
         &response.mime_type,
         &response.bytes,
     )?;
-    if let Some(key) = cache_key {
-        conn.execute(
-            "INSERT OR REPLACE INTO favicon_cache (source_url, asset_id) VALUES (?1, ?2)",
-            rusqlite::params![key, asset.id],
-        )?;
+    // Dedup by hash (P1.2): the same bytes already staged by this plan (a page
+    // whose preview is its favicon) or already stored as an asset are reused,
+    // and the fresh copy is dropped. This retires the startup favicon
+    // collapse: duplicates are never created in the first place.
+    let reused = match staged.asset.sha256.as_deref() {
+        None => None,
+        Some(sha256) => match plan
+            .staged_assets
+            .iter()
+            .find(|other| other.asset.sha256.as_deref() == Some(sha256))
+        {
+            Some(other) => Some(other.asset.id.clone()),
+            None => asset_service::find_asset_by_sha256(conn, sha256)
+                .inspect_err(|_| asset_service::discard_staged(&staged))?
+                .map(|existing| existing.id),
+        },
+    };
+    let asset_id = match reused {
+        Some(existing_id) => {
+            asset_service::discard_staged(&staged);
+            existing_id
+        }
+        None => {
+            let id = staged.asset.id.clone();
+            plan.staged_assets.push(staged);
+            id
+        }
+    };
+    if use_cache {
+        plan.favicon_cache_entries.push(FaviconCacheEntry {
+            source_url: url.to_string(),
+            asset_id: asset_id.clone(),
+        });
     }
-    Ok(Some(asset.id))
+    Ok(Some(asset_id))
 }
 
 fn validate_public_url_without_dns(url: &Url) -> Result<(), FetchError> {
@@ -804,19 +994,5 @@ fn display_url(source: &str) -> Option<String> {
         Some(host.to_string())
     } else {
         Some(format!("{host}{path}"))
-    }
-}
-
-fn plain_text_document(text: &str) -> Value {
-    if text.is_empty() {
-        serde_json::json!({"type":"doc","content":[{"type":"paragraph"}]})
-    } else {
-        serde_json::json!({
-            "type": "doc",
-            "content": [{
-                "type": "paragraph",
-                "content": [{ "type": "text", "text": text }]
-            }]
-        })
     }
 }

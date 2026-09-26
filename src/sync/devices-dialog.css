@@ -1,0 +1,224 @@
+/* Devices dialog (ADR-0011 S3). Same surface as the restore dialog. */
+.devices-dialog {
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 14px;
+  background: var(--paper-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-menu);
+  box-shadow: var(--shadow-menu);
+  color: var(--ink);
+}
+
+.devices-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.devices-dialog__title {
+  margin: 0;
+  font: 600 15px/1.2 var(--font-ui);
+}
+
+.devices-dialog__close {
+  border: none;
+  background: transparent;
+  color: var(--ink-secondary);
+  font: 400 18px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.devices-dialog__section {
+  padding: 10px 0;
+  border-top: 1px solid var(--edge-subtle);
+}
+
+.devices-dialog__section:first-of-type {
+  border-top: none;
+}
+
+.devices-dialog__heading {
+  margin: 0 0 6px;
+  font: 600 12px/1.2 var(--font-ui);
+  color: var(--ink-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.devices-dialog__inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.devices-dialog__inline--wrap {
+  flex-wrap: wrap;
+}
+
+.devices-dialog__name {
+  font: 500 13px/1.3 var(--font-ui);
+}
+
+.devices-dialog__hint {
+  margin: 0 0 6px;
+  font: 400 12px/1.4 var(--font-ui);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+
+.devices-dialog__code {
+  margin: 4px 0 6px;
+  font: 600 32px/1.1 var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}
+
+.devices-dialog__input {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 13px/1.3 var(--font-ui);
+}
+
+.devices-dialog__input--code {
+  flex: 0 0 84px;
+  font-variant-numeric: tabular-nums;
+}
+
+.devices-dialog__button,
+.devices-dialog__link {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink);
+  font: 500 12px/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.devices-dialog__link {
+  border-color: transparent;
+  color: var(--ink-secondary);
+  padding: 2px 6px;
+}
+
+.devices-dialog__button:hover:not(:disabled),
+.devices-dialog__link:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.devices-dialog__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.devices-dialog__button--primary {
+  border-color: var(--accent, var(--ink));
+}
+
+.devices-dialog__button--danger {
+  color: var(--danger);
+}
+
+.devices-dialog__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.devices-dialog__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+}
+
+.devices-dialog__row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.devices-dialog__row-name {
+  font: 500 13px/1.3 var(--font-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devices-dialog__row-meta {
+  font: 400 12px/1.3 var(--font-ui);
+  color: var(--ink-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.devices-dialog__row-error {
+  font: 400 12px/1.3 var(--font-ui);
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.devices-dialog__row-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.devices-dialog__row .devices-dialog__inline {
+  margin-bottom: 0;
+}
+
+.devices-dialog__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-tertiary, #9a9a9a);
+}
+
+.devices-dialog__dot--online {
+  background: var(--success, #2f9e5b);
+}
+
+.devices-dialog__error {
+  margin: 8px 0 0;
+  font: 400 12px/1.4 var(--font-ui);
+  color: var(--danger);
+}
+
+.devices-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.2);
+  z-index: 90;
+}
+
+.devices-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 91;
+  pointer-events: none;
+}
+
+.devices-dialog-overlay > * {
+  pointer-events: auto;
+}

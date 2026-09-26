@@ -1,0 +1,95 @@
+/* Overlay scrollbars (CanvasScrollbars.tsx). The wrapper is a zero-size
+   layer: only the strips themselves take pointer events, so wheel and pane
+   clicks outside them reach React Flow untouched. */
+.canvas-scrollbars {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6; /* above React Flow panels / attribution (5) */
+}
+
+.canvas-scrollbar {
+  --scrollbar-thickness: 8px;
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 240ms ease;
+}
+
+.canvas-scrollbar[data-active="true"] {
+  opacity: 1;
+  transition-duration: 80ms;
+}
+
+.canvas-scrollbar:hover,
+.canvas-scrollbar[data-dragging="true"] {
+  --scrollbar-thickness: 10px;
+}
+
+/* The strip is the 12px hit area; the drawn track is the inner band. */
+.canvas-scrollbar::before {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.canvas-scrollbar--horizontal {
+  left: 0;
+  bottom: 0;
+  height: 12px;
+}
+
+.canvas-scrollbar--horizontal::before {
+  left: 0;
+  right: 0;
+  bottom: 2px;
+  height: var(--scrollbar-thickness);
+}
+
+.canvas-scrollbar--vertical {
+  top: 0;
+  right: 0;
+  width: 12px;
+}
+
+.canvas-scrollbar--vertical::before {
+  top: 0;
+  bottom: 0;
+  right: 2px;
+  width: var(--scrollbar-thickness);
+}
+
+.canvas-scrollbar__thumb {
+  position: absolute;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+  transition: background-color 120ms ease;
+}
+
+.canvas-scrollbar:hover .canvas-scrollbar__thumb,
+.canvas-scrollbar[data-dragging="true"] .canvas-scrollbar__thumb {
+  background: color-mix(in srgb, var(--ink) 52%, transparent);
+}
+
+.canvas-scrollbar--horizontal .canvas-scrollbar__thumb {
+  left: 0;
+  bottom: 2px;
+  height: var(--scrollbar-thickness);
+}
+
+.canvas-scrollbar--vertical .canvas-scrollbar__thumb {
+  top: 0;
+  right: 2px;
+  width: var(--scrollbar-thickness);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-scrollbar,
+  .canvas-scrollbar::before,
+  .canvas-scrollbar__thumb {
+    transition: none;
+  }
+}

@@ -113,12 +113,13 @@
 
 /* Note preview: readable text. */
 .unsorted-panel__note {
-  font-family: var(--font-content);
+  font-family: var(--font-text);
   font-size: 14px;
   line-height: 1.45;
   color: var(--ink);
   white-space: pre-wrap;
   word-break: break-word;
+  font-feature-settings: var(--font-text-features);
 }
 
 .unsorted-panel__folder {
@@ -186,8 +187,9 @@
 }
 
 .unsorted-panel__caption {
-  font: 400 13px/1.4 var(--font-content);
+  font: 400 13px/1.4 var(--font-text);
   color: var(--ink-secondary);
+  font-feature-settings: var(--font-text-features);
 }
 
 /* Link preview: media on top, then source/title/description. */
@@ -220,15 +222,16 @@
 }
 
 .unsorted-panel__link-title {
-  font: 500 13px/1.35 var(--font-content);
+  font: 500 13px/1.35 var(--font-text);
   color: var(--link);
 }
 
 .unsorted-panel__link-desc {
-  font: 400 13px/1.4 var(--font-content);
+  font: 400 13px/1.4 var(--font-text);
   color: var(--ink-secondary);
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
+  font-feature-settings: var(--font-text-features);
 }

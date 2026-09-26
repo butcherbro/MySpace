@@ -1,0 +1,67 @@
+/* Non-blocking update banner: above the Trash drawer (40) and panels, below
+   the modal dialogs (90/91) and menus. */
+.update-prompt {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 80;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--paper-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-menu);
+  box-shadow: var(--shadow-menu);
+}
+
+.update-prompt__text {
+  margin: 0;
+  font: 500 13px/1.4 var(--font-ui);
+  color: var(--ink);
+}
+
+.update-prompt__error {
+  margin: 0;
+  font: 400 12px/1.4 var(--font-ui);
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.update-prompt__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.update-prompt__button {
+  padding: 5px 10px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink);
+  font: 500 12px/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.update-prompt__button:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.update-prompt__button--primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper-raised);
+}
+
+.update-prompt__button--primary:hover {
+  background: color-mix(in srgb, var(--ink) 85%, transparent);
+}
+
+.update-prompt__progress {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--edge-focus);
+}

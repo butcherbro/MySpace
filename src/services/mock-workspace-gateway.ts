@@ -1,11 +1,15 @@
 import type {
   AddQuickBoardInput,
   AssetDto,
+  BackupSummary,
   BoardPortalDto,
   BoardShortcutDto,
+  BoardChangeSeq,
   BoardSnapshot,
   BoardSummary,
   CardDto,
+  CardReceipt,
+  CardsReceipt,
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateBoardShortcutInput,
@@ -14,6 +18,7 @@ import type {
   CreateFolderAliasInput,
   CreateImageCardInput,
   CreateNoteInput,
+  DeviceIdentity,
   DuplicateBoardInput,
   DuplicateBoardReceipt,
   EmbedCardDto,
@@ -37,15 +42,27 @@ import type {
   SearchResultDto,
   SetBoardCoverInput,
   SetNoteColorInput,
+  StartupFailure,
+  TextReceipt,
   TrashEntryDto,
   TrashSelectionInput,
   TrashSummaryDto,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
+  ViewportReceipt,
   WorkspaceGateway,
 } from "./workspace-gateway";
+import type {
+  DiscoveredDevice,
+  PairingCode,
+  PairWithInput,
+  SyncPeerState,
+  SyncState,
+} from "./workspace-gateway";
 import { denseBoardSnapshot } from "../test/dense-board-fixture";
+import { documentToPlainText } from "../editor/document-codec";
+import { fileNameFromPath } from "./platform-path";
 
 /**
  * In-memory gateway for browser-mode tests and fixtures. It keeps a single
@@ -81,13 +98,62 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   private dataVersion = 0;
 
+  /** Seeded once by the `?fixture=corrupt-note` fixture (P1.7). */
+  private corruptFixtureSeeded = false;
+
+  /** Seeded once by the `?fixture=foreign-shortcut` fixture (ADR-0012). */
+  private foreignShortcutFixtureSeeded = false;
+
+  /** This (mock) installation's identity (ADR-0012). */
+  private device: DeviceIdentity = { deviceId: MOCK_DEVICE_ID, deviceName: "This Mac" };
+
+  /**
+   * P1.7 recovery mode: tests set this directly; the browser harness sets it
+   * with `?fixture=startup-failure`.
+   */
+  startupFailure: StartupFailure | null = null;
+
+  getStartupFailure(): Promise<StartupFailure | null> {
+    if (this.startupFailure) return Promise.resolve({ ...this.startupFailure });
+    if (fixtureParam() === "startup-failure") {
+      return Promise.resolve({
+        code: "db_open_failed",
+        message:
+          "[db_open_failed/sqlite_26] The workspace database could not be opened. You can restore it from a backup snapshot or quit.",
+      });
+    }
+    return Promise.resolve(null);
+  }
+
   getHomeBoard(): Promise<BoardSummary> {
     return Promise.resolve({ ...this.board });
   }
 
-  getDataVersion(): Promise<number> {
-    return Promise.resolve(this.dataVersion);
+  /**
+   * Browser mode has no second process, so `dataVersion` stays constant (the
+   * poll never reloads). `changeSeq` bumps whenever what the board renders
+   * (its summary, its cards, its child boards) differs from the last sample.
+   */
+  getBoardChangeSeq(boardId: string): Promise<BoardChangeSeq> {
+    const board = this.boards.get(boardId);
+    if (!board) return Promise.reject(new Error(`board not found: ${boardId}`));
+    const fingerprint = JSON.stringify([
+      board,
+      this.snapshot.cards.filter((card) => card.boardId === boardId),
+      [...this.boards.values()].filter((b) => b.parentBoardId === boardId),
+    ]);
+    const entry = this.changeSeqs.get(boardId);
+    const next =
+      entry === undefined
+        ? { fingerprint, seq: 0 }
+        : entry.fingerprint === fingerprint
+          ? entry
+          : { fingerprint, seq: entry.seq + 1 };
+    this.changeSeqs.set(boardId, next);
+    return Promise.resolve({ dataVersion: 1, changeSeq: next.seq });
   }
+
+  private changeSeqs = new Map<string, { fingerprint: string; seq: number }>();
 
   readCard(cardId: string): Promise<CardDto> {
     const card = this.snapshot.cards.find((c) => c.id === cardId);
@@ -112,6 +178,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         targetKind: "folder",
         pathHint: "/Users/me/Research",
         displayName: "Research",
+        originDeviceId: MOCK_DEVICE_ID,
+        originDeviceName: this.device.deviceName,
+        local: true,
       };
       this.snapshot.cards = [structuredClone(alias)];
       return Promise.resolve({
@@ -121,6 +190,20 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         cards: [structuredClone(alias)],
         unsortedCards: [],
       });
+    }
+    // Test-only corrupt-note fixture (P1.7): one note whose stored document
+    // could not be parsed (recovered plain text only) next to a healthy one.
+    // Seeded once, so later reloads see the repaired state.
+    if (boardId === "home" && !this.corruptFixtureSeeded && fixtureParam() === "corrupt-note") {
+      this.corruptFixtureSeeded = true;
+      this.snapshot.cards = corruptNoteFixtureCards();
+    }
+    // Test-only foreign-shortcut fixture (ADR-0012): one shortcut created on
+    // another device (no locator here) next to one local shortcut. Seeded
+    // once, so "Point to a folder on this computer…" survives reloads.
+    if (boardId === "home" && !this.foreignShortcutFixtureSeeded && fixtureParam() === "foreign-shortcut") {
+      this.foreignShortcutFixtureSeeded = true;
+      this.snapshot.cards = foreignShortcutFixtureCards(this.device.deviceName);
     }
     // Test-only dense fixture activated by a query parameter.
     if (
@@ -159,7 +242,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     });
   }
 
-  createNote(input: CreateNoteInput): Promise<void> {
+  createNote(input: CreateNoteInput): Promise<CardReceipt> {
+    const plainText = documentToPlainText(input.documentJson);
     const card = {
       kind: "note" as const,
       id: input.id,
@@ -168,14 +252,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: input.zIndex,
       revision: 1,
       documentJson: input.documentJson,
-      plainText: input.plainText,
+      plainText,
       colorToken: "default",
     };
     this.snapshot.cards.push(card);
-    return Promise.resolve();
+    return Promise.resolve({ id: card.id, revision: card.revision });
   }
 
-  updateNote(input: UpdateNoteInput): Promise<void> {
+  updateNote(input: UpdateNoteInput): Promise<TextReceipt> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "note" && c.id === input.id,
     );
@@ -185,13 +269,17 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for ${input.id}`));
     }
+    if (card.corrupt && !input.acknowledgeCorrupt) {
+      return Promise.reject(new Error(CORRUPT_REJECTION));
+    }
+    card.corrupt = false;
     card.revision += 1;
     card.documentJson = input.documentJson;
-    card.plainText = input.plainText;
-    return Promise.resolve();
+    card.plainText = documentToPlainText(input.documentJson);
+    return Promise.resolve({ id: card.id, revision: card.revision, plainText: card.plainText });
   }
 
-  moveCard(input: MoveCardInput): Promise<void> {
+  moveCard(input: MoveCardInput): Promise<CardReceipt> {
     const card = this.snapshot.cards.find((c) => c.id === input.id);
     if (!card) {
       return Promise.reject(new Error(`card not found: ${input.id}`));
@@ -201,10 +289,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     card.frame = { ...input.frame };
-    return Promise.resolve();
+    return Promise.resolve({ id: card.id, revision: card.revision });
   }
 
-  moveCards(input: MoveCardsInput): Promise<void> {
+  moveCards(input: MoveCardsInput): Promise<CardsReceipt> {
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id);
       if (!card) {
@@ -214,15 +302,17 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(new Error(`stale revision for ${item.id}`));
       }
     }
+    const receipts: CardReceipt[] = [];
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id)!;
       card.revision += 1;
       card.frame = { ...item.frame };
+      receipts.push({ id: card.id, revision: card.revision });
     }
-    return Promise.resolve();
+    return Promise.resolve({ cards: receipts });
   }
 
-  moveCardToBoard(input: MoveCardToBoardInput): Promise<void> {
+  moveCardToBoard(input: MoveCardToBoardInput): Promise<CardReceipt> {
     const card = this.snapshot.cards.find((c) => c.id === input.id);
     if (!card) {
       return Promise.reject(new Error(`card not found: ${input.id}`));
@@ -235,7 +325,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     card.frame = input.frame
       ? { ...card.frame, x: input.frame.x, y: input.frame.y }
       : { ...card.frame, x: 40, y: 40 };
-    return Promise.resolve();
+    return Promise.resolve({ id: card.id, revision: card.revision });
   }
 
   moveBoard(input: MoveBoardInput): Promise<void> {
@@ -274,7 +364,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve();
   }
 
-  saveViewport(input: SaveViewportInput): Promise<void> {
+  saveViewport(input: SaveViewportInput): Promise<ViewportReceipt> {
     if (this.snapshot.viewport.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for viewport`));
     }
@@ -284,7 +374,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zoom: input.zoom,
       revision: this.snapshot.viewport.revision + 1,
     };
-    return Promise.resolve();
+    return Promise.resolve({ revision: this.snapshot.viewport.revision });
   }
 
   createChildBoard(input: CreateChildBoardInput): Promise<void> {
@@ -478,6 +568,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       height: null,
       sizeBytes: 0,
       filePath: `${input.id}.bin`,
+      sha256: null,
     };
     return Promise.resolve(asset);
   }
@@ -502,9 +593,10 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         height: null,
         sizeBytes: 0,
         filePath: `${input.assetId}.bin`,
+        sha256: null,
       },
       captionJson: input.captionJson,
-      captionPlainText: input.captionPlainText,
+      captionPlainText: documentToPlainText(input.captionJson),
     };
     this.snapshot.cards.push(card);
     return Promise.resolve();
@@ -535,8 +627,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {
-    const pathParts = input.sourcePath.split("/").filter(Boolean);
-    const displayName = pathParts[pathParts.length - 1] ?? input.sourcePath;
+    const displayName = fileNameFromPath(input.sourcePath);
     const card: FilesystemAliasDto = {
       kind: "filesystem_alias",
       id: input.id,
@@ -547,6 +638,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       targetKind: "folder",
       pathHint: input.sourcePath,
       displayName,
+      originDeviceId: this.device.deviceId,
+      originDeviceName: this.device.deviceName,
+      local: true,
     };
     this.snapshot.cards.push(card);
     return Promise.resolve(structuredClone(card));
@@ -558,6 +652,16 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         candidate.kind === "filesystem_alias" && candidate.id === cardId,
     );
     if (!card) return Promise.reject(new Error(`folder alias not found: ${cardId}`));
+    if (!card.local) {
+      // Like the backend: no locator on this device, no filesystem access.
+      return Promise.resolve({
+        status: "foreign_device",
+        entries: [],
+        hasMore: false,
+        displayName: card.displayName,
+        pathHint: card.pathHint,
+      });
+    }
 
     const status = card.pathHint.endsWith("/empty")
       ? "empty"
@@ -587,8 +691,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   classifyDropPaths(paths: string[]): Promise<DropPathClassificationDto[]> {
     return Promise.resolve(paths.map((path) => {
-      const pathParts = path.split("/").filter(Boolean);
-      const fileName = pathParts[pathParts.length - 1] ?? path;
+      const fileName = fileNameFromPath(path);
       const nameParts = fileName.split(".");
       const extension = fileName.includes(".") ? nameParts[nameParts.length - 1]?.toLowerCase() ?? "" : "";
       const imageMimeTypes: Record<string, string> = {
@@ -620,20 +723,57 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (expandedPath.includes("does-not-exist")) {
       return Promise.resolve({ kind: "missing", expandedPath });
     }
-    const fileName = expandedPath.split("/").filter(Boolean).pop() ?? expandedPath;
+    const fileName = fileNameFromPath(expandedPath);
     const kind = fileName.includes(".") ? "file" : "folder";
     return Promise.resolve({ kind, expandedPath });
   }
 
   openFolderInFinder(cardId: string): Promise<void> {
     const card = this.snapshot.cards.find(
-      (candidate) => candidate.kind === "filesystem_alias" && candidate.id === cardId,
+      (candidate): candidate is FilesystemAliasDto =>
+        candidate.kind === "filesystem_alias" && candidate.id === cardId,
     );
-    return card ? Promise.resolve() : Promise.reject(new Error(`folder alias not found: ${cardId}`));
+    if (!card) return Promise.reject(new Error(`folder alias not found: ${cardId}`));
+    if (!card.local) {
+      return Promise.reject(
+        new Error(
+          "constraint violation: this folder shortcut was created on another device; point it to a folder on this computer first",
+        ),
+      );
+    }
+    return Promise.resolve();
+  }
+
+  setFilesystemAliasLocalTarget(cardId: string, path: string): Promise<FilesystemAliasDto> {
+    const card = [...this.snapshot.cards, ...this.snapshot.unsortedCards].find(
+      (candidate): candidate is FilesystemAliasDto =>
+        candidate.kind === "filesystem_alias" && candidate.id === cardId,
+    );
+    if (!card) return Promise.reject(new Error(`not found: ${cardId}`));
+    if (!path) return Promise.reject(new Error("constraint violation: folder alias target must be an existing directory"));
+    // Device-local: no revision bump, the origin's path hint is kept.
+    card.local = true;
+    return Promise.resolve(structuredClone(card));
+  }
+
+  getDeviceIdentity(): Promise<DeviceIdentity> {
+    return Promise.resolve({ ...this.device });
+  }
+
+  renameDevice(name: string): Promise<DeviceIdentity> {
+    const trimmed = name.trim();
+    if (!trimmed) return Promise.reject(new Error("constraint violation: device name must not be empty"));
+    this.device = { ...this.device, deviceName: trimmed };
+    for (const card of this.snapshot.cards) {
+      if (card.kind === "filesystem_alias" && card.originDeviceId === this.device.deviceId) {
+        card.originDeviceName = trimmed;
+      }
+    }
+    return Promise.resolve({ ...this.device });
   }
 
   async createFileCard(input: CreateFileCardInput): Promise<FileCardDto> {
-    const fileName = input.fileName.split("/").pop() ?? input.fileName;
+    const fileName = fileNameFromPath(input.fileName);
     const card: FileCardDto = {
       kind: "file",
       id: input.id,
@@ -649,6 +789,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         height: null,
         sizeBytes: 0,
         filePath: `${input.id}.${fileName.split(".").pop() ?? "bin"}`,
+        sha256: null,
       },
       previewText: "mock preview of " + fileName,
       previewAsset: null,
@@ -671,7 +812,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return card ? Promise.resolve() : Promise.reject(new Error(`file card not found: ${cardId}`));
   }
 
-  updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<TextReceipt> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "image" && c.id === input.id,
     );
@@ -681,13 +822,17 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for ${input.id}`));
     }
+    if (card.corrupt && !input.acknowledgeCorrupt) {
+      return Promise.reject(new Error(CORRUPT_REJECTION));
+    }
+    card.corrupt = false;
     card.revision += 1;
     card.captionJson = input.captionJson;
-    card.captionPlainText = input.captionPlainText;
-    return Promise.resolve();
+    card.captionPlainText = documentToPlainText(input.captionJson);
+    return Promise.resolve({ id: card.id, revision: card.revision, plainText: card.captionPlainText });
   }
 
-  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void> {
+  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<TextReceipt> {
     const card = this.snapshot.cards.find(
       (c) => c.kind === "embed" && c.id === input.id,
     );
@@ -697,10 +842,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for ${input.id}`));
     }
+    if (card.corrupt && !input.acknowledgeCorrupt) {
+      return Promise.reject(new Error(CORRUPT_REJECTION));
+    }
+    card.corrupt = false;
     card.revision += 1;
     card.descriptionJson = input.descriptionJson;
-    card.descriptionPlainText = input.descriptionPlainText;
-    return Promise.resolve();
+    card.descriptionPlainText = documentToPlainText(input.descriptionJson);
+    return Promise.resolve({ id: card.id, revision: card.revision, plainText: card.descriptionPlainText });
   }
 
   convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto> {
@@ -717,6 +866,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (note.revision !== input.expectedRevision) {
       return Promise.reject(new Error(`stale revision for ${input.id}`));
     }
+    const descriptionPlainText = documentToPlainText(input.descriptionJson);
     const embed: EmbedCardDto = {
       kind: "embed",
       id: input.id,
@@ -730,8 +880,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       title: input.title,
       provider: null,
       descriptionJson: input.descriptionJson,
-      descriptionPlainText: input.descriptionPlainText,
-      descriptionOrigin: input.descriptionPlainText ? "user" : null,
+      descriptionPlainText,
+      descriptionOrigin: descriptionPlainText ? "user" : null,
       faviconAsset: null,
       previewAsset: null,
       previewOrigin: null,
@@ -1091,6 +1241,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       height: null,
       sizeBytes: 0,
       filePath: `${id}.png`,
+      sha256: null,
     });
   }
 
@@ -1108,6 +1259,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       height: null,
       sizeBytes: 0,
       filePath: `${input.assetId}.png`,
+      sha256: null,
     };
     return Promise.resolve();
   }
@@ -1131,7 +1283,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve();
   }
 
-  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void> {
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<CardsReceipt> {
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id);
       if (!card) return Promise.reject(new Error(`card not found: ${item.id}`));
@@ -1139,14 +1291,16 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(new Error(`stale revision for ${item.id}`));
       }
     }
+    const receipts: CardReceipt[] = [];
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id)!;
       card.revision += 1;
       card.boardId = input.targetBoardId;
       // Unsorted cards are hidden from the canvas; the rail shows them.
       (card as { unsorted?: boolean }).unsorted = true;
+      receipts.push({ id: card.id, revision: card.revision });
     }
-    return Promise.resolve();
+    return Promise.resolve({ cards: receipts });
   }
   // Atomic mixed-selection move (ADR-0007). The backend performs this in one
   // transaction; the mock validates every member before mutating anything, so the
@@ -1297,7 +1451,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
 
-  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<CardReceipt> {
     const card = this.snapshot.cards.find((c) => c.id === input.id);
     if (!card) return Promise.reject(new Error(`card not found: ${input.id}`));
     if (card.revision !== input.expectedRevision) {
@@ -1306,7 +1460,154 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     card.revision += 1;
     (card as { unsorted?: boolean }).unsorted = false;
     card.frame = { ...input.frame };
+    return Promise.resolve({ id: card.id, revision: card.revision });
+  }
+
+  listBackups(): Promise<BackupSummary[]> {
+    const now = Math.floor(Date.now() / 1000);
+    const summaries: BackupSummary[] = [
+      {
+        dirName: "2026-09-23T09-00-00Z",
+        createdAtSecs: now - 60 * 60 * 6,
+        schemaVersion: 4,
+        assetCount: 18,
+        totalBytes: 6_291_456,
+        valid: true,
+      },
+      {
+        dirName: "2026-09-20T09-00-00Z",
+        createdAtSecs: now - 60 * 60 * 24 * 3,
+        schemaVersion: 4,
+        assetCount: 15,
+        totalBytes: 5_242_880,
+        valid: true,
+      },
+      {
+        dirName: "2026-09-10T09-00-00Z",
+        createdAtSecs: now - 60 * 60 * 24 * 13,
+        schemaVersion: 3,
+        assetCount: 9,
+        totalBytes: 2_097_152,
+        valid: false,
+      },
+    ];
+    return Promise.resolve(summaries);
+  }
+
+  requestRestore(dirName: string): Promise<never> {
+    // The real command restarts the app and the returned promise never
+    // resolves. There is nothing to restart in the mock, so this only logs
+    // the request (for dev builds/tests to observe which snapshot was
+    // chosen) and resolves — callers should not rely on this ever settling.
+    console.log(`mock: restore requested from backup "${dirName}"`);
+    return Promise.resolve() as unknown as Promise<never>;
+  }
+
+  // ---- device sync (ADR-0011 S3) ----------------------------------------
+  // In-memory: `?fixture=sync-peers` shows two devices "on the network";
+  // pairing succeeds with the code `123456`; `syncNow` stamps lastSyncAt.
+
+  private syncPeers: SyncPeerState[] = [];
+  private syncStateListeners = new Set<(state: SyncState) => void>();
+  private syncAppliedListeners = new Set<(boardIds: string[]) => void>();
+
+  private syncState(): SyncState {
+    return {
+      peers: this.syncPeers.map((p) => ({ ...p })),
+      discovering: true,
+      discoveryError: null,
+      syncing: false,
+      port: 52_000,
+      addresses: ["192.168.1.20:52000"],
+    };
+  }
+
+  private emitSyncState(): void {
+    const state = this.syncState();
+    for (const listener of this.syncStateListeners) listener(state);
+  }
+
+  private mockDiscovered(): DiscoveredDevice[] {
+    if (fixtureParam() !== "sync-peers") return [];
+    return MOCK_DISCOVERED.map((d) => ({
+      ...d,
+      paired: this.syncPeers.some((p) => p.deviceId === d.deviceId),
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  getSyncState(): Promise<SyncState> {
+    return Promise.resolve(this.syncState());
+  }
+
+  syncListPeers(): Promise<SyncPeerState[]> {
+    return Promise.resolve(this.syncState().peers);
+  }
+
+  syncListDiscovered(): Promise<DiscoveredDevice[]> {
+    return Promise.resolve(this.mockDiscovered());
+  }
+
+  syncBeginPairing(): Promise<PairingCode> {
+    return Promise.resolve({ code: MOCK_PAIRING_CODE, expiresAt: Date.now() + 5 * 60 * 1000 });
+  }
+
+  syncCancelPairing(): Promise<void> {
     return Promise.resolve();
+  }
+
+  syncPairWith(input: PairWithInput): Promise<SyncPeerState> {
+    if (input.code.replace(/\s|-/g, "") !== MOCK_PAIRING_CODE) {
+      return Promise.reject({ code: "sync", message: "wrong code" });
+    }
+    const found = input.deviceId ? MOCK_DISCOVERED.find((d) => d.deviceId === input.deviceId) : undefined;
+    if (!found && !input.address) {
+      return Promise.reject({ code: "sync", message: "that device is no longer visible on the network" });
+    }
+    const peer: SyncPeerState = {
+      deviceId: found?.deviceId ?? `address-${input.address}`,
+      name: found?.name ?? input.address ?? "Device",
+      online: true,
+      discovered: Boolean(found),
+      lastSyncAt: null,
+      lastError: null,
+      lastAddress: found?.addresses[0] ?? input.address ?? null,
+    };
+    this.syncPeers = [...this.syncPeers.filter((p) => p.deviceId !== peer.deviceId), peer];
+    this.emitSyncState();
+    return Promise.resolve({ ...peer });
+  }
+
+  syncUnpair(deviceId: string): Promise<void> {
+    this.syncPeers = this.syncPeers.filter((p) => p.deviceId !== deviceId);
+    this.emitSyncState();
+    return Promise.resolve();
+  }
+
+  syncNow(): Promise<SyncState> {
+    const previous = Math.max(0, ...this.syncPeers.map((p) => p.lastSyncAt ?? 0));
+    const now = Math.max(Date.now(), previous + 1000);
+    this.syncPeers = this.syncPeers.map((p) => ({ ...p, lastSyncAt: now, lastError: null, online: true }));
+    this.emitSyncState();
+    return Promise.resolve(this.syncState());
+  }
+
+  onSyncState(handler: (state: SyncState) => void): Promise<() => void> {
+    this.syncStateListeners.add(handler);
+    return Promise.resolve(() => {
+      this.syncStateListeners.delete(handler);
+    });
+  }
+
+  onSyncApplied(handler: (boardIds: string[]) => void): Promise<() => void> {
+    this.syncAppliedListeners.add(handler);
+    return Promise.resolve(() => {
+      this.syncAppliedListeners.delete(handler);
+    });
+  }
+
+  /** Test hook: simulates the backend's `sync-applied` event. */
+  emitSyncApplied(boardIds: string[]): void {
+    for (const listener of this.syncAppliedListeners) listener([...boardIds]);
   }
 
   private buildBreadcrumbs(boardId: string) {
@@ -1320,6 +1621,96 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
     return crumbs;
   }
+}
+
+/** The backend's rejection of an unacknowledged write over a corrupt document. */
+const CORRUPT_REJECTION = "constraint violation: document is corrupt; open it to repair first";
+
+/** The `?fixture=` query parameter of the browser harness, if any. */
+function fixtureParam(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("fixture");
+}
+
+/** The code that pairs in the mock (ADR-0011 S3). */
+export const MOCK_PAIRING_CODE = "123456";
+
+/** Devices "on the network" under `?fixture=sync-peers`. */
+const MOCK_DISCOVERED: DiscoveredDevice[] = [
+  {
+    deviceId: "mock-windows-pc",
+    name: "Windows PC",
+    addresses: ["192.168.1.21:52001"],
+    fingerprint: "a".repeat(64),
+    paired: false,
+  },
+  {
+    deviceId: "mock-studio-mac",
+    name: "Studio Mac",
+    addresses: ["192.168.1.22:52002"],
+    fingerprint: "b".repeat(64),
+    paired: false,
+  },
+];
+
+/** The mock installation's device id (ADR-0012). */
+const MOCK_DEVICE_ID = "mock-device";
+
+/** Cards of the `?fixture=foreign-shortcut` board (ADR-0012). */
+function foreignShortcutFixtureCards(thisDeviceName: string): CardDto[] {
+  const shortcut = (
+    id: string,
+    x: number,
+    displayName: string,
+    pathHint: string,
+    origin: { id: string; name: string | null },
+    local: boolean,
+  ): FilesystemAliasDto => ({
+    kind: "filesystem_alias",
+    id,
+    boardId: "home",
+    frame: { x, y: 60, width: 300, height: 220 },
+    zIndex: 0,
+    revision: 1,
+    targetKind: "folder",
+    pathHint,
+    displayName,
+    originDeviceId: origin.id,
+    originDeviceName: origin.name,
+    local,
+  });
+  return [
+    shortcut("foreign-folder", 60, "Research", "/Users/me/Research", { id: "studio-mac", name: "Studio Mac" }, false),
+    shortcut("local-folder", 420, "Footage", "/mock/home/Footage", { id: MOCK_DEVICE_ID, name: thisDeviceName }, true),
+  ];
+}
+
+/**
+ * The folder the browser harness "picks" in place of the native dialog: set
+ * by the `?fixture=foreign-shortcut` fixture so e2e can drive "Point to a
+ * folder on this computer…"; `null` (cancelled) otherwise.
+ */
+export function fixturePickedFolder(): string | null {
+  return fixtureParam() === "foreign-shortcut" ? "/mock/home/Research" : null;
+}
+
+/** Cards of the `?fixture=corrupt-note` board (P1.7). */
+function corruptNoteFixtureCards(): CardDto[] {
+  const note = (id: string, x: number, text: string, corrupt: boolean): CardDto => ({
+    kind: "note",
+    id,
+    boardId: "home",
+    frame: { x, y: 60, width: 240, height: 120 },
+    zIndex: 0,
+    revision: 1,
+    documentJson: corrupt
+      ? { type: "doc", content: [] }
+      : { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
+    plainText: text,
+    colorToken: "default",
+    corrupt,
+  });
+  return [note("corrupt-note", 60, "Recovered words", true), note("healthy-note", 360, "Healthy words", false)];
 }
 
 function cardTitle(card: CardDto): string {

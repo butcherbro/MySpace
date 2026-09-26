@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { AssetDto } from "../services/workspace-gateway";
 import "./board-identity-thumbnail.css";
+import { assetUrl } from "../services/asset-url";
 
 interface BoardIdentityThumbnailProps {
   title: string;
@@ -52,7 +53,7 @@ export function BoardIdentityThumbnail({
       >
         <img
           className="board-identity-thumbnail__cover"
-          src={`myspace-asset://localhost/${coverAsset.filePath}`}
+          src={assetUrl(coverAsset.filePath)}
           alt={decorative ? "" : title}
           aria-hidden={decorative ? "true" : undefined}
           draggable={false}

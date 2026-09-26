@@ -12,6 +12,7 @@ const names = [
   "undo",
   "redo",
   "bookmark",
+  "sync",
 ] as const;
 
 describe("Icon", () => {

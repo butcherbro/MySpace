@@ -1,6 +1,8 @@
 // Native file picker for importing an image asset. This isolates the
 // `@tauri-apps/plugin-dialog` import (and any Tauri-specific behavior) from the
 // rest of the UI, mirroring how the gateway isolates the Tauri IPC API.
+import { fixturePickedFolder } from "./mock-workspace-gateway";
+import { fileNameFromPath } from "./platform-path";
 
 /** Result of picking an image file, or null if the user cancelled. */
 export interface PickedImage {
@@ -41,23 +43,19 @@ export async function pickImageFile(): Promise<PickedImage | null> {
 /**
  * Opens the native folder picker and returns the selected directory's path,
  * or `null` when the user cancels (todo.md №23, "Add Folder Shortcut…" on the
- * pane context menu). In a non-Tauri (browser) context this resolves to
- * `null` — there is no native dialog there, mirroring `pickImageFile` above.
+ * pane context menu; ADR-0012 "Point to a folder on this computer…"). In a
+ * non-Tauri (browser) context there is no native dialog: the mock harness
+ * answers with its fixture's folder (`null`, i.e. cancelled, by default).
  */
 export async function pickFolder(): Promise<string | null> {
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  if (!isTauri) return null;
+  if (!isTauri) return fixturePickedFolder();
 
   const { open } = await import("@tauri-apps/plugin-dialog");
   const selected = await open({ directory: true, multiple: false });
 
   if (!selected || Array.isArray(selected)) return null;
   return selected;
-}
-
-function fileNameFromPath(path: string): string {
-  const parts = path.split("/");
-  return parts[parts.length - 1] ?? path;
 }
 
 function mimeTypeFromName(path: string): string {

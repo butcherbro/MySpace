@@ -5,7 +5,7 @@ use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::board_service;
 use myspace_lib::domain::models::{
     CreateChildBoardInput, CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput,
-    CreateNoteInput, Frame, LinkBatchItem,
+    CreateNoteInput, Frame, LinkBatchItem, UpdateNoteInput,
 };
 use myspace_lib::domain::trash_service;
 use myspace_lib::repositories::workspace_repository;
@@ -89,9 +89,16 @@ fn note_input(board_id: &str, id: &str, plain_text: &str) -> CreateNoteInput {
             height: 80.0,
         },
         z_index: 0,
-        document_json: serde_json::json!({ "type": "doc" }),
-        plain_text: plain_text.to_string(),
+        document_json: doc(plain_text),
     }
+}
+
+/// A one-paragraph document whose backend-derived plain text is `text`.
+fn doc(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "doc",
+        "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": text }] }]
+    })
 }
 
 fn link_input(
@@ -277,8 +284,7 @@ fn search_matches_image_caption_and_filename() {
             },
             z_index: 0,
             asset_id: "img-1".to_string(),
-            caption_json: serde_json::json!({ "type": "doc" }),
-            caption_plain_text: "Screenshot of dashboard".to_string(),
+            caption_json: doc("Screenshot of dashboard"),
         },
     )
     .unwrap();
@@ -348,5 +354,273 @@ fn search_excerpt_survives_case_folding_that_changes_length() {
     assert!(
         (35..=45).contains(&position),
         "the match is centered, found at {position}: {excerpt}"
+    );
+}
+
+// ---- Full-text index (P1.4, migration 0022) --------------------------------
+
+fn search_ids(conn: &rusqlite::Connection, query: &str) -> Vec<String> {
+    workspace_repository::search_workspace(conn, query)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.entity_id)
+        .collect()
+}
+
+#[test]
+fn bundled_sqlite_has_fts5() {
+    let conn = open_in_memory().unwrap();
+    let fts5: i64 = conn
+        .query_row("SELECT sqlite_compileoption_used('ENABLE_FTS5')", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(fts5, 1);
+}
+
+#[test]
+fn search_matches_word_prefixes() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    board_service::create_child_board(&mut conn, &child_input(&home, "b1", "p1", "Project Alpha"))
+        .unwrap();
+    workspace_repository::create_note(
+        &mut conn,
+        &note_input(&home, "n1", "The projection is ready"),
+    )
+    .unwrap();
+
+    let results = workspace_repository::search_workspace(&conn, "proj").unwrap();
+    let ids: Vec<&str> = results.iter().map(|r| r.entity_id.as_str()).collect();
+    assert_eq!(ids, vec!["b1", "n1"], "title match first, then the note");
+    assert_eq!(results[0].title, "Project Alpha");
+    assert_eq!(results[1].title, "The projection is ready");
+}
+
+#[test]
+fn search_matches_words_in_any_order() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(
+        &mut conn,
+        &note_input(&home, "n1", "Remember to ship the rocket"),
+    )
+    .unwrap();
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n2", "a rocket only"))
+        .unwrap();
+
+    assert_eq!(search_ids(&conn, "rocket SHIP"), vec!["n1"]);
+}
+
+#[test]
+fn search_matches_cyrillic_prefixes_and_mixed_case() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "Путь мыслителя"))
+        .unwrap();
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n2", "простой текст"))
+        .unwrap();
+    board_service::create_child_board(&mut conn, &child_input(&home, "b1", "p1", "Проект Mixed"))
+        .unwrap();
+
+    assert_eq!(search_ids(&conn, "МЫСЛ"), vec!["n1"]);
+    assert_eq!(search_ids(&conn, "пУтЬ"), vec!["n1"]);
+    assert_eq!(search_ids(&conn, "ПРОС"), vec!["n2"]);
+    assert_eq!(search_ids(&conn, "проект mIX"), vec!["b1"]);
+}
+
+#[test]
+fn search_ignores_diacritics() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "Café crème brûlée"))
+        .unwrap();
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n2", "Resume the plan"))
+        .unwrap();
+
+    assert_eq!(search_ids(&conn, "cafe creme"), vec!["n1"]);
+    assert_eq!(search_ids(&conn, "BRULEE"), vec!["n1"]);
+    assert_eq!(search_ids(&conn, "résumé"), vec!["n2"]);
+}
+
+#[test]
+fn search_treats_fts_syntax_and_punctuation_as_plain_text() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "alpha AND beta"))
+        .unwrap();
+
+    for query in ["!!!", "-", "\"", "*", "()", " ... ", "^"] {
+        assert!(
+            search_ids(&conn, query).is_empty(),
+            "punctuation-only query {query:?} returns nothing"
+        );
+    }
+    // FTS5 operators and syntax characters never reach the parser raw.
+    for query in [
+        "NEAR(alpha",
+        "alpha\"",
+        "title:alpha",
+        "alpha OR",
+        "NOT beta",
+        "{title}",
+        "al*pha",
+    ] {
+        assert!(
+            workspace_repository::search_workspace(&conn, query).is_ok(),
+            "query {query:?} must not fail"
+        );
+    }
+    assert_eq!(search_ids(&conn, "alpha\""), vec!["n1"]);
+    assert_eq!(
+        search_ids(&conn, "AND beta"),
+        vec!["n1"],
+        "AND is a word here"
+    );
+    assert!(
+        search_ids(&conn, "NOT beta").is_empty(),
+        "NOT is a word here"
+    );
+}
+
+#[test]
+fn search_excludes_trashed_cards_and_boards_and_restores_them() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "keeper comet")).unwrap();
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n2", "trashed comet"))
+        .unwrap();
+    board_service::create_child_board(&mut conn, &child_input(&home, "b1", "p1", "Comet board"))
+        .unwrap();
+    workspace_repository::create_note(&mut conn, &note_input("b1", "n3", "inner comet")).unwrap();
+
+    let note_batch = trash_service::trash_note(&mut conn, "n2").unwrap();
+    let board_batch = trash_service::trash_board(&mut conn, "b1").unwrap();
+    assert_eq!(search_ids(&conn, "comet"), vec!["n1"]);
+
+    trash_service::restore_trash_batch(&mut conn, &note_batch).unwrap();
+    trash_service::restore_trash_batch(&mut conn, &board_batch).unwrap();
+    let mut ids = search_ids(&conn, "comet");
+    ids.sort();
+    assert_eq!(ids, vec!["b1", "n1", "n2", "n3"]);
+}
+
+#[test]
+fn renaming_a_board_updates_results() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    board_service::create_child_board(&mut conn, &child_input(&home, "b1", "p1", "Research"))
+        .unwrap();
+    board_service::rename_board(&mut conn, "b1", "Galaxy notes").unwrap();
+
+    assert!(search_ids(&conn, "research").is_empty());
+    let results = workspace_repository::search_workspace(&conn, "galax").unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].entity_id, "b1");
+    assert_eq!(results[0].title, "Galaxy notes");
+}
+
+#[test]
+fn updating_a_note_updates_results() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "old words")).unwrap();
+    workspace_repository::update_note(
+        &mut conn,
+        &UpdateNoteInput {
+            id: "n1".into(),
+            expected_revision: 1,
+            document_json: doc("fresh nebula"),
+            acknowledge_corrupt: false,
+        },
+    )
+    .unwrap();
+
+    assert!(search_ids(&conn, "old").is_empty());
+    let results = workspace_repository::search_workspace(&conn, "nebul").unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].title, "fresh nebula");
+}
+
+#[test]
+fn index_follows_hard_deletes_and_moves() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    board_service::create_child_board(&mut conn, &child_input(&home, "b1", "p1", "Target"))
+        .unwrap();
+    workspace_repository::create_note(&mut conn, &note_input(&home, "n1", "wandering quasar"))
+        .unwrap();
+
+    conn.execute("UPDATE cards SET board_id = 'b1' WHERE id = 'n1'", [])
+        .unwrap();
+    let results = workspace_repository::search_workspace(&conn, "quasar").unwrap();
+    assert_eq!(results[0].board_id, "b1");
+    let indexed_board: String = conn
+        .query_row(
+            "SELECT board_id FROM search_index WHERE entity_id = 'n1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed_board, "b1");
+
+    conn.execute("DELETE FROM note_cards WHERE card_id = 'n1'", [])
+        .unwrap();
+    let left: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM search_index WHERE entity_id = 'n1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(left, 0);
+    assert!(search_ids(&conn, "quasar").is_empty());
+}
+
+#[test]
+fn search_matches_file_card_name_and_preview_text() {
+    let mut conn = open_in_memory().unwrap();
+    bootstrap::bootstrap(&mut conn).unwrap();
+    let home = root_board_id(&conn);
+
+    conn.execute_batch(&format!(
+        "INSERT INTO assets (id, file_path, mime_type, file_name, width, height, size_bytes, created_at)
+         VALUES ('f-asset', 'f.txt', 'text/plain', 'meeting-minutes.txt', NULL, NULL, 0, 0);
+         INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at)
+         VALUES ('f1', '{home}', 'file', 0, 0, 200, 80, 0, 0);
+         INSERT INTO file_cards (card_id, asset_id, mime_type, preview_text)
+         VALUES ('f1', 'f-asset', 'text/plain', 'Decisions about the budget');"
+    ))
+    .unwrap();
+
+    let by_name = workspace_repository::search_workspace(&conn, "minutes").unwrap();
+    assert_eq!(by_name.len(), 1);
+    assert_eq!(by_name[0].kind, "file");
+    assert_eq!(by_name[0].title, "meeting-minutes.txt");
+    assert_eq!(by_name[0].excerpt, None);
+
+    let by_preview = workspace_repository::search_workspace(&conn, "budget").unwrap();
+    assert_eq!(by_preview.len(), 1);
+    assert_eq!(
+        by_preview[0].excerpt.as_deref(),
+        Some("Decisions about the budget")
     );
 }

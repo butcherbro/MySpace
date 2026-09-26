@@ -1,50 +1,83 @@
+/* Note typography. Every rule here is written against `.note-editor
+   .ProseMirror`, which matches BOTH the mounted Tiptap editor and the static
+   HTML idle cards render (StaticDocument.tsx, P1.8) — so the two have
+   identical metrics and a note does not jump when it enters edit mode. */
 .note-editor {
-  min-height: 1.48em;
-  font-family: var(--font-content);
-  font-size: 14px;
-  line-height: 1.48;
+  min-height: calc(var(--text-note-leading) * 1em);
+  font-family: var(--font-text);
+  font-size: var(--text-note-size);
+  line-height: var(--text-note-leading);
+  letter-spacing: var(--text-note-tracking);
   color: var(--ink);
   outline: none;
 }
 
 .note-editor .ProseMirror {
   outline: none;
-  min-height: 1.48em;
+  min-height: calc(var(--text-note-leading) * 1em);
   font: inherit;
   color: inherit;
+  /* Tiptap's base CSS sets `"liga" 0` on .ProseMirror (caret stability); keep
+     that and add Inter's rounder alternates. Higher specificity than Tiptap's
+     injected rule, and shared with the static root, so both render alike. */
+  font-feature-settings: "liga" 0, var(--font-text-features);
 }
 
 .note-editor .ProseMirror p {
-  margin: 0 0 0.48em;
+  margin: 0 0 0.6em;
+}
+
+.note-editor .ProseMirror > :last-child {
+  margin-bottom: 0;
 }
 
 .note-editor .ProseMirror h1,
 .note-editor .ProseMirror h2,
 .note-editor .ProseMirror h3 {
   margin: 0.6em 0 0.3em;
-  line-height: 1.2;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.note-editor .ProseMirror > :is(h1, h2, h3):first-child {
+  margin-top: 0;
 }
 
 .note-editor .ProseMirror h1 {
-  font-size: 1.35em;
+  font-size: 1.5em;
 }
 
 .note-editor .ProseMirror h2 {
-  font-size: 1.2em;
+  font-size: 1.25em;
 }
 
 .note-editor .ProseMirror h3 {
-  font-size: 1.08em;
+  font-size: 1.1em;
 }
 
 .note-editor .ProseMirror ul,
 .note-editor .ProseMirror ol {
-  margin: 0 0 0.48em;
+  margin: 0 0 0.6em;
   padding-left: 1.4em;
 }
 
+/* Tiptap wraps list item text in <p>; spacing between items comes from the
+   item, not from the paragraph margin. */
+.note-editor .ProseMirror li > p:last-child {
+  margin-bottom: 0;
+}
+
+.note-editor .ProseMirror li + li,
+.note-editor .ProseMirror li > :is(ul, ol) {
+  margin-top: 0.25em;
+}
+
+.note-editor .ProseMirror li > :is(ul, ol) {
+  margin-bottom: 0;
+}
+
 .note-editor .ProseMirror blockquote {
-  margin: 0 0 0.48em;
+  margin: 0 0 0.6em;
   padding-left: 0.75em;
   border-left: 3px solid var(--edge-subtle);
   color: var(--ink-secondary);
@@ -89,4 +122,19 @@
 }
 .text-color--gray {
   color: var(--text-gray);
+}
+
+/* P1.8: idle cards render their document as static HTML (StaticDocument.tsx)
+   instead of mounting an editor. Tiptap injects its base `.ProseMirror` rules
+   only once an editor exists, and a board where nothing is being edited has
+   none — so the static root carries the text-layout part of those rules
+   itself, keeping line wrapping and whitespace identical to the editor. */
+.note-editor__static {
+  position: relative;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  -webkit-font-variant-ligatures: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, var(--font-text-features);
 }

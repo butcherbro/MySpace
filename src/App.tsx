@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { EmptyBoardHint } from "./app/EmptyBoardHint";
 import {
@@ -7,11 +7,12 @@ import {
   useCloseFlush,
 } from "./app/use-close-flush";
 import { useTrashController } from "./app/use-trash-controller";
+import { buildCreateImageCardInput } from "./app/import-image-card";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import { moveSelectionOntoBoard } from "./canvas/move-selection-onto-board";
 import type { CanvasCard } from "./canvas/canvas-types";
-import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
+import { renderCard as renderCardFromRegistry, type CardRenderContext } from "./cards/card-registry";
 import {
   MoveCardsCommand,
   CreateNoteCommand,
@@ -36,10 +37,17 @@ import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
 import { EmptyTrashDialog } from "./components/trash/EmptyTrashDialog";
+import { RestoreDialog } from "./backup/restore-dialog";
+import { DevicesDialog } from "./sync/DevicesDialog";
+import { UpdatePrompt } from "./updates/UpdatePrompt";
+import { useUpdateCheck } from "./updates/use-update-check";
+import { SyncStatusPill } from "./sync/SyncStatusPill";
+import { useSyncAppliedReload } from "./sync/use-sync-state";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
 import { SearchBar } from "./search/SearchBar";
 import { useSearchController } from "./search/use-search-controller";
 import { useViewportController } from "./state/use-viewport-controller";
+import { shouldReload, type ChangeSample } from "./state/external-change-detector";
 import { plainTextToDocument, documentToPlainText, normalizeDocument } from "./editor/document-codec";
 import { classifyLinkConversion } from "./cards/link/link-conversion";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
@@ -50,6 +58,7 @@ import { UnsortedPanel } from "./navigation/UnsortedPanel";
 import { useBoardNavigation } from "./navigation/use-board-navigation";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
+import type { DocumentSaveOptions } from "./editor/corrupt-document";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { pickFolder, pickImageFile } from "./services/asset-picker";
@@ -57,8 +66,10 @@ import { computeInitialImageFrameSize, loadNaturalImageSize } from "./cards/imag
 import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
 import { htmlToDocument } from "./editor/html-to-document";
+import { flushAllDrafts } from "./editor/draft-flush-registry";
 import { copyText } from "./services/clipboard";
 import type {
+  AssetDto,
   BoardPortalDto,
   BoardShortcutDto,
   CardDto,
@@ -76,6 +87,8 @@ import {
   initialState,
   reducer,
 } from "./state/current-board-store";
+import { fileNameFromPath } from "./services/platform-path";
+import { assetUrl } from "./services/asset-url";
 
 type ToolKind = "note" | "link" | "board";
 
@@ -261,6 +274,8 @@ function App() {
   const refreshTrash = trash.refresh;
   const trashOpen = trash.open;
   const closeTrashDrawer = trash.closeDrawer;
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [devicesDialogOpen, setDevicesDialogOpen] = useState(false);
   useEffect(() => {
     loadQuickBoards();
   }, [loadQuickBoards]);
@@ -298,7 +313,6 @@ function App() {
             frame: card.frame,
             zIndex: card.zIndex,
             documentJson: card.documentJson,
-            plainText,
           }),
         );
         dispatch({ type: "cardAdded", card });
@@ -333,12 +347,12 @@ function App() {
       };
       void gateway
         .placeUnsortedCard({ id: cardId, expectedRevision: card.revision, frame })
-        .then(() => {
+        .then((receipt) => {
           dispatch({
             type: "unsortedCardPlaced",
             id: cardId,
             frame,
-            revision: card.revision + 1,
+            revision: receipt.revision,
           });
         })
         .catch((e) => {
@@ -396,12 +410,12 @@ function App() {
         };
         void gateway
           .placeUnsortedCard({ id, expectedRevision: card.revision, frame })
-          .then(() => {
+          .then((receipt) => {
             dispatch({
               type: "unsortedCardPlaced",
               id,
               frame,
-              revision: card.revision + 1,
+              revision: receipt.revision,
             });
           })
           .catch((err) => {
@@ -534,6 +548,47 @@ function App() {
     [cleanupCreationDrag, handleCreateNote, handleCreateLink, handleCreateChildBoard],
   );
 
+  // Creates an image card for an already-imported asset at board coordinates.
+  const placeImageAsset = useCallback(
+    async (asset: AssetDto, x: number, y: number, cardId: string, centered = false) => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard) return;
+      {
+        // Backend не читает natural width/height картинки при импорте
+        // (assets.width/height в БД всегда NULL), поэтому пропорции для
+        // стартового frame берём в браузере — иначе карточка получает
+        // фиксированный 320x240 и обрезает картинку под рамку (todo.md №3).
+        const natural = await loadNaturalImageSize(assetUrl(asset.filePath));
+        const { width, height } = computeInitialImageFrameSize(natural?.width, natural?.height);
+        const card: ImageCardDto = {
+          kind: "image",
+          id: cardId,
+          boardId: currentBoard.id,
+          frame: centered
+            ? { x: Math.max(0, x - width / 2), y: Math.max(0, y - height / 2), width, height }
+            : { x, y, width, height },
+          zIndex: cardsRef.current.length,
+          revision: 1,
+          asset,
+          captionJson: plainTextToDocument(""),
+          captionPlainText: "",
+        };
+        await gateway.createImageCard(
+          buildCreateImageCardInput({
+            cardId,
+            boardId: currentBoard.id,
+            frame: card.frame,
+            zIndex: card.zIndex,
+            asset,
+            captionJson: card.captionJson,
+          }),
+        );
+        dispatch({ type: "cardAdded", card });
+      }
+    },
+    [gateway],
+  );
+
   // Imports an image and creates a card at the given board coordinates. Shared
   // by the file picker (button) and native drag-drop.
   const importImageCard = useCallback(
@@ -553,38 +608,12 @@ function App() {
           fileName,
           mimeType,
         });
-        // Backend не читает natural width/height картинки при импорте
-        // (assets.width/height в БД всегда NULL), поэтому пропорции для
-        // стартового frame берём в браузере — иначе карточка получает
-        // фиксированный 320x240 и обрезает картинку под рамку (todo.md №3).
-        const natural = await loadNaturalImageSize(`myspace-asset://localhost/${asset.filePath}`);
-        const { width, height } = computeInitialImageFrameSize(natural?.width, natural?.height);
-        const card: ImageCardDto = {
-          kind: "image",
-          id: cardId,
-          boardId: currentBoard.id,
-          frame: { x, y, width, height },
-          zIndex: cardsRef.current.length,
-          revision: 1,
-          asset,
-          captionJson: plainTextToDocument(""),
-          captionPlainText: "",
-        };
-        await gateway.createImageCard({
-          id: cardId,
-          boardId: currentBoard.id,
-          frame: card.frame,
-          zIndex: card.zIndex,
-          assetId,
-          captionJson: card.captionJson,
-          captionPlainText: "",
-        });
-        dispatch({ type: "cardAdded", card });
+        await placeImageAsset(asset, x, y, cardId);
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
-    [gateway, idGenerator],
+    [gateway, idGenerator, placeImageAsset],
   );
 
   const handleCreateImage = useCallback(async () => {
@@ -732,7 +761,7 @@ function App() {
       if (classification.kind === "folder") {
         await createFolderShortcut(classification.expandedPath, cursor.x - 180, cursor.y - 150);
       } else {
-        const fileName = classification.expandedPath.split("/").pop() || classification.expandedPath;
+        const fileName = fileNameFromPath(classification.expandedPath);
         await createFileCard(
           { path: classification.expandedPath, fileName, mimeType: "application/octet-stream" },
           cursor.x,
@@ -824,15 +853,31 @@ function App() {
     return true;
   }, [board, dispatcher, idGenerator, fallbackPastePosition]);
 
+  // Ctrl/Cmd+V of a bitmap or a copied image file onto the canvas. The backend
+  // reads the OS clipboard directly (NSPasteboard on macOS, arboard elsewhere),
+  // which also covers file copies from Finder/Explorer that the webview only
+  // exposes as an opaque "Files" entry.
+  const handlePasteImage = useCallback(async () => {
+    const position = lastCanvasPointRef.current ?? fallbackPastePosition();
+    try {
+      const asset = await gateway.importClipboardImage();
+      // Centred under the mouse cursor, like a drop.
+      await placeImageAsset(asset, position.x, position.y, idGenerator.nextId(), true);
+    } catch (e) {
+      dispatch({ type: "failed", message: errorMessage(e) });
+    }
+  }, [gateway, idGenerator, placeImageAsset, fallbackPastePosition]);
+
   useCanvasPaste({
     enabled: Boolean(board),
     onPaste: handleCanvasPaste,
     onPasteCards: handlePasteCards,
     onPastePath: handlePastePath,
+    onPasteImage: handlePasteImage,
   });
 
   const handleUpdateNote = useCallback(
-    (id: string, document: unknown): Promise<void> => {
+    (id: string, document: unknown, options?: DocumentSaveOptions): Promise<void> => {
       return queueRef.current.run(async () => {
         const note = cardsRef.current.find(
           (n): n is NoteCardDto => n.kind === "note" && n.id === id,
@@ -846,28 +891,28 @@ function App() {
           throw new Error("Note content is not a valid document");
         }
 
-        const plainText = documentToPlainText(document);
-        await gateway.updateNote({
+        const receipt = await gateway.updateNote({
           id,
           expectedRevision: note.revision,
           documentJson: document,
-          plainText,
+          ...acknowledgeCorrupt(options),
         });
         // Keep the ref authoritative *inside this microtask*: the note's own
         // auto-grow (NoteCard) debounces a resize write off the same keystroke
         // and can land right behind this one in the queue, before React's
         // effect has re-synced `cardsRef` from state (see the embed-metadata
         // note above for the same pattern).
-        const nextRevision = note.revision + 1;
         cardsRef.current = cardsRef.current.map((c) =>
-          c.id === id ? { ...c, revision: nextRevision, documentJson: document, plainText } : c,
+          c.id === id
+            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText, corrupt: false }
+            : c,
         );
         dispatch({
           type: "cardContentUpdated",
           id,
-          revision: nextRevision,
+          revision: receipt.revision,
           documentJson: document,
-          plainText,
+          plainText: receipt.plainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -878,7 +923,7 @@ function App() {
   );
 
   const handleFinalizeNote = useCallback(
-    (id: string, document: unknown): Promise<void> => {
+    (id: string, document: unknown, options?: DocumentSaveOptions): Promise<void> => {
       return queueRef.current.run(async () => {
         const note = cardsRef.current.find(
           (n): n is NoteCardDto => n.kind === "note" && n.id === id,
@@ -897,32 +942,31 @@ function App() {
             displayUrl: displayUrl(classification.url),
             title: classification.url,
             descriptionJson: plainTextToDocument(""),
-            descriptionPlainText: "",
           });
           cardsRef.current = cardsRef.current.map((c) => (c.id === id ? embed : c));
           dispatch({ type: "cardReplaced", id, card: embed });
           return;
         }
 
-        const plainText = documentToPlainText(document);
-        await gateway.updateNote({
+        const receipt = await gateway.updateNote({
           id,
           expectedRevision: note.revision,
           documentJson: document,
-          plainText,
+          ...acknowledgeCorrupt(options),
         });
         // Same ref-staleness guard as handleUpdateNote above: a pending
         // auto-grow resize can be queued right behind this finalize.
-        const nextRevision = note.revision + 1;
         cardsRef.current = cardsRef.current.map((c) =>
-          c.id === id ? { ...c, revision: nextRevision, documentJson: document, plainText } : c,
+          c.id === id
+            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText, corrupt: false }
+            : c,
         );
         dispatch({
           type: "cardContentUpdated",
           id,
-          revision: nextRevision,
+          revision: receipt.revision,
           documentJson: document,
-          plainText,
+          plainText: receipt.plainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -933,7 +977,7 @@ function App() {
   );
 
   const handleUpdateImageCaption = useCallback(
-    (id: string, document: unknown): Promise<void> => {
+    (id: string, document: unknown, options?: DocumentSaveOptions): Promise<void> => {
       return queueRef.current.run(async () => {
         const image = cardsRef.current.find(
           (c): c is ImageCardDto => c.kind === "image" && c.id === id,
@@ -942,19 +986,18 @@ function App() {
         if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
           throw new Error("Image caption is not a valid document");
         }
-        const captionPlainText = documentToPlainText(document);
-        await gateway.updateImageCaption({
+        const receipt = await gateway.updateImageCaption({
           id,
           expectedRevision: image.revision,
           captionJson: document,
-          captionPlainText,
+          ...acknowledgeCorrupt(options),
         });
         dispatch({
           type: "imageCaptionUpdated",
           id,
-          revision: image.revision + 1,
+          revision: receipt.revision,
           captionJson: document,
-          captionPlainText,
+          captionPlainText: receipt.plainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -965,7 +1008,7 @@ function App() {
   );
 
   const handleUpdateEmbedDescription = useCallback(
-    (id: string, document: unknown): Promise<void> => {
+    (id: string, document: unknown, options?: DocumentSaveOptions): Promise<void> => {
       return queueRef.current.run(async () => {
         const embed = cardsRef.current.find(
           (c): c is EmbedCardDto => c.kind === "embed" && c.id === id,
@@ -974,19 +1017,18 @@ function App() {
         if (typeof document !== "object" || document === null || (document as { type?: unknown }).type !== "doc") {
           throw new Error("Link description is not a valid document");
         }
-        const descriptionPlainText = documentToPlainText(document);
-        await gateway.updateEmbedDescription({
+        const receipt = await gateway.updateEmbedDescription({
           id,
           expectedRevision: embed.revision,
           descriptionJson: document,
-          descriptionPlainText,
+          ...acknowledgeCorrupt(options),
         });
         dispatch({
           type: "embedDescriptionUpdated",
           id,
-          revision: embed.revision + 1,
+          revision: receipt.revision,
           descriptionJson: document,
-          descriptionPlainText,
+          descriptionPlainText: receipt.plainText,
         });
       }).catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
@@ -996,8 +1038,10 @@ function App() {
     [gateway],
   );
 
-  // Build the canvas projection from all cards (notes + portals).
-  const canvasCards: CanvasCard[] = state.cards.map((c) => ({
+  // Build the canvas projection from all cards (notes + portals). Memoised on
+  // `state.cards` (P1.8): the canvas diffs this array per card, and an App
+  // re-render that didn't touch the cards must hand it the same array.
+  const canvasCards: CanvasCard[] = useMemo(() => state.cards.map((c) => ({
     id: c.id,
     boardId: c.boardId,
     kind: c.kind,
@@ -1007,7 +1051,10 @@ function App() {
     targetBoardId: c.kind === "board_portal" ? c.target.id : undefined,
     portalTitle: c.kind === "board_portal" ? c.target.title : undefined,
     portalCoverAssetId: c.kind === "board_portal" ? c.target.coverAsset?.id ?? undefined : undefined,
-  }));
+    aliasLocal: c.kind === "filesystem_alias" ? c.local : undefined,
+  })), [state.cards]);
+  const cardsById = useMemo(() => new Map(state.cards.map((c) => [c.id, c])), [state.cards]);
+
 
   const handleCardsMoved = useCallback(
     (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
@@ -1033,15 +1080,18 @@ function App() {
           if (moves.length === 0) return;
 
           // One gesture = one undo entry via the dispatcher.
-          await dispatcher.execute(
+          const receipt = await dispatcher.execute(
             new MoveCardsCommand(idGenerator.nextId(), moves),
           );
+          const revisionById = new Map(receipt.cards.map((c) => [c.id, c.revision]));
 
           for (const item of moves) {
+            const revision = revisionById.get(item.id);
+            if (revision === undefined) continue; // unreachable: one receipt per requested card
             dispatch({
               type: "cardMoved",
               id: item.id,
-              revision: item.revision + 1,
+              revision,
               frame: item.after,
             });
           }
@@ -1112,7 +1162,10 @@ function App() {
           // panel; otherwise the card simply left this board (it will appear in
           // the target board's Unsorted when that board is opened).
           if (receipt.targetBoardId === boardRef.current?.id) {
-            dispatch({ type: "cardMovedToUnsorted", id: cardId });
+            const moved = receipt.cards.find((c) => c.id === cardId);
+            if (moved) {
+              dispatch({ type: "cardMovedToUnsorted", id: cardId, revision: moved.afterRevision });
+            }
           } else {
             dispatch({ type: "cardsRemoved", ids: [cardId] });
           }
@@ -1163,7 +1216,7 @@ function App() {
             if (receipt.cards.length > 0) {
               if (receipt.targetBoardId === currentBoardId) {
                 for (const card of receipt.cards) {
-                  dispatch({ type: "cardMovedToUnsorted", id: card.id });
+                  dispatch({ type: "cardMovedToUnsorted", id: card.id, revision: card.afterRevision });
                 }
               } else {
                 dispatch({ type: "cardsRemoved", ids: receipt.cards.map((card) => card.id) });
@@ -1294,10 +1347,19 @@ function App() {
   // the viewport queue are flushed before the window is allowed to go. See
   // src/app/use-close-flush.ts — the queues keep their own owners.
   useCloseFlush({
-    flushes: [() => queueRef.current.flush(), () => viewportController.flush()],
+    flushes: [() => flushAllDrafts(), () => queueRef.current.flush(), () => viewportController.flush()],
     close: destroyWindow,
     confirmAbandon: confirmAbandonWithDialog,
     onError: (error) => dispatch({ type: "failed", message: errorMessage(error) }),
+  });
+
+  // In-app updates (desktop only). The same pending-write barriers as the close
+  // run before the app is replaced: the installer and `relaunch()` bypass the
+  // window close handler above.
+  const updates = useUpdateCheck({
+    flushBeforeInstall: async () => {
+      await Promise.all([flushAllDrafts(), queueRef.current.flush(), viewportController.flush()]);
+    },
   });
 
   const handleCardsSelected = useCallback((e: { ids: string[] }) => {
@@ -1337,7 +1399,7 @@ function App() {
           const current = cardsRef.current.find((c) => c.id === id);
           if (!current) return;
           const frame = { ...current.frame, width, height };
-          await gateway.moveCard({
+          const receipt = await gateway.moveCard({
             id,
             expectedRevision: current.revision,
             frame,
@@ -1346,11 +1408,10 @@ function App() {
           // auto-grow can queue a resize right behind a content autosave for
           // the same keystroke, and the two must not read the same stale
           // revision (tasks/lessons.md 2026-09-08).
-          const nextRevision = current.revision + 1;
           cardsRef.current = cardsRef.current.map((c) =>
-            c.id === id ? { ...c, revision: nextRevision, frame } : c,
+            c.id === id ? { ...c, revision: receipt.revision, frame } : c,
           );
-          dispatch({ type: "cardMoved", id, revision: nextRevision, frame });
+          dispatch({ type: "cardMoved", id, revision: receipt.revision, frame });
         })
         .catch((e) => {
           dispatch({ type: "failed", message: errorMessage(e) });
@@ -1362,6 +1423,17 @@ function App() {
   const handleLoadFolderPreview = useCallback((id: string) => gateway.listFolderPreview(id, 50), [gateway]);
   const handleOpenFolderInFinder = useCallback((id: string) => {
     void gateway.openFolderInFinder(id).catch((error) => dispatch({ type: "failed", message: errorMessage(error) }));
+  }, [gateway]);
+  // ADR-0012 "Point to a folder on this computer…": a shortcut created on
+  // another device gets this device's own locator; the card turns local and
+  // its preview loads.
+  const handlePointFolderShortcutHere = useCallback((id: string) => {
+    void (async () => {
+      const picked = await pickFolder();
+      if (!picked) return;
+      const alias = await gateway.setFilesystemAliasLocalTarget(id, picked);
+      dispatch({ type: "filesystemAliasUpdated", alias });
+    })().catch((error) => dispatch({ type: "failed", message: errorMessage(error) }));
   }, [gateway]);
 
   const handleContextDelete = useCallback(() => {
@@ -1646,6 +1718,11 @@ function App() {
   const navigation = useBoardNavigation({
     gateway,
     drainPendingWrites: useCallback(async () => {
+      // The editing card's own draft (still inside its 250ms debounce) must
+      // land in the mutation queue before the queue is flushed, or navigation
+      // would replace the projection while that write is still in flight —
+      // see draft-flush-registry.ts.
+      await flushAllDrafts();
       await queueRef.current.flush();
       await viewportController.flush();
     }, [viewportController]),
@@ -2038,30 +2115,55 @@ function App() {
     [navigateTo],
   );
 
-  // Detect external (agent) writes by polling SQLite's PRAGMA data_version. Any
-  // commit from another connection changes it; then reload the open Board so the
-  // UI reflects the external change without a manual refresh.
-  const dataVersionRef = useRef<number>(0);
+  // Detect external (agent / second instance) writes (P1.6). Every 3 s poll the
+  // open board's `get_board_change_seq`: reload the board only when another
+  // process committed (dataVersion) AND the commit touched this board
+  // (changeSeq); refresh the trash on any external commit. The decision lives
+  // in `shouldReload`; a sample for a different board just re-primes it. The
+  // same-board `snapshotLoaded` merge keeps pan, editing and selection.
+  const changeSampleRef = useRef<ChangeSample | null>(null);
+  const openBoardId = board?.id ?? null;
   useEffect(() => {
+    if (openBoardId === null) return;
     let cancelled = false;
-    // Prime the baseline once.
-    void gateway.getDataVersion().then((v) => {
-      if (!cancelled) dataVersionRef.current = v;
-    });
-    const id = setInterval(() => {
-      void gateway.getDataVersion().then((v) => {
-        if (!cancelled && v !== dataVersionRef.current && board) {
-          dataVersionRef.current = v;
-          void navigateTo(board.id);
-          void refreshTrash();
-        }
-      });
-    }, 3000);
+    const poll = () => {
+      gateway.getBoardChangeSeq(openBoardId).then(
+        (v) => {
+          if (cancelled) return;
+          const next: ChangeSample = { boardId: openBoardId, ...v };
+          const decision = shouldReload(changeSampleRef.current, next);
+          changeSampleRef.current = next;
+          if (decision.reloadBoard) void navigateTo(openBoardId);
+          if (decision.refreshTrash) void refreshTrash();
+        },
+        () => {
+          // The board may have been removed externally; the next navigation
+          // re-primes. Polling never surfaces an error.
+        },
+      );
+    };
+    // Prime (or re-prime after a board switch) immediately.
+    poll();
+    const id = setInterval(poll, 3000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [gateway, board, navigateTo, refreshTrash]);
+  }, [gateway, openBoardId, navigateTo, refreshTrash]);
+
+  // LAN sync (ADR-0011 S3): a replay commits on the app's own writer, so the
+  // poll above never sees it; `sync-applied` names the boards it changed and
+  // the open one reloads through the same same-board merge.
+  useSyncAppliedReload(
+    gateway,
+    openBoardId,
+    (boardId) => void navigateTo(boardId),
+    () => {
+      // Quick boards and the trash badge are not part of the board load.
+      void refreshTrash();
+      loadQuickBoards();
+    },
+  );
 
   const handleRenameBoard = useCallback(
     (boardId: string, title: string) => {
@@ -2179,6 +2281,76 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelection, trashOpen, closeTrashDrawer]);
 
+  // Card callbacks handed to the canvas, as stable wrappers over the latest
+  // handlers (P1.8). The canvas keeps a card's rendered element until that card
+  // itself changes, so a handler captured at build time must never go stale
+  // (several close over `state`), and stable identities let the memoised card
+  // components skip re-rendering. Values (editing flag, highlight) are not
+  // here: they are read when a card is (re)built.
+  const cardHandlers = {
+    onDeactivate: handleEditDeactivate,
+    onUpdateNote: handleUpdateNote,
+    onFinalizeNote: handleFinalizeNote,
+    onUpdateImageCaption: handleUpdateImageCaption,
+    onUpdateEmbedDescription: handleUpdateEmbedDescription,
+    onRetryEmbedMetadata: handleRetryEmbedMetadata,
+    onOpenBoard: handleOpenBoard,
+    onRenameBoard: handleRenameBoard,
+    onContextMenu: handleRequestContextMenu,
+    onResizeNote: handleResizeNote,
+    onResizeImage: handleResizeNote,
+    onResizeEmbed: handleResizeNote,
+    onResizeFilesystemAlias: handleResizeNote,
+    onLoadFolderPreview: handleLoadFolderPreview,
+    onOpenFolderInFinder: handleOpenFolderInFinder,
+    onPointFolderShortcutHere: handlePointFolderShortcutHere,
+    onOpenFileCard: openFileCard,
+    onRevealFileCard: revealFileCard,
+    onResizeFileCard: handleResizeNote,
+    onNoteCommands: handleNoteCommands,
+    onNoteBoldStateChange: handleNoteBoldStateChange,
+    onNoteItalicStateChange: handleNoteItalicStateChange,
+    onNoteStrikeStateChange: handleNoteStrikeStateChange,
+    onNoteTextColorChange: handleNoteTextColorChange,
+  } satisfies Partial<CardRenderContext>;
+  const cardHandlersRef = useRef(cardHandlers);
+  useLayoutEffect(() => {
+    cardHandlersRef.current = cardHandlers;
+  });
+  const stableCardHandlers = useMemo(() => {
+    const latest = () => cardHandlersRef.current;
+    return {
+      onDeactivate: () => latest().onDeactivate(),
+      onUpdateNote: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onUpdateNote(id, document, options),
+      onFinalizeNote: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onFinalizeNote(id, document, options),
+      onUpdateImageCaption: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onUpdateImageCaption(id, document, options),
+      onUpdateEmbedDescription: (id: string, document: unknown, options?: DocumentSaveOptions) =>
+        latest().onUpdateEmbedDescription(id, document, options),
+      onRetryEmbedMetadata: (id: string) => latest().onRetryEmbedMetadata(id),
+      onOpenBoard: (boardId: string) => latest().onOpenBoard(boardId),
+      onRenameBoard: (boardId: string, title: string) => latest().onRenameBoard(boardId, title),
+      onContextMenu: (cardId: string, x: number, y: number) => latest().onContextMenu(cardId, x, y),
+      onResizeNote: (id: string, w: number, h: number) => latest().onResizeNote(id, w, h),
+      onResizeImage: (id: string, w: number, h: number) => latest().onResizeImage(id, w, h),
+      onResizeEmbed: (id: string, w: number, h: number) => latest().onResizeEmbed(id, w, h),
+      onResizeFilesystemAlias: (id: string, w: number, h: number) => latest().onResizeFilesystemAlias(id, w, h),
+      onLoadFolderPreview: (id: string) => latest().onLoadFolderPreview(id),
+      onOpenFolderInFinder: (id: string) => latest().onOpenFolderInFinder(id),
+      onPointFolderShortcutHere: (id: string) => latest().onPointFolderShortcutHere(id),
+      onOpenFileCard: (id: string) => latest().onOpenFileCard(id),
+      onRevealFileCard: (id: string) => latest().onRevealFileCard(id),
+      onResizeFileCard: (id: string, w: number, h: number) => latest().onResizeFileCard(id, w, h),
+      onNoteCommands: (commands: NoteEditorCommands | null) => latest().onNoteCommands(commands),
+      onNoteBoldStateChange: (active: boolean) => latest().onNoteBoldStateChange(active),
+      onNoteItalicStateChange: (active: boolean) => latest().onNoteItalicStateChange(active),
+      onNoteStrikeStateChange: (active: boolean) => latest().onNoteStrikeStateChange(active),
+      onNoteTextColorChange: (color: TextColorId) => latest().onNoteTextColorChange(color),
+    } satisfies Partial<CardRenderContext>;
+  }, []);
+
   return (
     <AppShell
       topBar={
@@ -2197,6 +2369,7 @@ function App() {
               loading={search.loading}
               onSelect={(result) => void search.onSelect(result)}
             />
+            <SyncStatusPill gateway={gateway} onOpen={() => setDevicesDialogOpen(true)} />
             <UndoRedoControls
               dispatcher={dispatcher}
               onUndo={handleWorkspaceUndo}
@@ -2278,11 +2451,18 @@ function App() {
                 { id: "copy-image", label: "Copy Image", onSelect: handleCopySelectionImages },
               );
             }
-            if (isFolderAlias) {
+            if (isFolderAlias && card.local) {
               actions.push({
                 id: "show-in-finder",
                 label: "Show in Finder",
                 onSelect: () => handleOpenFolderInFinder(card.id),
+              });
+            }
+            if (isFolderAlias && !card.local) {
+              actions.push({
+                id: "point-to-local-folder",
+                label: "Point to a folder on this computer…",
+                onSelect: () => handlePointFolderShortcutHere(card.id),
               });
             }
             if (isFileCard) {
@@ -2370,7 +2550,27 @@ function App() {
             onClose={trash.closeDrawer}
             onRestore={(batchId) => void trash.restoreBatch(batchId)}
             onEmptyTrash={trash.requestEmpty}
+            onRestoreFromBackup={() => setRestoreDialogOpen(true)}
+            onOpenDevices={() => setDevicesDialogOpen(true)}
+            onCheckForUpdates={updates.supported ? () => void updates.checkNow() : undefined}
           />
+        )}
+        <UpdatePrompt controller={updates} />
+        {devicesDialogOpen && (
+          <>
+            <div className="devices-dialog-backdrop" onClick={() => setDevicesDialogOpen(false)} />
+            <div className="devices-dialog-overlay">
+              <DevicesDialog gateway={gateway} onClose={() => setDevicesDialogOpen(false)} />
+            </div>
+          </>
+        )}
+        {restoreDialogOpen && (
+          <>
+            <div className="restore-dialog-backdrop" onClick={() => setRestoreDialogOpen(false)} />
+            <div className="restore-dialog-overlay">
+              <RestoreDialog gateway={gateway} onClose={() => setRestoreDialogOpen(false)} />
+            </div>
+          </>
         )}
         {trash.emptyDialogOpen && (
           <>
@@ -2468,35 +2668,13 @@ function App() {
               },
             }}
             renderCard={(card) => {
-              const full = state.cards.find((c) => c.id === card.id);
+              const full = cardsById.get(card.id);
               if (!full) return null;
               return renderCardFromRegistry(full, {
+                ...stableCardHandlers,
                 editing: state.editingCardId === full.id,
-                onDeactivate: handleEditDeactivate,
-                onUpdateNote: handleUpdateNote,
-                onFinalizeNote: handleFinalizeNote,
-                onUpdateImageCaption: handleUpdateImageCaption,
-                onUpdateEmbedDescription: handleUpdateEmbedDescription,
-                onRetryEmbedMetadata: handleRetryEmbedMetadata,
-                onOpenBoard: handleOpenBoard,
-                onRenameBoard: handleRenameBoard,
-                onContextMenu: handleRequestContextMenu,
-                onResizeNote: handleResizeNote,
-                onResizeImage: handleResizeNote,
-                onResizeEmbed: handleResizeNote,
-                onResizeFilesystemAlias: handleResizeNote,
-                onLoadFolderPreview: handleLoadFolderPreview,
-                onOpenFolderInFinder: handleOpenFolderInFinder,
-                onOpenFileCard: openFileCard,
-                onRevealFileCard: revealFileCard,
-                onResizeFileCard: handleResizeNote,
                 highlightedPortalId,
                 highlightQuery: search.highlightQuery,
-                onNoteCommands: handleNoteCommands,
-                onNoteBoldStateChange: handleNoteBoldStateChange,
-                onNoteItalicStateChange: handleNoteItalicStateChange,
-                onNoteStrikeStateChange: handleNoteStrikeStateChange,
-                onNoteTextColorChange: handleNoteTextColorChange,
               });
             }}
           />
@@ -2508,6 +2686,11 @@ function App() {
 }
 
 export default App;
+
+/** The `acknowledgeCorrupt` flag of a text write, present only when set (P1.7). */
+function acknowledgeCorrupt(options?: DocumentSaveOptions): { acknowledgeCorrupt?: true } {
+  return options?.acknowledgeCorrupt ? { acknowledgeCorrupt: true } : {};
+}
 
 /** A short, human-friendly URL for display (strips scheme and trailing slash). */
 function displayUrl(raw: string): string {

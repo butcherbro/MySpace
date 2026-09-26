@@ -3,7 +3,7 @@
 //! V1 exposes no workspace creation command and no second workspace path. This
 //! module enforces the single-workspace invariant from Section C of the plan.
 
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, Result, TransactionBehavior};
 
 /// Creates the single workspace and Home root board if they do not exist.
 ///
@@ -11,9 +11,14 @@ use rusqlite::{Connection, Result};
 /// backfills a missing Home view-state row (for databases created before
 /// view-state bootstrap existed).
 pub fn bootstrap(conn: &mut Connection) -> Result<()> {
-    let existing: i64 = conn.query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))?;
+    // BEGIN IMMEDIATE before the existence check: two processes bootstrapping
+    // the same fresh file concurrently must not both see zero workspaces and
+    // both insert one (the single-workspace invariant).
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing: i64 = tx.query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))?;
     if existing > 0 {
-        backfill_home_view_state(conn)?;
+        backfill_home_view_state(&tx)?;
+        tx.commit()?;
         return Ok(());
     }
 
@@ -21,7 +26,6 @@ pub fn bootstrap(conn: &mut Connection) -> Result<()> {
     let home_board_id = uuid::Uuid::now_v7().to_string();
     let now = super::migrations::now_millis();
 
-    let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",

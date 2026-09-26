@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
+  DiscoveredDevice,
+  PairingCode,
+  PairWithInput,
+  SyncPeerState,
+  SyncState,
   AddQuickBoardInput,
   AssetDto,
+  BackupSummary,
+  BoardChangeSeq,
   BoardShortcutDto,
   BoardSnapshot,
   BoardSummary,
@@ -15,7 +23,10 @@ import type {
   CreateFileCardInput,
   CreateFolderAliasInput,
   CreateImageCardInput,
+  CardReceipt,
+  CardsReceipt,
   CreateNoteInput,
+  DeviceIdentity,
   EmbedCardDto,
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
@@ -37,11 +48,14 @@ import type {
   SearchResultDto,
   SetBoardCoverInput,
   SetNoteColorInput,
+  StartupFailure,
+  TextReceipt,
   TrashSelectionInput,
   TrashSummaryDto,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
+  ViewportReceipt,
   WorkspaceGateway,
 } from "./workspace-gateway";
 
@@ -51,6 +65,10 @@ import type {
  * `WorkspaceGateway` abstraction.
  */
 export class TauriWorkspaceGateway implements WorkspaceGateway {
+  getStartupFailure(): Promise<StartupFailure | null> {
+    return invoke<StartupFailure | null>("get_startup_failure", {});
+  }
+
   getHomeBoard(): Promise<BoardSummary> {
     return invoke<BoardSummary>("get_home_board", {});
   }
@@ -63,36 +81,36 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<CardDto>("read_card", { cardId });
   }
 
-  getDataVersion(): Promise<number> {
-    return invoke<number>("get_data_version", {});
+  getBoardChangeSeq(boardId: string): Promise<BoardChangeSeq> {
+    return invoke<BoardChangeSeq>("get_board_change_seq", { boardId });
   }
 
-  createNote(input: CreateNoteInput): Promise<void> {
-    return invoke<void>("create_note", { input });
+  createNote(input: CreateNoteInput): Promise<CardReceipt> {
+    return invoke<CardReceipt>("create_note", { input });
   }
 
-  updateNote(input: UpdateNoteInput): Promise<void> {
-    return invoke<void>("update_note", { input });
+  updateNote(input: UpdateNoteInput): Promise<TextReceipt> {
+    return invoke<TextReceipt>("update_note", { input });
   }
 
-  moveCard(input: MoveCardInput): Promise<void> {
-    return invoke<void>("move_card", { input });
+  moveCard(input: MoveCardInput): Promise<CardReceipt> {
+    return invoke<CardReceipt>("move_card", { input });
   }
 
-  moveCards(input: MoveCardsInput): Promise<void> {
-    return invoke<void>("move_cards", { input });
+  moveCards(input: MoveCardsInput): Promise<CardsReceipt> {
+    return invoke<CardsReceipt>("move_cards", { input });
   }
 
-  moveCardToBoard(input: MoveCardToBoardInput): Promise<void> {
-    return invoke<void>("move_card_to_board", { input });
+  moveCardToBoard(input: MoveCardToBoardInput): Promise<CardReceipt> {
+    return invoke<CardReceipt>("move_card_to_board", { input });
   }
 
   moveBoard(input: MoveBoardInput): Promise<void> {
     return invoke<void>("move_board", { input });
   }
 
-  saveViewport(input: SaveViewportInput): Promise<void> {
-    return invoke<void>("save_viewport", { input });
+  saveViewport(input: SaveViewportInput): Promise<ViewportReceipt> {
+    return invoke<ViewportReceipt>("save_viewport", { input });
   }
 
   createChildBoard(input: CreateChildBoardInput): Promise<void> {
@@ -156,6 +174,22 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<void>("open_folder_in_finder", { cardId });
   }
 
+  async setFilesystemAliasLocalTarget(cardId: string, path: string): Promise<FilesystemAliasDto> {
+    const alias = await invoke<Omit<FilesystemAliasDto, "kind">>(
+      "set_filesystem_alias_local_target",
+      { cardId, path },
+    );
+    return { ...alias, kind: "filesystem_alias" };
+  }
+
+  getDeviceIdentity(): Promise<DeviceIdentity> {
+    return invoke<DeviceIdentity>("get_device_identity", {});
+  }
+
+  renameDevice(name: string): Promise<DeviceIdentity> {
+    return invoke<DeviceIdentity>("rename_device", { name });
+  }
+
   async createFileCard(input: CreateFileCardInput): Promise<FileCardDto> {
     const card = await invoke<Omit<FileCardDto, "kind">>("create_file_card", { input });
     return { ...card, kind: "file" };
@@ -169,8 +203,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<void>("reveal_file_card", { cardId });
   }
 
-  updateImageCaption(input: UpdateImageCaptionInput): Promise<void> {
-    return invoke<void>("update_image_caption", { input });
+  updateImageCaption(input: UpdateImageCaptionInput): Promise<TextReceipt> {
+    return invoke<TextReceipt>("update_image_caption", { input });
   }
 
   async convertNoteToEmbed(input: ConvertNoteToEmbedInput): Promise<EmbedCardDto> {
@@ -185,8 +219,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return { ...embed, kind: "embed" };
   }
 
-  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<void> {
-    return invoke<void>("update_embed_description", { input });
+  updateEmbedDescription(input: UpdateEmbedDescriptionInput): Promise<TextReceipt> {
+    return invoke<TextReceipt>("update_embed_description", { input });
   }
 
   trashSelection(input: TrashSelectionInput): Promise<string> {
@@ -241,8 +275,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<void>("set_note_color", { input });
   }
 
-  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<void> {
-    return invoke<void>("move_cards_to_board_unsorted", { input });
+  moveCardsToBoardUnsorted(input: MoveCardsToUnsortedInput): Promise<CardsReceipt> {
+    return invoke<CardsReceipt>("move_cards_to_board_unsorted", { input });
   }
   moveSelectionToBoard(
     input: import("./workspace-gateway").MoveSelectionToBoardInput,
@@ -260,7 +294,55 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
   }
 
 
-  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<void> {
-    return invoke<void>("place_unsorted_card", { input });
+  placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<CardReceipt> {
+    return invoke<CardReceipt>("place_unsorted_card", { input });
+  }
+
+  listBackups(): Promise<BackupSummary[]> {
+    return invoke<BackupSummary[]>("list_backups", {});
+  }
+
+  requestRestore(dirName: string): Promise<never> {
+    return invoke<never>("request_restore", { snapshot: dirName });
+  }
+
+  getSyncState(): Promise<SyncState> {
+    return invoke<SyncState>("get_sync_state", {});
+  }
+
+  syncListPeers(): Promise<SyncPeerState[]> {
+    return invoke<SyncPeerState[]>("sync_list_peers", {});
+  }
+
+  syncListDiscovered(): Promise<DiscoveredDevice[]> {
+    return invoke<DiscoveredDevice[]>("sync_list_discovered", {});
+  }
+
+  syncBeginPairing(): Promise<PairingCode> {
+    return invoke<PairingCode>("sync_begin_pairing", {});
+  }
+
+  syncCancelPairing(): Promise<void> {
+    return invoke<void>("sync_cancel_pairing", {});
+  }
+
+  syncPairWith(input: PairWithInput): Promise<SyncPeerState> {
+    return invoke<SyncPeerState>("sync_pair_with", { input });
+  }
+
+  syncUnpair(deviceId: string): Promise<void> {
+    return invoke<void>("sync_unpair", { deviceId });
+  }
+
+  syncNow(): Promise<SyncState> {
+    return invoke<SyncState>("sync_now", {});
+  }
+
+  onSyncState(handler: (state: SyncState) => void): Promise<() => void> {
+    return listen<SyncState>("sync-state", (event) => handler(event.payload));
+  }
+
+  onSyncApplied(handler: (boardIds: string[]) => void): Promise<() => void> {
+    return listen<string[]>("sync-applied", (event) => handler(event.payload));
   }
 }

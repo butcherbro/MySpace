@@ -1,10 +1,33 @@
-//! Clipboard helpers for the macOS MySpace app.
+//! Clipboard helpers.
 //!
 //! The UI's "Copy MySpace Link" and "Copy File Path" actions write plain text to
-//! the system pasteboard. We drive `NSPasteboard` directly (via `objc2-app-kit`,
-//! already a transitive dependency of Tauri on macOS) rather than the web
-//! Clipboard API, because WKWebView's `navigator.clipboard` requires a
-//! permissions/secure-context dance that is flaky outside a user gesture.
+//! the system clipboard. On macOS we drive `NSPasteboard` directly (via
+//! `objc2-app-kit`, already a transitive dependency of Tauri on macOS) rather
+//! than the web Clipboard API, because WKWebView's `navigator.clipboard`
+//! requires a permissions/secure-context dance that is flaky outside a user
+//! gesture. Everywhere else (Windows, Linux) the `arboard` crate is used.
+//!
+//! On Linux arboard needs an X11 (or XWayland) display at call time; tests
+//! never call these functions.
+
+/// One long-lived arboard handle. On X11 the clipboard owner has to stay alive
+/// to serve pastes to other apps; dropping the handle after every copy would
+/// lose the contents unless a clipboard manager grabs them first. Creation is
+/// retried on the next call if it fails (e.g. no display yet).
+#[cfg(not(target_os = "macos"))]
+fn with_clipboard<T>(
+    op: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
+) -> Result<T, String> {
+    use std::sync::Mutex;
+    static CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+    let mut guard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        *guard =
+            Some(arboard::Clipboard::new().map_err(|e| format!("clipboard is unavailable: {e}"))?);
+    }
+    let clipboard = guard.as_mut().expect("clipboard initialised above");
+    op(clipboard).map_err(|e| format!("clipboard write failed: {e}"))
+}
 
 /// Copies a plain-text string to the system clipboard.
 #[cfg(target_os = "macos")]
@@ -24,10 +47,10 @@ pub fn copy_text(text: &str) -> Result<(), String> {
     }
 }
 
-/// Copies a plain-text string to the system clipboard.
+/// Copies a plain-text string to the system clipboard (arboard).
 #[cfg(not(target_os = "macos"))]
-pub fn copy_text(_text: &str) -> Result<(), String> {
-    Err("clipboard copy is only implemented on macOS".to_string())
+pub fn copy_text(text: &str) -> Result<(), String> {
+    with_clipboard(|clipboard| clipboard.set_text(text))
 }
 
 /// Tauri command wrapper for `copy_text`.
@@ -74,10 +97,29 @@ pub fn copy_image_files(paths: &[std::path::PathBuf]) -> Result<(), String> {
     }
 }
 
-/// Non-macOS stub.
+/// Copies file references to the clipboard on Windows and Linux (arboard):
+/// `CF_HDROP` on Windows, so Explorer pastes copies and chat apps attach the
+/// files; `text/uri-list` on Linux/X11.
+///
+/// Fallback: if the platform rejects the file list (for example a Wayland-only
+/// session without XWayland file-list support), the absolute paths are copied
+/// as newline-separated plain text instead and the call still returns `Ok`.
 #[cfg(not(target_os = "macos"))]
-pub fn copy_image_files(_paths: &[std::path::PathBuf]) -> Result<(), String> {
-    Err("clipboard copy is only implemented on macOS".to_string())
+pub fn copy_image_files(paths: &[std::path::PathBuf]) -> Result<(), String> {
+    if with_clipboard(|clipboard| clipboard.set().file_list(paths)).is_ok() {
+        return Ok(());
+    }
+    copy_text(&paths_as_text(paths))
+}
+
+/// The plain-text fallback for [`copy_image_files`]: one path per line.
+#[cfg(any(test, not(target_os = "macos")))]
+fn paths_as_text(paths: &[std::path::PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|p| p.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Reads an image from the system clipboard, returning `(bytes, mime_type,
@@ -115,9 +157,70 @@ pub fn read_clipboard_image() -> Result<Option<(Vec<u8>, String, String)>, Strin
     Ok(None)
 }
 
+/// Reads an image from the clipboard on Windows and Linux through arboard.
+/// Order matches macOS: bitmap data first (screenshots, "Copy image"), then a
+/// copied image file (Explorer). The bitmap arrives as RGBA and is re-encoded
+/// as PNG so the asset store sees the same bytes it would get from a file.
 #[cfg(not(target_os = "macos"))]
 pub fn read_clipboard_image() -> Result<Option<(Vec<u8>, String, String)>, String> {
-    Err("clipboard read is only implemented on macOS".to_string())
+    // 1. Bitmap on the clipboard.
+    let image = with_clipboard(|cb| match cb.get_image() {
+        Ok(img) => Ok(Some(img)),
+        Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(e) => Err(e),
+    })?;
+    if let Some(img) = image {
+        let bytes = encode_rgba_png(img.width, img.height, &img.bytes)?;
+        return Ok(Some((
+            bytes,
+            "image/png".to_string(),
+            "clipboard.png".to_string(),
+        )));
+    }
+
+    // 2. A copied image file (Explorer / file manager).
+    let files = with_clipboard(|cb| match cb.get().file_list() {
+        Ok(list) => Ok(list),
+        Err(arboard::Error::ContentNotAvailable) => Ok(Vec::new()),
+        Err(e) => Err(e),
+    })?;
+    for path in files {
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| "clipboard-image".to_string());
+        let mime = crate::mime_for_asset_name(&file_name).to_string();
+        if !mime.starts_with("image/") {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&path) {
+            return Ok(Some((bytes, mime, file_name)));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Encodes a tightly packed RGBA8 buffer as PNG.
+#[cfg(not(target_os = "macos"))]
+fn encode_rgba_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 || rgba.len() != width * height * 4 {
+        return Err("clipboard image has an unexpected size".to_string());
+    }
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| format!("png header: {e}"))?;
+        writer
+            .write_image_data(rgba)
+            .map_err(|e| format!("png encode: {e}"))?;
+    }
+    Ok(out)
 }
 
 #[cfg(target_os = "macos")]
@@ -153,4 +256,27 @@ fn file_name_from_url(url_str: &str) -> String {
             segs.next_back().map(str::to_string)
         })
         .unwrap_or_else(|| "clipboard-image".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn encodes_rgba_as_png_and_rejects_bad_sizes() {
+        let px = vec![255u8, 0, 0, 255, 0, 255, 0, 255];
+        let bytes = super::encode_rgba_png(2, 1, &px).expect("png");
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(super::encode_rgba_png(2, 2, &px).is_err());
+        assert!(super::encode_rgba_png(0, 0, &[]).is_err());
+    }
+
+    use super::paths_as_text;
+    use std::path::PathBuf;
+
+    #[test]
+    fn file_list_text_fallback_is_one_path_per_line() {
+        let paths = [PathBuf::from("/tmp/a b.png"), PathBuf::from("/tmp/c.jpg")];
+        assert_eq!(paths_as_text(&paths), "/tmp/a b.png\n/tmp/c.jpg");
+        assert_eq!(paths_as_text(&[]), "");
+    }
 }

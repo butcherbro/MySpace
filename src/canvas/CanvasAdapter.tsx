@@ -13,7 +13,8 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
-import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard } from "./canvas-mapping";
+import { CanvasScrollbars } from "./CanvasScrollbars";
+import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard, staleNodeIds } from "./canvas-mapping";
 import type {
   CanvasCard,
   CanvasEvents,
@@ -37,7 +38,25 @@ interface CanvasAdapterProps {
   highlightQuery?: string;
 }
 
+/**
+ * True for targets where Space must type a space (or press a control), never
+ * start Space-pan: text fields, contenteditable (the Tiptap editor), and
+ * React Flow's own `.nokey` opt-out.
+ */
+function isSpaceReservedTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  if (target.closest('[contenteditable]:not([contenteditable="false"]), .ProseMirror, .nokey')) return true;
+  // Space activates a focused button/link — leave that alone.
+  return !!target.closest('button, a[href], [role="button"], [role="menuitem"], [role="tab"], [role="option"]');
+}
+
 type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"] };
+
+/** Top-left of the translate extent: the board never scrolls above/left of its origin. */
+const TRANSLATE_EXTENT_MIN = { x: 0, y: 0 } as const;
 
 const nodeTypes: NodeTypes = {
   // Раньше рамка была принудительно 100%/100% от React Flow узла, чей
@@ -68,7 +87,10 @@ function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode):
     height: like.height,
     zIndex: like.zIndex,
     data: { content: renderCard(card), kind: card.kind },
-    draggable: true,
+    // No per-node `draggable`: an explicit `true` here would override the
+    // `nodesDraggable={false}` that Space-pan mode sets (React Flow gives the
+    // node's own flag precedence), and a draggable node carries `nopan`, so a
+    // Space+drag starting over a card would move the card instead of panning.
   };
 }
 
@@ -115,6 +137,34 @@ export function CanvasAdapter({
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [interactionResetRevision, setInteractionResetRevision] = useState(0);
 
+  // Space + left-drag pans (Milanote). React Flow's own `panActivationKeyCode`
+  // is not enough: it switches `panOnDrag` on, but every draggable node carries
+  // `nopan`, so dragging over a card with Space held still moved the card. While
+  // Space is held we therefore also turn node dragging and marquee selection
+  // off; see the ReactFlow props below.
+  const [spacePan, setSpacePan] = useState(false);
+  useEffect(() => {
+    const isSpace = (event: KeyboardEvent) => event.code === "Space" || event.key === " ";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isSpace(event) || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isSpaceReservedTarget(event.target) || isSpaceReservedTarget(document.activeElement)) return;
+      event.preventDefault();
+      setSpacePan(true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (isSpace(event)) setSpacePan(false);
+    };
+    const release = () => setSpacePan(false);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", release);
+    };
+  }, []);
+
   // React Flow 12 очищает рамку по pointerup, но оставляет её при pointercancel.
   // WKWebView также может потерять pointerup, когда жест выходит за границы окна.
   // Перемонтируем канвас только при реально зависшей рамке, не затрагивая обычные жесты.
@@ -148,32 +198,45 @@ export function CanvasAdapter({
     viewportRef.current = viewport;
   }, [viewport]);
 
-  // Rebuild nodes when the projection (frames OR revision OR editing focus)
-  // changes, using React's "adjust state during render" pattern. Preserve each
-  // node's `selected` flag across the rebuild so entering/leaving edit mode (or
-  // a sibling save) does not silently drop the user's selection. Portal
-  // appearance (title + cover) is part of the key so a rename or cover change
-  // re-renders the tile even when the card revision is unchanged.
-  const cardsKey =
-    cards
-      .map((c) => {
-        const portal = c.kind === "board_portal" ? c : null;
-        return `${c.id}:${c.kind}:${c.frame.x},${c.frame.y},${c.frame.width},${c.frame.height},${c.zIndex},${c.revision}` +
-          (portal ? `:${portal.portalTitle ?? ""}:${portal.portalCoverAssetId ?? ""}` : "");
-      })
-      .join("|") + `#edit:${editingCardId ?? ""}` + `#highlight:${highlightQuery}`;
-  const [lastKey, setLastKey] = useState(cardsKey);
+  // Rebuild nodes when the projection changes, using React's "adjust state
+  // during render" pattern — but only the nodes whose own inputs changed
+  // (P1.8). This used to be keyed on one O(N) string of every card's frame and
+  // revision, and any change to it rebuilt *every* node, so editing one note on
+  // a 1 000-card board re-created 1 000 node objects and re-rendered 1 000
+  // cards. Now each node is rebuilt only when its card's projection inputs
+  // (`canvasNodeInputsEqual`: id, kind, frame, zIndex, revision, portal
+  // appearance), its editing flag or the highlight query changed; every other
+  // node keeps its previous object — including React Flow's own state on it
+  // (selection, measured size) — so React Flow skips it and its memoised card
+  // component is never called. A rebuilt node preserves its `selected` flag, so
+  // entering/leaving edit mode or a sibling save never drops the selection.
+  const [built, setBuilt] = useState({ cards, editingCardId, highlightQuery });
 
-  if (cardsKey !== lastKey) {
-    setLastKey(cardsKey);
-    setNodes((prev) => {
-      const selectedById = new Map(prev.map((n) => [n.id, n.selected]));
-      return cards.map((c) => {
-        const node = cardToNode(c, renderCard);
-        node.selected = selectedById.get(c.id) ?? false;
-        return node;
+  if (
+    cards !== built.cards ||
+    editingCardId !== built.editingCardId ||
+    highlightQuery !== built.highlightQuery
+  ) {
+    const stale = staleNodeIds(built, { cards, editingCardId, highlightQuery });
+    setBuilt({ cards, editingCardId, highlightQuery });
+    if (stale !== null) {
+      setNodes((prev) => {
+        const prevById = new Map(prev.map((n) => [n.id, n]));
+        let changed = prev.length !== cards.length;
+        const next = cards.map((c, i) => {
+          const existing = prevById.get(c.id);
+          if (existing && !stale.has(c.id)) {
+            if (prev[i] !== existing) changed = true;
+            return existing;
+          }
+          changed = true;
+          const node = cardToNode(c, renderCard);
+          node.selected = existing?.selected ?? false;
+          return node;
+        });
+        return changed ? next : prev;
       });
-    });
+    }
   }
 
   const nodesRef = useRef(nodes);
@@ -544,8 +607,9 @@ export function CanvasAdapter({
   return (
     <div
       ref={surfaceRef}
-      className="canvas-surface"
+      className={spacePan ? "canvas-surface canvas-surface--space-pan" : "canvas-surface"}
       data-testid="canvas-surface"
+      data-space-pan={spacePan ? "true" : undefined}
       data-kind="desk"
       tabIndex={0}
       onKeyDown={handleCanvasKeyDown}
@@ -556,18 +620,27 @@ export function CanvasAdapter({
         key={interactionResetRevision}
         nodes={nodes}
         nodeTypes={nodeTypes}
+        // P1.8: mount only the cards that intersect the viewport. React Flow
+        // still renders every node once (to measure it), then unmounts the
+        // off-screen ones; marquee selection, select-all and group drag work
+        // from its internal node lookup (positions + our explicit width/height),
+        // not the DOM, so off-screen selected cards still move with the group.
+        onlyRenderVisibleElements
         onNodesChange={handleNodesChange}
         deleteKeyCode={null}
         defaultViewport={liveViewport}
-        translateExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
+        translateExtent={[[TRANSLATE_EXTENT_MIN.x, TRANSLATE_EXTENT_MIN.y], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
         nodeExtent={[[0, 0], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]]}
         panOnScroll
-        selectionOnDrag
-        panOnDrag={[1, 2]}
+        // Space-pan is handled above (it also has to disable node dragging),
+        // so React Flow's built-in Space activation is switched off.
+        panActivationKeyCode={null}
+        selectionOnDrag={!spacePan}
+        panOnDrag={spacePan ? [0, 1, 2] : [1, 2]}
         zoomOnScroll
         zoomOnPinch
         zoomOnDoubleClick={false}
-        nodesDraggable
+        nodesDraggable={!spacePan}
         nodesConnectable={false}
         edgesFocusable={false}
         nodesFocusable
@@ -598,7 +671,10 @@ export function CanvasAdapter({
         minZoom={0.1}
         maxZoom={4}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={3} color="var(--desk-dot)" />
+        {/* Fine dots at zoom 1 (Milanote-like); they scale with the viewport, so
+            zooming in makes them coarser. */}
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color="var(--desk-dot)" />
+        <CanvasScrollbars extentMin={TRANSLATE_EXTENT_MIN} />
       </ReactFlow>
     </div>
   );
