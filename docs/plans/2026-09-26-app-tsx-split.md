@@ -35,3 +35,17 @@ Behaviour does not change.
 
 Steps 10–11 touch viewport and reload state, where the "spring back" bug (todo №26) lived;
 the lead session does them directly and checks by hand in `npm run tauri dev`.
+
+## Outcome (2026-09-26)
+Steps 1–11 as planned, plus:
+| # | Hook | Moves |
+|---|------|-------|
+| 12 | `use-workspace-shortcuts` | the window keydown handler |
+| 13 | `use-stable-card-handlers` | latest-ref + stable facade for card renderers |
+| 14 | `use-latest-ref`, `use-canvas-pointer` (+ `useCanvasPointerTracking`), `use-unsorted-drawer` | ref mirrors, pointer tracking, Unsorted auto-open |
+
+`App.tsx`: 2 705 → 868 lines (the undo work added ~40 lines in between). What is left is
+~335 lines of JSX and ~530 lines of hook calls with their argument objects. The 800-line
+target is not met; going further means splitting the JSX into components (dialogs, top bar),
+which is a different kind of change and has no user-visible value now, so it is deferred.
+Vitest grew from 599 to 900 tests; every extracted hook has its own test file.

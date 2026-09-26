@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { EmptyBoardHint } from "./app/EmptyBoardHint";
 import {
@@ -53,6 +53,9 @@ import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
 import { useWorkspaceShortcuts } from "./app/use-workspace-shortcuts";
 import { useStableCardHandlers } from "./app/use-stable-card-handlers";
+import { useLatestRef } from "./app/use-latest-ref";
+import { useCanvasPointer, useCanvasPointerTracking } from "./app/use-canvas-pointer";
+import { useUnsortedDrawer } from "./app/use-unsorted-drawer";
 import { flushAllDrafts } from "./editor/draft-flush-registry";
 import type {
   BoardPortalDto,
@@ -96,14 +99,7 @@ function App() {
 
   // Unsorted drawer: shows when unsorted cards exist; Close hides it until the
   // next blind drop.
-  const [unsortedOpen, setUnsortedOpen] = useState(false);
-  const prevUnsortedCountRef = useRef(state.unsortedCards.length);
-  useEffect(() => {
-    if (state.unsortedCards.length > prevUnsortedCountRef.current) {
-      setUnsortedOpen(true);
-    }
-    prevUnsortedCountRef.current = state.unsortedCards.length;
-  }, [state.unsortedCards.length]);
+  const { unsortedOpen, setUnsortedOpen } = useUnsortedDrawer({ unsortedCount: state.unsortedCards.length });
 
 
   // Search: query/debounce/results owned here; rendering/keyboard in
@@ -119,42 +115,17 @@ function App() {
   // Contextual note rail: the active note's editor command surface + bold state.
   const noteFormatting = useNoteFormatting({ activeNote, dispatcher, idGenerator, dispatch });
 
-  // Always reflects the latest cards (notes AND portals) so queued tasks read
-  // the current revision.
-  const cardsRef = useRef(state.cards);
-  useEffect(() => {
-    cardsRef.current = state.cards;
-  }, [state.cards]);
+  // Always reflects the latest cards (notes AND portals) so queued tasks read the current revision.
+  const cardsRef = useLatestRef(state.cards);
 
   // Last known pointer position over the canvas, in board-space (flow
-  // coordinates). Drives paste placement (todo.md №15): pasted cards land
-  // under the cursor, not at a fixed origin.
-  const lastCanvasPointRef = useRef<{ x: number; y: number } | null>(null);
-  // A board switch (todo.md №25) must drop any pointer position tracked for
-  // the *previous* board: `lastCanvasPointRef` holds flow-space coordinates,
-  // which are only meaningful relative to the React Flow instance that
-  // produced them. Without this, pasting right after opening a different
-  // board — before the mouse moves again — reused the old board's stale
-  // coordinate, landing the note off in whatever spot that number happens to
-  // map to on the new board (seen live as "paste lands in the corner").
-  // Falling back to `null` here means the very next paste instead uses
-  // `fallbackPastePosition()` (viewport center) until a real pointermove
-  // re-establishes a same-board position.
-  useEffect(() => {
-    lastCanvasPointRef.current = null;
-  }, [boardOpenRevision]);
-  // Declared here (rather than by the JSX below) so the paste callbacks —
-  // defined further up the component — can close over it: it's still the
-  // same DOM node either way, since the render effect that attaches it runs
-  // once for the app's lifetime (see the pointermove effect near the JSX).
-  const canvasRef = useRef<HTMLDivElement>(null);
+  // coordinates); drives paste placement (todo.md №15). See
+  // use-canvas-pointer.ts for why the reset effect and the pointermove
+  // effect (near the JSX, below) are declared as two hooks instead of one.
+  const { canvasRef, lastCanvasPointRef } = useCanvasPointer({ boardOpenRevision });
 
-  // Always reflects the latest selection, so a drag start can snapshot all
-  // currently-selected card ids for a group move.
-  const selectionRef = useRef(state.selection);
-  useEffect(() => {
-    selectionRef.current = state.selection;
-  }, [state.selection]);
+  // Always reflects the latest selection, so a drag start can snapshot all currently-selected card ids for a group move.
+  const selectionRef = useLatestRef(state.selection);
 
   const { handleRetryEmbedMetadata } = useEmbedMetadata({
     cards: state.cards,
@@ -165,10 +136,7 @@ function App() {
 
   // Screen->board coordinate converter, populated by CanvasAdapter on init.
   const screenToFlowRef = useRef<((x: number, y: number) => { x: number; y: number }) | null>(null);
-  const boardRef = useRef(board);
-  useEffect(() => {
-    boardRef.current = board;
-  }, [board]);
+  const boardRef = useLatestRef(board);
 
 
   const {
@@ -507,27 +475,17 @@ function App() {
   const handleTabClose = navigation.closeTab;
 
   // Tracks pointer position over the canvas in board-space, for paste
-  // placement. The canvas element is stable for the app's lifetime, so one
-  // listener suffices; screenToFlowRef may not be ready on the very first
-  // paint, in which case the move is simply skipped (next move catches up).
-  useEffect(() => {
-    const el = canvasRef.current;
-    if (!el) return;
-    function handleMove(e: PointerEvent) {
-      const flow = screenToFlowRef.current;
-      if (!flow) return;
-      lastCanvasPointRef.current = flow(e.clientX, e.clientY);
-    }
-    el.addEventListener("pointermove", handleMove);
-    return () => el.removeEventListener("pointermove", handleMove);
-  }, []);
+  // placement (use-canvas-pointer.ts).
+  useCanvasPointerTracking({ canvasRef, lastCanvasPointRef, screenToFlowRef });
 
   const handleEditDeactivate = useCallback(() => {
     dispatch({ type: "editingStopped" });
     // Return focus to the canvas so keyboard shortcuts (e.g. Cmd+A) and the
     // next interaction land back on the board, not a stale editor.
     canvasRef.current?.focus();
-  }, []);
+    // canvasRef — стабильный ref, но теперь приходит из хука, поэтому линтер
+    // просит указать его явно (то же исключение, что и для dispatch/сеттеров).
+  }, [canvasRef]);
 
   useWorkspaceShortcuts({
     handleNavigateBack,
