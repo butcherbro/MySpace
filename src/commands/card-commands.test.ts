@@ -210,6 +210,22 @@ describe("MoveCardsCommand", () => {
     expect(cards.get("note-1")!.frame).toEqual(sourceFrame);
   });
 
+  // Координаты после перетаскивания дробные; serde_json без float_roundtrip
+  // может вернуть их с расхождением в последнем бите — это не «сдвинули».
+  it("undo treats a last-bit difference in stored coordinates as the same position", async () => {
+    const after = { ...targetFrame, x: 267.339488153343, y: 1079.7334438078 };
+    const { gateway, cards, touch } = storeGateway({
+      "note-1": { boardId: "home", frame: sourceFrame, revision: 1 },
+    });
+    const cmd = new MoveCardsCommand("move", [{ id: "note-1", revision: 1, before: sourceFrame, after }]);
+
+    await cmd.execute(gateway);
+    touch("note-1", { frame: { ...after, x: after.x * (1 + Number.EPSILON), y: after.y * (1 - Number.EPSILON) } });
+    await cmd.undo(gateway);
+
+    expect(cards.get("note-1")!.frame.x).toBe(sourceFrame.x);
+  });
+
   it("undo keeps a resize made after the move", async () => {
     const { gateway, cards, touch } = storeGateway({
       "note-1": { boardId: "home", frame: sourceFrame, revision: 1 },

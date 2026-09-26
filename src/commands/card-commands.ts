@@ -116,8 +116,12 @@ export class CreateNoteCommand implements WorkspaceCommand {
   }
 }
 
+// Дробные координаты проходят JSON → Rust (serde_json без float_roundtrip) и
+// обратно, и последний бит может не совпасть. Сотая доля пикселя — не движение.
+const POSITION_EPSILON = 0.01;
+
 function samePosition(a: Frame, b: Frame): boolean {
-  return a.x === b.x && a.y === b.y;
+  return Math.abs(a.x - b.x) < POSITION_EPSILON && Math.abs(a.y - b.y) < POSITION_EPSILON;
 }
 
 /** `frame` moved to `position`'s x/y; keeps `frame`'s size. */
