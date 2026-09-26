@@ -17,6 +17,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Full debuginfo and incremental artifacts filled the ubuntu runner's disk
+  # (ld: Bus error, "No space left on device") on an uncached build. CI never
+  # attaches a debugger; line tables keep file:line in panic backtraces.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   gates:
