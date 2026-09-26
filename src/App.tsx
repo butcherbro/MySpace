@@ -9,6 +9,7 @@ import {
 import { useNoteFormatting } from "./app/use-note-formatting";
 import { useBoardCover } from "./app/use-board-cover";
 import { useQuickBoards } from "./app/use-quick-boards";
+import { useEmbedMetadata } from "./app/use-embed-metadata";
 import { useTrashController } from "./app/use-trash-controller";
 import { buildCreateImageCardInput } from "./app/import-image-card";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
@@ -189,54 +190,12 @@ function App() {
     selectionRef.current = state.selection;
   }, [state.selection]);
 
-  const metadataInFlightRef = useRef(new Set<string>());
-  const metadataAttemptedRef = useRef(new Set<string>());
-
-  const requestEmbedMetadata = useCallback(
-    (embed: EmbedCardDto, force = false) => {
-      const attemptKey = `${embed.id}:${embed.revision}`;
-      if (metadataInFlightRef.current.has(embed.id)) return;
-      if (!force && metadataAttemptedRef.current.has(attemptKey)) return;
-
-      metadataInFlightRef.current.add(embed.id);
-      metadataAttemptedRef.current.add(attemptKey);
-      void gateway
-        .enrichEmbedMetadata({ id: embed.id, expectedRevision: embed.revision })
-        .then((enriched) => {
-          // Keep the mutation ref authoritative before the enriched card mounts:
-          // Link Card may immediately persist a larger content-driven height.
-          cardsRef.current = cardsRef.current.map((card) =>
-            card.id === embed.id ? enriched : card,
-          );
-          dispatch({ type: "cardReplaced", id: embed.id, card: enriched });
-        })
-        .catch((cause) => {
-          dispatch({ type: "failed", message: errorMessage(cause) });
-        })
-        .finally(() => {
-          metadataInFlightRef.current.delete(embed.id);
-        });
-    },
-    [gateway],
-  );
-
-  useEffect(() => {
-    for (const card of state.cards) {
-      if (card.kind === "embed" && card.metadataStatus === "pending") {
-        requestEmbedMetadata(card);
-      }
-    }
-  }, [requestEmbedMetadata, state.cards]);
-
-  const handleRetryEmbedMetadata = useCallback(
-    (id: string) => {
-      const embed = cardsRef.current.find(
-        (card): card is EmbedCardDto => card.kind === "embed" && card.id === id,
-      );
-      if (embed) requestEmbedMetadata(embed, true);
-    },
-    [requestEmbedMetadata],
-  );
+  const { handleRetryEmbedMetadata } = useEmbedMetadata({
+    cards: state.cards,
+    cardsRef,
+    gateway,
+    dispatch,
+  });
 
   // Screen->board coordinate converter, populated by CanvasAdapter on init.
   const screenToFlowRef = useRef<((x: number, y: number) => { x: number; y: number }) | null>(null);
@@ -892,8 +851,8 @@ function App() {
         // Keep the ref authoritative *inside this microtask*: the note's own
         // auto-grow (NoteCard) debounces a resize write off the same keystroke
         // and can land right behind this one in the queue, before React's
-        // effect has re-synced `cardsRef` from state (see the embed-metadata
-        // note above for the same pattern).
+        // effect has re-synced `cardsRef` from state (see `useEmbedMetadata`'s
+        // request handler for the same pattern).
         cardsRef.current = cardsRef.current.map((c) =>
           c.id === id
             ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText, corrupt: false }
