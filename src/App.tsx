@@ -10,6 +10,7 @@ import { useNoteFormatting } from "./app/use-note-formatting";
 import { useBoardCover } from "./app/use-board-cover";
 import { useQuickBoards } from "./app/use-quick-boards";
 import { useEmbedMetadata } from "./app/use-embed-metadata";
+import { useCopyActions } from "./app/use-copy-actions";
 import { useTrashController } from "./app/use-trash-controller";
 import { buildCreateImageCardInput } from "./app/import-image-card";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
@@ -23,7 +24,7 @@ import {
   MoveCardToBoardCommand,
 } from "./commands/card-commands";
 import { PasteCardsCommand, type PasteCardSpec } from "./commands/paste-commands";
-import { buildPasteSpecs, readCardClipboard, setCardClipboard, type CopiedCard } from "./app/card-clipboard";
+import { buildPasteSpecs, readCardClipboard, type CopiedCard } from "./app/card-clipboard";
 import {
   CreateBoardShortcutCommand,
   CreateChildBoardCommand,
@@ -70,7 +71,6 @@ import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
 import { htmlToDocument } from "./editor/html-to-document";
 import { flushAllDrafts } from "./editor/draft-flush-registry";
-import { copyText } from "./services/clipboard";
 import type {
   AssetDto,
   BoardPortalDto,
@@ -1373,66 +1373,22 @@ function App() {
       });
   }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds]);
 
-  // Copy the stable MySpace address for the right-clicked card (or the current
-  // board when invoked from a portal/board context). "Copy MySpace Link" is the
-  // universal action; images additionally offer "Copy File Path".
-  const handleCopyLink = useCallback(async () => {
-    if (!contextMenu) return;
-    const card = state.cards.find((c) => c.id === contextMenu.cardId);
-    let address: string;
-    if (card?.kind === "board_portal") {
-      // A portal is a folder: copy the address of the board it leads to.
-      address = `myspace://board/${card.target.id}`;
-    } else if (card?.kind === "board_shortcut" && card.target) {
-      // A shortcut copies the address of the board it points to, same as a
-      // portal — the shortcut card itself has no separate identity to share.
-      address = `myspace://board/${card.target.id}`;
-    } else if (card) {
-      address = `myspace://card/${card.id}`;
-    } else {
-      address = "";
-    }
-    try {
-      await copyText(address);
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
-    }
-  }, [contextMenu, state.cards]);
-
-  const handleCopyFilePath = useCallback(async () => {
-    if (!contextMenu) return;
-    const card = state.cards.find((c): c is ImageCardDto => c.kind === "image" && c.id === contextMenu.cardId);
-    if (!card) return;
-    try {
-      const path = await gateway.resolveAssetPath(card.asset.id);
-      await copyText(path);
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
-    }
-  }, [contextMenu, state.cards, gateway]);
-
-  // Copy the actual source URL of a Link Card (embed).
-  const handleCopySourceUrl = useCallback(async () => {
-    if (!contextMenu) return;
-    const card = state.cards.find((c): c is EmbedCardDto => c.kind === "embed" && c.id === contextMenu.cardId);
-    if (!card) return;
-    try {
-      await copyText(card.sourceUrl);
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
-    }
-  }, [contextMenu, state.cards]);
-
-  // Copy the stable address of the currently-open board.
-  const handleCopyBoardLink = useCallback(async () => {
-    setPaneContextMenu(null);
-    if (!board) return;
-    try {
-      await copyText(`myspace://board/${board.id}`);
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
-    }
-  }, [board]);
+  const {
+    handleCopyLink,
+    handleCopyFilePath,
+    handleCopySourceUrl,
+    handleCopyBoardLink,
+    handleCopySelectionImages,
+    handleCopySelection,
+  } = useCopyActions({
+    contextMenu,
+    selection: state.selection,
+    cards: state.cards,
+    board,
+    gateway,
+    dispatch,
+    setPaneContextMenu,
+  });
 
   const handlePaneContextMenu = useCallback((x: number, y: number) => {
     const flow = screenToFlowRef.current;
@@ -1507,86 +1463,6 @@ function App() {
     },
     [dispatcher, idGenerator],
   );
-
-  const handleCopySelectionImages = useCallback(() => {
-    const imageIds = state.selection.filter((id) => {
-      const card = state.cards.find((c) => c.id === id);
-      return card?.kind === "image";
-    });
-    if (imageIds.length === 0) return;
-    void gateway
-      .copyImageCards({ cardIds: imageIds })
-      .catch((e) => {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      });
-  }, [state.selection, state.cards, gateway]);
-
-  // Cmd+C over a canvas selection: fills the internal card clipboard
-  // (todo.md №15) with every copyable card (note/image) in the selection, in
-  // addition to the existing system-clipboard image copy above (unchanged).
-  const handleCopySelection = useCallback(() => {
-    const selected = state.selection
-      .map((id) => state.cards.find((c) => c.id === id))
-      .filter(
-        (c): c is NoteCardDto | ImageCardDto | BoardPortalDto | BoardShortcutDto =>
-          c != null &&
-          (c.kind === "note" ||
-            c.kind === "image" ||
-            c.kind === "board_portal" ||
-            // A broken shortcut has no target to copy.
-            (c.kind === "board_shortcut" && c.target !== null)),
-      );
-    if (selected.length > 0) {
-      const minX = Math.min(...selected.map((c) => c.frame.x));
-      const minY = Math.min(...selected.map((c) => c.frame.y));
-      const copied: CopiedCard[] = selected.map((c) => {
-        if (c.kind === "note") {
-          return {
-            kind: "note",
-            dx: c.frame.x - minX,
-            dy: c.frame.y - minY,
-            width: c.frame.width,
-            height: c.frame.height,
-            documentJson: c.documentJson,
-            plainText: c.plainText,
-            colorToken: c.colorToken,
-          };
-        }
-        if (c.kind === "image") {
-          return {
-            kind: "image",
-            dx: c.frame.x - minX,
-            dy: c.frame.y - minY,
-            width: c.frame.width,
-            height: c.frame.height,
-            asset: c.asset,
-            captionJson: c.captionJson,
-            captionPlainText: c.captionPlainText,
-          };
-        }
-        if (c.kind === "board_shortcut") {
-          return {
-            kind: "shortcut",
-            dx: c.frame.x - minX,
-            dy: c.frame.y - minY,
-            width: c.frame.width,
-            height: c.frame.height,
-            targetBoardId: c.target!.id,
-          };
-        }
-        return {
-          kind: "board",
-          dx: c.frame.x - minX,
-          dy: c.frame.y - minY,
-          width: c.frame.width,
-          height: c.frame.height,
-          sourceBoardId: c.target.id,
-        };
-      });
-      setCardClipboard(copied);
-    }
-    handleCopySelectionImages();
-  }, [state.selection, state.cards, handleCopySelectionImages]);
 
   // Applying a loaded snapshot is the store's concern, not navigation's: note
   // documents are normalized here, and both the startup load and every later
