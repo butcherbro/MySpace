@@ -42,7 +42,7 @@ tracing-appender = "0.2"
 # thread and spawn_blocking for pooled reads. Tauri already pulls tokio in.
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "net", "time", "io-util"] }
 # Content hash of every managed asset (P1.2, ADR-0011 §4: blob identity).
-sha2 = "0.10"
+sha2 = "0.11"
 # Canonical paths without the Windows `\\?\` verbatim prefix for the path
 # folder locator (already in the tree via tauri-plugin-opener).
 dunce = "1"
