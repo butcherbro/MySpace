@@ -656,6 +656,11 @@ export interface WorkspaceGateway {
    * not found, or it failed validation) and nothing changed.
    */
   requestRestore(dirName: string): Promise<never>;
+  /**
+   * Saves an error report under `<data dir>/error-reports/` (a local file,
+   * never synced) and returns its path and plain-text rendering.
+   */
+  recordErrorReport(input: ErrorReportInput): Promise<ErrorReportSaved>;
 
   // ---- device sync over the LAN (ADR-0011 S3) -------------------------
   /** Paired peers, discovery status, this device's port and addresses. */
@@ -732,6 +737,23 @@ export interface StartupFailure {
   code: string;
   /** User-facing text, prefixed with the code. */
   message: string;
+}
+
+/** What the frontend knows about an error it shows (`record_error_report`). */
+export interface ErrorReportInput {
+  message: string;
+  code?: string;
+  boardId?: string;
+  /** Where the error surfaced: `canvas`, `trash`, `trash-empty`. */
+  source?: string;
+  frontendVersion: string;
+  userAgent: string;
+}
+
+/** A saved error report: its file and the text "Copy report" copies. */
+export interface ErrorReportSaved {
+  path: string;
+  text: string;
 }
 
 /** One snapshot as shown in the "Restore from backup" dialog. */

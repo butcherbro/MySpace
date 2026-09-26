@@ -20,6 +20,7 @@ import { useBoardLoading } from "./app/use-board-loading";
 import { useBoardRefresh } from "./app/use-board-refresh";
 import { useCreationDrag } from "./app/use-creation-drag";
 import { useTrashController } from "./app/use-trash-controller";
+import { useErrorReports } from "./app/error-reports";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import type { CanvasCard } from "./canvas/canvas-types";
@@ -162,6 +163,14 @@ function App() {
   const refreshTrash = trash.refresh;
   const trashOpen = trash.open;
   const closeTrashDrawer = trash.closeDrawer;
+  // Every newly shown error is saved as a local report (never synced).
+  const { copyReport } = useErrorReports({
+    gateway,
+    canvasError: error,
+    boardId: board?.id,
+    trashError: trash.error,
+    trashEmptyError: trash.emptyError,
+  });
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [devicesDialogOpen, setDevicesDialogOpen] = useState(false);
 
@@ -719,6 +728,7 @@ function App() {
           <CanvasErrorBanner
             message={error}
             onRetry={() => dispatch({ type: "clearError" })}
+            onCopyReport={() => copyReport(error)}
           />
         )}
         {trash.open && (
