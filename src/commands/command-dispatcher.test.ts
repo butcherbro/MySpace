@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CommandDispatcher } from "./command-dispatcher";
 import { MockWorkspaceGateway } from "../services/mock-workspace-gateway";
-import type { WorkspaceCommand } from "./workspace-command";
+import { CommandConflictError, type WorkspaceCommand } from "./workspace-command";
 import type { WorkspaceGateway } from "../services/workspace-gateway";
 
 function cmd(
@@ -136,5 +136,98 @@ describe("CommandDispatcher", () => {
     await d.undo();
     await d.redo();
     expect(log).toEqual(["e1", "u1", "e1"]);
+  });
+
+  it("drops a command whose undo conflicts and reaches the next one", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    const log: string[] = [];
+    const listener = vi.fn();
+    await d.execute(cmd("1", "One", async () => {}, async () => { log.push("u1"); }));
+    await d.execute(
+      cmd("2", "Move", async () => {}, async () => { throw new CommandConflictError("Move", "undo"); }),
+    );
+    d.subscribe(listener);
+
+    await expect(d.undo()).rejects.toBeInstanceOf(CommandConflictError);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(d.undoLabel).toBe("One");
+    expect(d.canRedo()).toBe(false);
+
+    expect(await d.undo()).toBe(true);
+    expect(log).toEqual(["u1"]);
+  });
+
+  it("drops a command whose undo hits a backend stale_revision", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    const stale = { code: "stale_revision", message: { expected: 6, actual: 9 } };
+    await d.execute(cmd("1", "One", async () => {}, async () => {}));
+    await d.execute(cmd("2", "Move", async () => {}, async () => { throw stale; }));
+
+    await expect(d.undo()).rejects.toBe(stale);
+    expect(d.undoLabel).toBe("One");
+    expect(await d.undo()).toBe(true);
+  });
+
+  // Карточку удалили мимо стека (синхронизация, MCP): readCard в undo вернёт
+  // not_found, и команда уже никогда не выполнится.
+  it("drops a command whose undo hits not_found (card removed outside the history)", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    const gone = { code: "not_found", message: "card c1" };
+    await d.execute(cmd("1", "One", async () => {}, async () => {}));
+    await d.execute(cmd("2", "Move", async () => {}, async () => { throw gone; }));
+
+    await expect(d.undo()).rejects.toBe(gone);
+    expect(d.undoLabel).toBe("One");
+  });
+
+  it("drops a command whose redo conflicts and reaches the next one", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    const listener = vi.fn();
+    let conflict = false;
+    await d.execute(cmd("1", "One", async () => {}, async () => {}));
+    await d.execute(
+      cmd(
+        "2",
+        "Move",
+        async () => {
+          if (conflict) throw new CommandConflictError("Move", "redo");
+        },
+        async () => {},
+      ),
+    );
+    await d.undo();
+    await d.undo();
+    conflict = true;
+    d.subscribe(listener);
+
+    expect(await d.redo()).toBe(true); // One
+    await expect(d.redo()).rejects.toBeInstanceOf(CommandConflictError);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(d.canRedo()).toBe(false);
+    expect(d.undoLabel).toBe("One");
+  });
+
+  it("drops a command whose redo hits a backend stale_revision", async () => {
+    const d = new CommandDispatcher(new MockWorkspaceGateway());
+    let fail = false;
+    await d.execute(cmd("1", "One", async () => {}, async () => {}));
+    await d.execute(
+      cmd(
+        "2",
+        "Move",
+        async () => {
+          if (fail) throw { code: "stale_revision", message: { expected: 1, actual: 2 } };
+        },
+        async () => {},
+      ),
+    );
+    await d.undo();
+    await d.undo();
+    await d.redo();
+    fail = true;
+
+    await expect(d.redo()).rejects.toMatchObject({ code: "stale_revision" });
+    expect(d.canRedo()).toBe(false);
+    expect(d.undoLabel).toBe("One");
   });
 });

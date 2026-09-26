@@ -5,11 +5,24 @@
 // - Undo dispatches a new durable inverse mutation.
 // - Redo is cleared after any new command.
 // - Maximum 200 entries.
+// - Undo/redo that fails with `CommandConflictError`, a backend
+//   `stale_revision` (revisions only grow) or `not_found` (the card was removed
+//   outside the history, e.g. by sync) drops that command from its stack, since
+//   it can never succeed later, and rethrows; any other failure keeps it.
 
 import type { WorkspaceGateway } from "../services/workspace-gateway";
-import type { WorkspaceCommand } from "./workspace-command";
+import { CommandConflictError, type WorkspaceCommand } from "./workspace-command";
 
 const HISTORY_LIMIT = 200;
+
+function isPermanentFailure(err: unknown): boolean {
+  return (
+    err instanceof CommandConflictError ||
+    (typeof err === "object" &&
+      err !== null &&
+      ["stale_revision", "not_found"].includes((err as { code?: unknown }).code as string))
+  );
+}
 
 export class CommandDispatcher {
   private undoStack: WorkspaceCommand<unknown>[] = [];
@@ -36,7 +49,7 @@ export class CommandDispatcher {
     return this.enqueue(async () => {
       const cmd = this.undoStack[this.undoStack.length - 1];
       if (!cmd) return false;
-      await cmd.undo(this.gateway);
+      await this.runOrDrop(() => cmd.undo(this.gateway), this.undoStack);
       this.undoStack.pop();
       this.redoStack.push(cmd);
       this.notify();
@@ -48,7 +61,7 @@ export class CommandDispatcher {
     return this.enqueue(async () => {
       const cmd = this.redoStack[this.redoStack.length - 1];
       if (!cmd) return false;
-      await cmd.execute(this.gateway);
+      await this.runOrDrop(() => cmd.execute(this.gateway), this.redoStack);
       this.redoStack.pop();
       this.undoStack.push(cmd);
       this.notify();
@@ -79,6 +92,19 @@ export class CommandDispatcher {
 
   private notify(): void {
     for (const listener of this.listeners) listener();
+  }
+
+  /** Runs `op` for the command on top of `stack`; see the drop rule above. */
+  private async runOrDrop(op: () => Promise<unknown>, stack: WorkspaceCommand<unknown>[]): Promise<void> {
+    try {
+      await op();
+    } catch (err) {
+      if (isPermanentFailure(err)) {
+        stack.pop();
+        this.notify();
+      }
+      throw err;
+    }
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
