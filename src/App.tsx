@@ -14,6 +14,7 @@ import { useCopyActions } from "./app/use-copy-actions";
 import { usePasteActions } from "./app/use-paste-actions";
 import { useCardEdits } from "./app/use-card-edits";
 import { useCardCreation } from "./app/use-card-creation";
+import { useContextActions } from "./app/use-context-actions";
 import { useCreationDrag } from "./app/use-creation-drag";
 import { useTrashController } from "./app/use-trash-controller";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
@@ -26,8 +27,6 @@ import {
   MoveCardToBoardCommand,
 } from "./commands/card-commands";
 import {
-  CreateBoardShortcutCommand,
-  DuplicateBoardCommand,
   MoveBoardCommand,
   RenameBoardCommand,
 } from "./commands/board-commands";
@@ -35,7 +34,6 @@ import { CommandDispatcher } from "./commands/command-dispatcher";
 import type { NoteEditorCommands } from "./editor/editor-commands";
 import type { TextColorId } from "./editor/text-color";
 import type { NoteColorId } from "./cards/note/note-color";
-import { TrashSelectionCommand, type TrashItem } from "./commands/trash-commands";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
 import { TrashDrawer } from "./components/trash/TrashDrawer";
@@ -63,7 +61,6 @@ import { createGateway } from "./services/create-gateway";
 import type { DocumentSaveOptions } from "./editor/corrupt-document";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
-import { pickFolder } from "./services/asset-picker";
 import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
 import { flushAllDrafts } from "./editor/draft-flush-registry";
@@ -86,11 +83,6 @@ function App() {
 
   const [state, dispatch] = useReducer(reducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
-  // x/y — экранные координаты для позиционирования меню; flowX/flowY — координаты
-  // доски (с учётом zoom/pan) для размещения левого верхнего угла новой карточки.
-  const [paneContextMenu, setPaneContextMenu] = useState<
-    { x: number; y: number; flowX: number; flowY: number } | null
-  >(null);
   const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
   const notes = state.cards.filter((c): c is NoteCardDto => c.kind === "note");
@@ -511,49 +503,32 @@ function App() {
     [gateway, dispatcher, idGenerator],
   );
 
-  // Trashing a board_portal cascades server-side to every shortcut pointing at
-  // it (todo.md №17, ADR-0010). A shortcut on the SAME board being viewed is
-  // visible right now and must disappear immediately too — the backend already
-  // trashed it, so re-sending it as a leaf trash item would 404 against an
-  // already-trashed row. This only patches the currently-rendered board; a
-  // shortcut elsewhere pointing deeper into the trashed subtree self-heals on
-  // its own board's next snapshot load, which already reflects the cascade.
-  const cascadedShortcutIds = useCallback(
-    (trashedBoardIds: Set<string>): string[] =>
-      state.cards
-        .filter((c) => c.kind === "board_shortcut" && c.target && trashedBoardIds.has(c.target.id))
-        .map((c) => c.id),
-    [state.cards],
-  );
-
-  const handleDeleteSelection = useCallback(async () => {
-    if (state.selection.length === 0) return;
-    const items: TrashItem[] = state.selection
-      .map((id) => {
-        const card = state.cards.find((c) => c.id === id);
-        if (!card) return null;
-        if (card.kind === "board_portal") {
-          return { id: card.target.id, kind: "board_portal" as const };
-        }
-        return { id: card.id, kind: card.kind };
-      })
-      .filter((x): x is TrashItem => x !== null);
-
-    if (items.length === 0) return;
-
-    const trashedBoardIds = new Set(
-      items.filter((i) => i.kind === "board_portal").map((i) => i.id),
-    );
-    const extraIds = cascadedShortcutIds(trashedBoardIds);
-
-    try {
-      await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
-      dispatch({ type: "cardsRemoved", ids: [...state.selection, ...extraIds] });
-      void refreshTrash();
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
-    }
-  }, [state.selection, state.cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds]);
+  const {
+    paneContextMenu,
+    setPaneContextMenu,
+    handleDeleteSelection,
+    handleCardsSelected,
+    handleCardActivated,
+    handleRequestContextMenu,
+    handleLoadFolderPreview,
+    handleOpenFolderInFinder,
+    handlePointFolderShortcutHere,
+    handleContextDelete,
+    handlePaneContextMenu,
+    handleDuplicatePortal,
+    handleCreateShortcut,
+  } = useContextActions({
+    cards: state.cards,
+    selection: state.selection,
+    contextMenu,
+    setContextMenu,
+    screenToFlowRef,
+    gateway,
+    dispatcher,
+    idGenerator,
+    dispatch,
+    refreshTrash,
+  });
 
   // Viewport saves are debounced, flushed on navigation, and pinned to the board
   // revision captured when the viewport settled. The board-scoped policy around
@@ -586,84 +561,6 @@ function App() {
     },
   });
 
-  const handleCardsSelected = useCallback((e: { ids: string[] }) => {
-    const prev = state.selection;
-    const next = e.ids;
-    if (prev.length === next.length && prev.every((id, i) => id === next[i])) {
-      return;
-    }
-    dispatch({ type: "selectionChanged", ids: next });
-  }, [state.selection]);
-
-  const handleCardActivated = useCallback((id: string) => {
-    const card = state.cards.find((c) => c.id === id);
-    if (card?.kind === "note") {
-      dispatch({ type: "editingStarted", id });
-    }
-  }, [state.cards]);
-
-  const handleRequestContextMenu = useCallback(
-    (cardId: string, x: number, y: number) => {
-      // If the right-clicked card isn't part of the current selection, the menu
-      // should act on just that card (and select it), matching Finder/Milanote.
-      if (!state.selection.includes(cardId)) {
-        dispatch({ type: "selectionChanged", ids: [cardId] });
-      }
-      setContextMenu({ cardId, x, y });
-    },
-    [state.selection],
-  );
-
-  const handleLoadFolderPreview = useCallback((id: string) => gateway.listFolderPreview(id, 50), [gateway]);
-  const handleOpenFolderInFinder = useCallback((id: string) => {
-    void gateway.openFolderInFinder(id).catch((error) => dispatch({ type: "failed", message: errorMessage(error) }));
-  }, [gateway]);
-  // ADR-0012 "Point to a folder on this computer…": a shortcut created on
-  // another device gets this device's own locator; the card turns local and
-  // its preview loads.
-  const handlePointFolderShortcutHere = useCallback((id: string) => {
-    void (async () => {
-      const picked = await pickFolder();
-      if (!picked) return;
-      const alias = await gateway.setFilesystemAliasLocalTarget(id, picked);
-      dispatch({ type: "filesystemAliasUpdated", alias });
-    })().catch((error) => dispatch({ type: "failed", message: errorMessage(error) }));
-  }, [gateway]);
-
-  const handleContextDelete = useCallback(() => {
-    if (!contextMenu) return;
-    // Delete the current selection, not just the single right-clicked card. If
-    // the selection is empty (e.g. cleared), fall back to the clicked card.
-    const ids = state.selection.length > 0 ? state.selection : [contextMenu.cardId];
-    setContextMenu(null);
-
-    const items: TrashItem[] = ids
-      .map((id) => {
-        const card = state.cards.find((c) => c.id === id);
-        if (!card) return null;
-        if (card.kind === "board_portal") {
-          return { id: card.target.id, kind: "board_portal" as const };
-        }
-        return { id: card.id, kind: card.kind };
-      })
-      .filter((x): x is TrashItem => x !== null);
-
-    if (items.length === 0) return;
-    const trashedBoardIds = new Set(
-      items.filter((i) => i.kind === "board_portal").map((i) => i.id),
-    );
-    const extraIds = cascadedShortcutIds(trashedBoardIds);
-    void dispatcher
-      .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
-      .then(() => {
-        dispatch({ type: "cardsRemoved", ids: [...ids, ...extraIds] });
-        void refreshTrash();
-      })
-      .catch((e) => {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      });
-  }, [contextMenu, state.selection, state.cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds]);
-
   const {
     handleCopyLink,
     handleCopyFilePath,
@@ -680,80 +577,6 @@ function App() {
     dispatch,
     setPaneContextMenu,
   });
-
-  const handlePaneContextMenu = useCallback((x: number, y: number) => {
-    const flow = screenToFlowRef.current;
-    const point = flow ? flow(x, y) : { x, y };
-    setPaneContextMenu({ x, y, flowX: point.x, flowY: point.y });
-  }, []);
-
-  // Copy the images of the current selection to the system clipboard.
-  // "Duplicate" on a portal's context menu (todo.md №16): a copy of the
-  // portal's whole board subtree appears on the SAME board, offset +24/+24
-  // from the source — the menu-driven counterpart of copy/paste, sharing the
-  // same atomic backend call and undo (DuplicateBoardCommand).
-  const handleDuplicatePortal = useCallback(
-    (portal: BoardPortalDto) => {
-      const newBoardId = idGenerator.nextId();
-      const newPortalCardId = idGenerator.nextId();
-      void (async () => {
-        try {
-          const receipt = await dispatcher.execute(
-            new DuplicateBoardCommand(idGenerator.nextId(), {
-              sourceBoardId: portal.target.id,
-              targetBoardId: portal.boardId,
-              newBoardId,
-              newPortalCardId,
-              frame: {
-                x: portal.frame.x + 24,
-                y: portal.frame.y + 24,
-                width: portal.frame.width,
-                height: portal.frame.height,
-              },
-            }),
-          );
-          dispatch({ type: "cardAdded", card: receipt.portal });
-        } catch (e) {
-          dispatch({ type: "failed", message: errorMessage(e) });
-        }
-      })();
-    },
-    [dispatcher, idGenerator],
-  );
-
-  // "Create shortcut" on a portal or on another shortcut (todo.md №17): a new
-  // shortcut card appears +24/+24 from the source, same size, pointing at the
-  // same target board. A shortcut on a shortcut never chains — it points at
-  // the SAME target the source shortcut points at, not at the source card.
-  const handleCreateShortcut = useCallback(
-    (source: BoardPortalDto | BoardShortcutDto) => {
-      const targetBoardId = source.kind === "board_portal" ? source.target.id : source.target?.id;
-      if (!targetBoardId) return; // a broken shortcut has nothing to point a new shortcut at
-      const id = idGenerator.nextId();
-      void dispatcher
-        .execute(
-          new CreateBoardShortcutCommand(idGenerator.nextId(), {
-            id,
-            boardId: source.boardId,
-            frame: {
-              x: source.frame.x + 24,
-              y: source.frame.y + 24,
-              width: source.frame.width,
-              height: source.frame.height,
-            },
-            zIndex: 0,
-            targetBoardId,
-          }),
-        )
-        .then((created) => {
-          dispatch({ type: "cardAdded", card: created });
-        })
-        .catch((e) => {
-          dispatch({ type: "failed", message: errorMessage(e) });
-        });
-    },
-    [dispatcher, idGenerator],
-  );
 
   // Applying a loaded snapshot is the store's concern, not navigation's: note
   // documents are normalized here, and both the startup load and every later
