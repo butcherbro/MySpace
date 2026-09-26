@@ -29,8 +29,13 @@ export interface CanvasPasteOptions {
    * or a copied image file) and no plain text. The handler reads the image
    * from the OS clipboard itself; the webview's `clipboardData` does not
    * expose copied files' contents on every platform.
+   *
+   * `onlyIfPresent` marks a speculative call: the event carried nothing the
+   * webview could describe (macOS WKWebView hands a screenshot over as an
+   * empty event), so the handler must stay silent if the OS clipboard holds
+   * no image either.
    */
-  onPasteImage?: () => void;
+  onPasteImage?: (options?: { onlyIfPresent: boolean }) => void;
 }
 
 /**
@@ -128,7 +133,15 @@ export function useCanvasPaste({ enabled, onPaste, onPasteCards, onPastePath, on
 
       const html = e.clipboardData?.getData("text/html") ?? "";
       const text = e.clipboardData?.getData("text/plain") ?? "";
-      if (!html.trim() && !text.trim()) return;
+      if (!html.trim() && !text.trim()) {
+        // WKWebView на macOS не отдаёт скриншот в clipboardData: событие пустое.
+        // Бэкенд читает системный буфер напрямую; нет картинки — тихо ничего.
+        if (onPasteImage) {
+          e.preventDefault();
+          onPasteImage({ onlyIfPresent: true });
+        }
+        return;
+      }
 
       // A path candidate is checked before the plain text/html paste below,
       // but only a *missing* path falls through to it — an existing

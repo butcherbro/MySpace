@@ -374,5 +374,42 @@ describe("usePasteActions", () => {
       expect(test.dispatch).toHaveBeenCalledWith({ type: "failed", message: "clipboard read failed" });
       expect(test.placeImageAsset).not.toHaveBeenCalled();
     });
+
+    it("stays silent when a speculative paste finds no image on the clipboard", async () => {
+      const test = harness({
+        importClipboardImage: async () => {
+          throw { code: "not_found", message: "clipboard image" };
+        },
+      });
+
+      await act(async () => test.result.current.handlePasteImage({ onlyIfPresent: true }));
+
+      expect(test.dispatch).not.toHaveBeenCalled();
+      expect(test.placeImageAsset).not.toHaveBeenCalled();
+    });
+
+    it("still reports other failures of a speculative paste", async () => {
+      const test = harness({
+        importClipboardImage: async () => {
+          throw { code: "database", message: "disk full" };
+        },
+      });
+
+      await act(async () => test.result.current.handlePasteImage({ onlyIfPresent: true }));
+
+      expect(test.dispatch).toHaveBeenCalledWith({ type: "failed", message: "database: disk full" });
+    });
+
+    it("reports a missing image when the webview said there was one", async () => {
+      const test = harness({
+        importClipboardImage: async () => {
+          throw { code: "not_found", message: "clipboard image" };
+        },
+      });
+
+      await act(async () => test.result.current.handlePasteImage());
+
+      expect(test.dispatch).toHaveBeenCalledWith({ type: "failed", message: "not_found: clipboard image" });
+    });
   });
 });

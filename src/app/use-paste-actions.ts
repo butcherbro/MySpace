@@ -56,7 +56,7 @@ export interface PasteActionsController {
   handlePastePath: (path: string) => Promise<boolean>;
   handleCanvasPaste: (data: { html: string; text: string }) => void;
   handlePasteCards: () => boolean;
-  handlePasteImage: () => Promise<void>;
+  handlePasteImage: (options?: { onlyIfPresent: boolean }) => Promise<void>;
 }
 
 export function usePasteActions(options: PasteActionsOptions): PasteActionsController {
@@ -222,13 +222,15 @@ export function usePasteActions(options: PasteActionsOptions): PasteActionsContr
   // reads the OS clipboard directly (NSPasteboard on macOS, arboard elsewhere),
   // which also covers file copies from Finder/Explorer that the webview only
   // exposes as an opaque "Files" entry.
-  const handlePasteImage = useCallback(async () => {
+  const handlePasteImage = useCallback(async (options?: { onlyIfPresent: boolean }) => {
     const position = lastCanvasPointRef.current ?? fallbackPastePosition();
     try {
       const asset = await gateway.importClipboardImage();
       // Centred under the mouse cursor, like a drop.
       await placeImageAsset(asset, position.x, position.y, idGenerator.nextId(), true);
     } catch (e) {
+      // Пробная вставка (пустое событие paste): картинки в буфере нет — это не ошибка.
+      if (options?.onlyIfPresent && isNotFound(e)) return;
       dispatch({ type: "failed", message: errorMessage(e) });
     }
     // dispatch стабилен (useReducer), lastCanvasPointRef — тот же stable ref,
@@ -236,4 +238,8 @@ export function usePasteActions(options: PasteActionsOptions): PasteActionsContr
   }, [gateway, idGenerator, placeImageAsset, fallbackPastePosition, dispatch, lastCanvasPointRef]);
 
   return { handlePastePath, handleCanvasPaste, handlePasteCards, handlePasteImage };
+}
+
+function isNotFound(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "not_found";
 }

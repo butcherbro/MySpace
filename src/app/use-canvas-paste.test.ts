@@ -355,4 +355,32 @@ describe("image paste", () => {
     expect(event.defaultPrevented).toBe(true);
     canvasDiv.remove();
   });
+  // WKWebView на macOS не отдаёт скриншот в clipboardData: событие приходит
+  // без типов и без текста. Тогда картинку ищет бэкенд, а не DOM.
+  it("asks for an image when the paste event carries no text, html or types (macOS WKWebView)", () => {
+    const onPaste = vi.fn();
+    const onPasteImage = vi.fn();
+    renderHook(() => useCanvasPaste({ enabled: true, onPaste, onPasteImage }));
+    const event = new Event("paste", { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, "clipboardData", { value: fakeData({}) });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+    expect(onPasteImage).toHaveBeenCalledWith({ onlyIfPresent: true });
+    expect(onPaste).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("passes no options for a paste the webview itself reports as an image", () => {
+    const onPasteImage = vi.fn();
+    renderHook(() => useCanvasPaste({ enabled: true, onPaste: vi.fn(), onPasteImage }));
+    const event = new Event("paste", { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, "clipboardData", {
+      value: fakeData({ items: [{ kind: "file", type: "image/png" }] }),
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+    expect(onPasteImage).toHaveBeenCalledWith();
+  });
 });
