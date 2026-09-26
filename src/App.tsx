@@ -13,8 +13,9 @@ import { useEmbedMetadata } from "./app/use-embed-metadata";
 import { useCopyActions } from "./app/use-copy-actions";
 import { usePasteActions } from "./app/use-paste-actions";
 import { useCardEdits } from "./app/use-card-edits";
+import { useCardCreation } from "./app/use-card-creation";
+import { useCreationDrag } from "./app/use-creation-drag";
 import { useTrashController } from "./app/use-trash-controller";
-import { buildCreateImageCardInput } from "./app/import-image-card";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import { moveSelectionOntoBoard } from "./canvas/move-selection-onto-board";
@@ -22,12 +23,10 @@ import type { CanvasCard } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry, type CardRenderContext } from "./cards/card-registry";
 import {
   MoveCardsCommand,
-  CreateNoteCommand,
   MoveCardToBoardCommand,
 } from "./commands/card-commands";
 import {
   CreateBoardShortcutCommand,
-  CreateChildBoardCommand,
   DuplicateBoardCommand,
   MoveBoardCommand,
   RenameBoardCommand,
@@ -52,7 +51,7 @@ import { SearchBar } from "./search/SearchBar";
 import { useSearchController } from "./search/use-search-controller";
 import { useViewportController } from "./state/use-viewport-controller";
 import { shouldReload, type ChangeSample } from "./state/external-change-detector";
-import { plainTextToDocument, normalizeDocument } from "./editor/document-codec";
+import { normalizeDocument } from "./editor/document-codec";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardTabs } from "./navigation/BoardTabs";
 import { QuickBoardsRail } from "./navigation/QuickBoardsRail";
@@ -64,19 +63,14 @@ import { createGateway } from "./services/create-gateway";
 import type { DocumentSaveOptions } from "./editor/corrupt-document";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
-import { pickFolder, pickImageFile } from "./services/asset-picker";
-import { computeInitialImageFrameSize, loadNaturalImageSize } from "./cards/image/image-card-geometry";
+import { pickFolder } from "./services/asset-picker";
 import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
 import { flushAllDrafts } from "./editor/draft-flush-registry";
 import type {
-  AssetDto,
   BoardPortalDto,
   BoardShortcutDto,
   CardDto,
-  FileCardDto,
-  FilesystemAliasDto,
-  ImageCardDto,
   NoteCardDto,
   BoardSnapshot,
   WorkspaceGateway,
@@ -85,9 +79,6 @@ import {
   initialState,
   reducer,
 } from "./state/current-board-store";
-import { assetUrl } from "./services/asset-url";
-
-type ToolKind = "note" | "link" | "board";
 
 function App() {
   const gateway: WorkspaceGateway = useMemo(() => createGateway(), []);
@@ -227,425 +218,45 @@ function App() {
   const [devicesDialogOpen, setDevicesDialogOpen] = useState(false);
 
 
-  const handleCreateNote = useCallback(
-    async (
-      position?: { x: number; y: number },
-      options?: { startEditing?: boolean; content?: { documentJson: unknown; plainText: string } },
-    ) => {
-      if (!board) return;
-      const id = idGenerator.nextId();
-      // An explicit position (double-click on the empty pane, paste) places the
-      // note exactly there; the rail/button path falls back to a cascading default.
-      const x = position ? position.x : 40;
-      const y = position ? position.y : 40 + notes.length * 24;
-      const documentJson = options?.content?.documentJson ?? plainTextToDocument("");
-      const plainText = options?.content?.plainText ?? "";
-      const card: NoteCardDto = {
-        kind: "note",
-        id,
-        boardId: board.id,
-        frame: { x, y, width: 240, height: 120 },
-        zIndex: notes.length,
-        revision: 1,
-        documentJson,
-        plainText,
-        colorToken: "default",
-      };
-      try {
-        await dispatcher.execute(
-          new CreateNoteCommand(id, {
-            id,
-            boardId: board.id,
-            frame: card.frame,
-            zIndex: card.zIndex,
-            documentJson: card.documentJson,
-          }),
-        );
-        dispatch({ type: "cardAdded", card });
-        if (options?.startEditing) {
-          dispatch({ type: "editingStarted", id });
-        }
-      } catch (e) {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      }
-    },
-    [board, dispatcher, idGenerator, notes.length],
-  );
+  const {
+    handleCreateNote,
+    handleCreateLink,
+    handleCreateChildBoard,
+    placeImageAsset,
+    importImageCard,
+    handleCreateImage,
+    createFolderShortcut,
+    createFileCard,
+    handleAddFolderShortcutViaDialog,
+    openFileCard,
+    revealFileCard,
+  } = useCardCreation({
+    board,
+    boardRef,
+    notes,
+    cards: state.cards,
+    cardsRef,
+    screenToFlowRef,
+    gateway,
+    dispatcher,
+    idGenerator,
+    dispatch,
+  });
 
-  const handleCreateLink = useCallback(
-    (position?: { x: number; y: number }) => {
-      void handleCreateNote(position, { startEditing: true });
-    },
-    [handleCreateNote],
-  );
-
-  // Distribute one Unsorted card onto the canvas at a free cascading slot.
-  const handlePlaceUnsortedCard = useCallback(
-    (cardId: string) => {
-      const card = state.unsortedCards.find((c) => c.id === cardId);
-      if (!card || !board) return;
-      const maxBottom = state.cards.reduce((max, c) => Math.max(max, c.frame.y + c.frame.height), 0);
-      const frame = {
-        x: 40,
-        y: maxBottom > 0 ? maxBottom + 24 : 40,
-        width: card.frame.width,
-        height: card.frame.height,
-      };
-      void gateway
-        .placeUnsortedCard({ id: cardId, expectedRevision: card.revision, frame })
-        .then((receipt) => {
-          dispatch({
-            type: "unsortedCardPlaced",
-            id: cardId,
-            frame,
-            revision: receipt.revision,
-          });
-        })
-        .catch((e) => {
-          dispatch({ type: "failed", message: errorMessage(e) });
-        });
-    },
-    [state.unsortedCards, state.cards, board, gateway],
-  );
-
-  // Pointer-drag a card out of the Unsorted panel onto the canvas: track the
-  // pointer on window, show a ghost, and place the card exactly where it is
-  // released if that is over the canvas.
-  const unsortedDragCardIdRef = useRef<string | null>(null);
-  const [unsortedGhost, setUnsortedGhost] = useState<{ cardId: string; x: number; y: number } | null>(null);
-  const unsortedGhostMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
-  const unsortedGhostUpRef = useRef<((e: PointerEvent) => void) | null>(null);
-
-  const cleanupUnsortedDrag = useCallback(() => {
-    if (unsortedGhostMoveRef.current) {
-      window.removeEventListener("pointermove", unsortedGhostMoveRef.current);
-      unsortedGhostMoveRef.current = null;
-    }
-    if (unsortedGhostUpRef.current) {
-      window.removeEventListener("pointerup", unsortedGhostUpRef.current);
-      unsortedGhostUpRef.current = null;
-    }
-    unsortedDragCardIdRef.current = null;
-    setUnsortedGhost(null);
-  }, []);
-
-  const handleUnsortedPointerDown = useCallback(
-    (cardId: string, clientX: number, clientY: number) => {
-      unsortedDragCardIdRef.current = cardId;
-      setUnsortedGhost({ cardId, x: clientX, y: clientY });
-
-      const move = (e: PointerEvent) =>
-        setUnsortedGhost((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
-      const up = (e: PointerEvent) => {
-        const id = unsortedDragCardIdRef.current;
-        cleanupUnsortedDrag();
-        if (!id) return;
-        // Place only if released over the canvas.
-        const el = document.elementFromPoint(e.clientX, e.clientY);
-        const overCanvas = Boolean(el?.closest?.('[data-testid="canvas"]'));
-        if (!overCanvas) return;
-        const card = state.unsortedCards.find((c) => c.id === id);
-        if (!card) return;
-        const flow = screenToFlowRef.current;
-        const point = flow ? flow(e.clientX, e.clientY) : { x: 40, y: 40 };
-        const frame = {
-          x: point.x - card.frame.width / 2,
-          y: point.y - card.frame.height / 2,
-          width: card.frame.width,
-          height: card.frame.height,
-        };
-        void gateway
-          .placeUnsortedCard({ id, expectedRevision: card.revision, frame })
-          .then((receipt) => {
-            dispatch({
-              type: "unsortedCardPlaced",
-              id,
-              frame,
-              revision: receipt.revision,
-            });
-          })
-          .catch((err) => {
-            dispatch({ type: "failed", message: errorMessage(err) });
-          });
-      };
-
-      unsortedGhostMoveRef.current = move;
-      unsortedGhostUpRef.current = up;
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-    },
-    [state.unsortedCards, gateway, cleanupUnsortedDrag],
-  );
-
-  const handleCreateChildBoard = useCallback(
-    async (position?: { x: number; y: number }) => {
-      if (!board) return;
-      const boardId = idGenerator.nextId();
-      const portalCardId = idGenerator.nextId();
-      let frame;
-      if (position) {
-        frame = { x: position.x, y: position.y, width: 120, height: 112 };
-      } else {
-        // Place the new board near the visible viewport center so it never lands
-        // far down the board outside the current view.
-        const flow = screenToFlowRef.current;
-        const center = flow
-          ? flow(window.innerWidth * 0.5, window.innerHeight * 0.5)
-          : { x: 200, y: 120 };
-        const offset = (state.cards.length % 5) * 24;
-        frame = {
-          x: center.x - 60 + offset,
-          y: center.y - 56 + offset,
-          width: 120,
-          height: 112,
-        };
-      }
-      const portal: BoardPortalDto = {
-        kind: "board_portal",
-        id: portalCardId,
-        boardId: board.id,
-        frame,
-        zIndex: 0,
-        revision: 1,
-        target: {
-          id: boardId,
-          boardRevision: 1,
-          title: "New Board",
-          colorToken: "terracotta",
-          symbol: null,
-          childBoardCount: 0,
-          childCardCount: 0,
-          coverAsset: null,
-        },
-      };
-      try {
-        await dispatcher.execute(
-          new CreateChildBoardCommand(idGenerator.nextId(), {
-            parentBoardId: board.id,
-            boardId,
-            portalCardId,
-            frame: portal.frame,
-            title: "New Board",
-          }),
-        );
-        dispatch({ type: "cardAdded", card: portal });
-      } catch (e) {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      }
-    },
-    [board, dispatcher, idGenerator, state.cards.length],
-  );
-
-  // Drag-to-create a tool out of the rail: on release over the canvas, the item
-  // is created at the drop point; a plain click still creates in the default
-  // location. Handles Note, Link, and Board (Image uses a file picker).
-  const createGhostRef = useRef<{ x: number; y: number; kind: ToolKind } | null>(null);
-  const [createGhost, setCreateGhost] = useState<{ x: number; y: number; kind: ToolKind } | null>(null);
-  const createDragMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
-  const createDragUpRef = useRef<((e: PointerEvent) => void) | null>(null);
-
-  const cleanupCreationDrag = useCallback(() => {
-    if (createDragMoveRef.current) {
-      window.removeEventListener("pointermove", createDragMoveRef.current);
-      createDragMoveRef.current = null;
-    }
-    if (createDragUpRef.current) {
-      window.removeEventListener("pointerup", createDragUpRef.current);
-      createDragUpRef.current = null;
-    }
-    createGhostRef.current = null;
-    setCreateGhost(null);
-  }, []);
-
-  const handleCreationDragStart = useCallback(
-    (kind: ToolKind, clientX: number, clientY: number) => {
-      createGhostRef.current = { x: clientX, y: clientY, kind };
-      setCreateGhost({ x: clientX, y: clientY, kind });
-      let moved = false;
-      const move = (e: PointerEvent) => {
-        moved = true;
-        createGhostRef.current = { x: e.clientX, y: e.clientY, kind };
-        setCreateGhost({ x: e.clientX, y: e.clientY, kind });
-      };
-      const up = (e: PointerEvent) => {
-        cleanupCreationDrag();
-        const el = document.elementFromPoint(e.clientX, e.clientY);
-        const overCanvas = Boolean(el?.closest?.('[data-testid="canvas"]'));
-        const flow = screenToFlowRef.current;
-        const point = flow ? flow(e.clientX, e.clientY) : { x: 200, y: 120 };
-        if (!overCanvas) {
-          // Plain click on the rail falls back to the default placement.
-          if (!moved) {
-            if (kind === "note") void handleCreateNote();
-            else if (kind === "link") void handleCreateLink();
-            else if (kind === "board") void handleCreateChildBoard();
-          }
-          return;
-        }
-        if (kind === "note") void handleCreateNote({ x: point.x - 120, y: point.y - 60 });
-        else if (kind === "link") void handleCreateLink({ x: point.x - 120, y: point.y - 60 });
-        else if (kind === "board") void handleCreateChildBoard({ x: point.x - 60, y: point.y - 56 });
-      };
-      createDragMoveRef.current = move;
-      createDragUpRef.current = up;
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-    },
-    [cleanupCreationDrag, handleCreateNote, handleCreateLink, handleCreateChildBoard],
-  );
-
-  // Creates an image card for an already-imported asset at board coordinates.
-  const placeImageAsset = useCallback(
-    async (asset: AssetDto, x: number, y: number, cardId: string, centered = false) => {
-      const currentBoard = boardRef.current;
-      if (!currentBoard) return;
-      {
-        // Backend не читает natural width/height картинки при импорте
-        // (assets.width/height в БД всегда NULL), поэтому пропорции для
-        // стартового frame берём в браузере — иначе карточка получает
-        // фиксированный 320x240 и обрезает картинку под рамку (todo.md №3).
-        const natural = await loadNaturalImageSize(assetUrl(asset.filePath));
-        const { width, height } = computeInitialImageFrameSize(natural?.width, natural?.height);
-        const card: ImageCardDto = {
-          kind: "image",
-          id: cardId,
-          boardId: currentBoard.id,
-          frame: centered
-            ? { x: Math.max(0, x - width / 2), y: Math.max(0, y - height / 2), width, height }
-            : { x, y, width, height },
-          zIndex: cardsRef.current.length,
-          revision: 1,
-          asset,
-          captionJson: plainTextToDocument(""),
-          captionPlainText: "",
-        };
-        await gateway.createImageCard(
-          buildCreateImageCardInput({
-            cardId,
-            boardId: currentBoard.id,
-            frame: card.frame,
-            zIndex: card.zIndex,
-            asset,
-            captionJson: card.captionJson,
-          }),
-        );
-        dispatch({ type: "cardAdded", card });
-      }
-    },
-    [gateway],
-  );
-
-  // Imports an image and creates a card at the given board coordinates. Shared
-  // by the file picker (button) and native drag-drop.
-  const importImageCard = useCallback(
-    async (sourcePath: string, fileName: string, mimeType: string, boardX: number, boardY: number) => {
-      const currentBoard = boardRef.current;
-      if (!currentBoard) return;
-      // Guard against NaN/Infinity (e.g. screen->board conversion before the
-      // canvas instance is ready) — such values serialize to null/error over IPC.
-      const x = Number.isFinite(boardX) ? boardX : 80;
-      const y = Number.isFinite(boardY) ? boardY : 80;
-      const assetId = idGenerator.nextId();
-      const cardId = idGenerator.nextId();
-      try {
-        const asset = await gateway.importAsset({
-          id: assetId,
-          sourcePath,
-          fileName,
-          mimeType,
-        });
-        await placeImageAsset(asset, x, y, cardId);
-      } catch (e) {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      }
-    },
-    [gateway, idGenerator, placeImageAsset],
-  );
-
-  const handleCreateImage = useCallback(async () => {
-    const picked = await pickImageFile();
-    if (!picked) return;
-    await importImageCard(picked.path, picked.fileName, picked.mimeType, 80, 80 + cardsRef.current.length * 24);
-  }, [importImageCard]);
-
-  const createFolderShortcut = useCallback(
-    async (sourcePath: string, boardX: number, boardY: number) => {
-      const currentBoard = boardRef.current;
-      if (!currentBoard) return;
-      const frame = {
-        x: Number.isFinite(boardX) ? boardX : 80,
-        y: Number.isFinite(boardY) ? boardY : 80,
-        width: 360,
-        height: 300,
-      };
-      try {
-        const card: FilesystemAliasDto = await gateway.createFolderAlias({
-          id: idGenerator.nextId(),
-          boardId: currentBoard.id,
-          frame,
-          zIndex: cardsRef.current.length,
-          sourcePath,
-        });
-        dispatch({ type: "cardAdded", card });
-      } catch (e) {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      }
-    },
-    [gateway, idGenerator],
-  );
-
-  const createFileCard = useCallback(
-    async (item: { path: string; fileName: string; mimeType: string }, boardX: number, boardY: number) => {
-      const currentBoard = boardRef.current;
-      if (!currentBoard) return;
-      const frame = {
-        x: Number.isFinite(boardX) ? boardX : 80,
-        y: Number.isFinite(boardY) ? boardY : 80,
-        width: 320,
-        height: 240,
-      };
-      try {
-        const card: FileCardDto = await gateway.createFileCard({
-          id: idGenerator.nextId(),
-          boardId: currentBoard.id,
-          frame,
-          zIndex: cardsRef.current.length,
-          sourcePath: item.path,
-          mimeType: item.mimeType,
-          fileName: item.fileName,
-        });
-        dispatch({ type: "cardAdded", card });
-      } catch (e) {
-        dispatch({ type: "failed", message: errorMessage(e) });
-      }
-    },
-    [gateway, idGenerator],
-  );
-
-  // "Add Folder Shortcut…" on the pane context menu (todo.md №23): the native
-  // folder picker, then the same creation call as a Finder drop/pasted path.
-  const handleAddFolderShortcutViaDialog = useCallback(
-    async (boardX: number, boardY: number) => {
-      const picked = await pickFolder();
-      if (!picked) return;
-      await createFolderShortcut(picked, boardX, boardY);
-    },
-    [createFolderShortcut],
-  );
-
-  const openFileCard = useCallback(
-    (cardId: string) => {
-      void gateway.openFileCard(cardId).catch((e) => dispatch({ type: "failed", message: errorMessage(e) }));
-    },
-    [gateway],
-  );
-
-  const revealFileCard = useCallback(
-    (cardId: string) => {
-      void gateway.revealFileCard(cardId).catch((e) => dispatch({ type: "failed", message: errorMessage(e) }));
-    },
-    [gateway],
-  );
+  // The two pointer-driven drags (Unsorted panel, tool rail) place cards that
+  // useCardCreation just built the handlers for.
+  const { unsortedGhost, handlePlaceUnsortedCard, handleUnsortedPointerDown, createGhost, handleCreationDragStart } =
+    useCreationDrag({
+      unsortedCards: state.unsortedCards,
+      cards: state.cards,
+      board,
+      gateway,
+      dispatch,
+      screenToFlowRef,
+      handleCreateNote,
+      handleCreateLink,
+      handleCreateChildBoard,
+    });
 
   // One stable sink for controller failures, so their effects never re-subscribe.
   const onCanvasError = useCallback(
