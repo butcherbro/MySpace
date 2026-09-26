@@ -201,7 +201,7 @@ jobs:
       # to the public releases repo; with `releaseId` it uploads into the draft
       # created above, and `tagName` makes the URLs inside latest.json point at
       # /releases/download/<tag>/ instead of the draft's untagged-… path.
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
