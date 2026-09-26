@@ -16,6 +16,8 @@ import { useCardEdits } from "./app/use-card-edits";
 import { useCardCreation } from "./app/use-card-creation";
 import { useContextActions } from "./app/use-context-actions";
 import { useCardDrop } from "./app/use-card-drop";
+import { useBoardLoading } from "./app/use-board-loading";
+import { useBoardRefresh } from "./app/use-board-refresh";
 import { useCreationDrag } from "./app/use-creation-drag";
 import { useTrashController } from "./app/use-trash-controller";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
@@ -36,19 +38,15 @@ import { DevicesDialog } from "./sync/DevicesDialog";
 import { UpdatePrompt } from "./updates/UpdatePrompt";
 import { useUpdateCheck } from "./updates/use-update-check";
 import { SyncStatusPill } from "./sync/SyncStatusPill";
-import { useSyncAppliedReload } from "./sync/use-sync-state";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
 import { SearchBar } from "./search/SearchBar";
 import { useSearchController } from "./search/use-search-controller";
 import { useViewportController } from "./state/use-viewport-controller";
-import { shouldReload, type ChangeSample } from "./state/external-change-detector";
-import { normalizeDocument } from "./editor/document-codec";
 import { BoardBreadcrumbs } from "./navigation/BoardBreadcrumbs";
 import { BoardTabs } from "./navigation/BoardTabs";
 import { QuickBoardsRail } from "./navigation/QuickBoardsRail";
 import { UndoRedoControls } from "./navigation/UndoRedoControls";
 import { UnsortedPanel } from "./navigation/UnsortedPanel";
-import { useBoardNavigation } from "./navigation/use-board-navigation";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
 import type { DocumentSaveOptions } from "./editor/corrupt-document";
@@ -61,7 +59,6 @@ import type {
   BoardPortalDto,
   BoardShortcutDto,
   NoteCardDto,
-  BoardSnapshot,
   WorkspaceGateway,
 } from "./services/workspace-gateway";
 import {
@@ -387,75 +384,9 @@ function App() {
     setPaneContextMenu,
   });
 
-  // Applying a loaded snapshot is the store's concern, not navigation's: note
-  // documents are normalized here, and both the startup load and every later
-  // navigation go through this one place.
-  const applySnapshot = useCallback(
-    (snapshot: BoardSnapshot) => {
-      dispatch({
-        type: "snapshotLoaded",
-        board: snapshot.board,
-        breadcrumbs: snapshot.breadcrumbs,
-        viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
-        viewportRevision: snapshot.viewport.revision,
-        cards: snapshot.cards.map((c) =>
-          c.kind === "note"
-            ? { ...c, documentJson: normalizeDocument(c.documentJson) }
-            : c,
-        ),
-        unsortedCards: snapshot.unsortedCards.map((c) =>
-          c.kind === "note"
-            ? { ...c, documentJson: normalizeDocument(c.documentJson) }
-            : c,
-        ),
-      });
-    },
-    [dispatch],
-  );
-
-  // The navigation spine: snapshot loading, open-board tabs, back/forward
-  // history, and the latest-wins guard that keeps a slow load from overwriting a
-  // newer navigation. Pending writes are drained through the queue and viewport
-  // barriers before the projection is replaced.
-  const navigation = useBoardNavigation({
-    gateway,
-    drainPendingWrites: useCallback(async () => {
-      // The editing card's own draft (still inside its 250ms debounce) must
-      // land in the mutation queue before the queue is flushed, or navigation
-      // would replace the projection while that write is still in flight —
-      // see draft-flush-registry.ts.
-      await flushAllDrafts();
-      await queueRef.current.flush();
-      await viewportController.flush();
-    }, [viewportController]),
-    onSnapshotLoaded: applySnapshot,
-  });
+  // Board loading and the navigation spine (tabs, history, initial load).
+  const navigation = useBoardLoading({ gateway, dispatch, queueRef, viewportController });
   const navigateTo = navigation.navigateTo;
-  const initializeNavigation = navigation.initialize;
-
-  // Initial board load. Lives after the navigation controller because it seeds
-  // the tabs and history through it.
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      dispatch({ type: "loading" });
-      try {
-        const home = await gateway.getHomeBoard();
-        const snapshot = await gateway.loadBoardSnapshot(home.id);
-        if (cancelled) return;
-        initializeNavigation(snapshot);
-        applySnapshot(snapshot);
-      } catch (e) {
-        if (!cancelled) {
-          dispatch({ type: "failed", message: errorMessage(e) });
-        }
-      }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [applySnapshot, gateway, initializeNavigation]);
 
   const search = useSearchController({
     gateway,
@@ -491,15 +422,17 @@ function App() {
       handleQuickBoardPin,
     });
 
-  // Reload the current board (no history push). Used to reconcile UI with the
-  // database after undo/redo.
-  const reloadCurrentBoard = useCallback(async () => {
-    if (board) await navigateTo(board.id);
-  }, [board, navigateTo]);
-
-  useEffect(() => {
-    reloadBoardRef.current = reloadCurrentBoard;
-  }, [reloadCurrentBoard]);
+  // Keeps the open board current: undo/redo reload, external-write poll, LAN sync reload.
+  const { reloadCurrentBoard, handleWorkspaceUndo, handleWorkspaceRedo } = useBoardRefresh({
+    gateway,
+    board,
+    dispatcher,
+    dispatch,
+    navigateTo,
+    refreshTrash,
+    loadQuickBoards,
+    reloadBoardRef,
+  });
 
 
   const handleBackToCreate = useCallback(() => {
@@ -507,21 +440,6 @@ function App() {
     dispatch({ type: "selectionChanged", ids: [] });
   }, []);
 
-  const handleWorkspaceUndo = useCallback(async () => {
-    try {
-      if (await dispatcher.undo()) await reloadCurrentBoard();
-    } catch (error) {
-      dispatch({ type: "failed", message: errorMessage(error) });
-    }
-  }, [dispatcher, reloadCurrentBoard]);
-
-  const handleWorkspaceRedo = useCallback(async () => {
-    try {
-      if (await dispatcher.redo()) await reloadCurrentBoard();
-    } catch (error) {
-      dispatch({ type: "failed", message: errorMessage(error) });
-    }
-  }, [dispatcher, reloadCurrentBoard]);
 
   const { handleSetCoverFromClipboard, handleChooseCover, handleRemoveCover } = useBoardCover({
     contextMenu,
@@ -542,55 +460,6 @@ function App() {
     [navigateTo],
   );
 
-  // Detect external (agent / second instance) writes (P1.6). Every 3 s poll the
-  // open board's `get_board_change_seq`: reload the board only when another
-  // process committed (dataVersion) AND the commit touched this board
-  // (changeSeq); refresh the trash on any external commit. The decision lives
-  // in `shouldReload`; a sample for a different board just re-primes it. The
-  // same-board `snapshotLoaded` merge keeps pan, editing and selection.
-  const changeSampleRef = useRef<ChangeSample | null>(null);
-  const openBoardId = board?.id ?? null;
-  useEffect(() => {
-    if (openBoardId === null) return;
-    let cancelled = false;
-    const poll = () => {
-      gateway.getBoardChangeSeq(openBoardId).then(
-        (v) => {
-          if (cancelled) return;
-          const next: ChangeSample = { boardId: openBoardId, ...v };
-          const decision = shouldReload(changeSampleRef.current, next);
-          changeSampleRef.current = next;
-          if (decision.reloadBoard) void navigateTo(openBoardId);
-          if (decision.refreshTrash) void refreshTrash();
-        },
-        () => {
-          // The board may have been removed externally; the next navigation
-          // re-primes. Polling never surfaces an error.
-        },
-      );
-    };
-    // Prime (or re-prime after a board switch) immediately.
-    poll();
-    const id = setInterval(poll, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [gateway, openBoardId, navigateTo, refreshTrash]);
-
-  // LAN sync (ADR-0011 S3): a replay commits on the app's own writer, so the
-  // poll above never sees it; `sync-applied` names the boards it changed and
-  // the open one reloads through the same same-board merge.
-  useSyncAppliedReload(
-    gateway,
-    openBoardId,
-    (boardId) => void navigateTo(boardId),
-    () => {
-      // Quick boards and the trash badge are not part of the board load.
-      void refreshTrash();
-      loadQuickBoards();
-    },
-  );
 
   const handleRenameBoard = useCallback(
     (boardId: string, title: string) => {
