@@ -22,7 +22,7 @@ pub async fn enrich_embed_metadata(
     let ws = ws.inner().clone();
     instrument_async("enrich_embed_metadata", async move {
         let fetcher = Arc::new(ReqwestMetadataFetcher::new()?);
-        enrich_embed(&ws, fetcher, input.id, input.expected_revision).await
+        enrich_embed(&ws, fetcher, input.id).await
     })
     .await
 }

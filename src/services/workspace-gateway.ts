@@ -457,7 +457,6 @@ export interface UpdateEmbedDescriptionInput {
 
 export interface EnrichEmbedMetadataInput {
   id: string;
-  expectedRevision: number;
 }
 
 export interface TrashSelectionInput {

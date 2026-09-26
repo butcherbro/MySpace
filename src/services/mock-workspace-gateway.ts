@@ -911,9 +911,6 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       (candidate): candidate is EmbedCardDto => candidate.kind === "embed" && candidate.id === input.id,
     );
     if (!card) return Promise.reject(new Error(`embed not found: ${input.id}`));
-    if (card.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
-    }
 
     const host = new URL(card.sourceUrl).hostname.replace(/^www\./, "");
     card.revision += 1;

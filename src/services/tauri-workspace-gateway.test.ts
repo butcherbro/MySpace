@@ -203,10 +203,10 @@ describe("TauriWorkspaceGateway", () => {
     });
     const gw = new TauriWorkspaceGateway();
 
-    const result = await gw.enrichEmbedMetadata({ id: "note-1", expectedRevision: 2 });
+    const result = await gw.enrichEmbedMetadata({ id: "note-1" });
 
     expect(invokeMock).toHaveBeenCalledWith("enrich_embed_metadata", {
-      input: { id: "note-1", expectedRevision: 2 },
+      input: { id: "note-1" },
     });
     expect(result.kind).toBe("embed");
     expect(result.title).toBe("Example Domain");

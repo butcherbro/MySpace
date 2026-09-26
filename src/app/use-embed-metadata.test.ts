@@ -38,8 +38,8 @@ function harness(
 ) {
   const enrichEmbedMetadata =
     overrides.enrichEmbedMetadata ??
-    vi.fn(async (input: { id: string; expectedRevision: number }) =>
-      embed({ id: input.id, revision: input.expectedRevision, metadataStatus: "ready", title: "Example" }),
+    vi.fn(async (input: { id: string }) =>
+      embed({ id: input.id, revision: 2, metadataStatus: "ready", title: "Example" }),
     );
   const gateway = { enrichEmbedMetadata } as unknown as WorkspaceGateway;
   const dispatch = vi.fn<(action: CurrentBoardAction) => void>();
@@ -62,7 +62,7 @@ describe("useEmbedMetadata", () => {
     await waitFor(() =>
       expect(test.dispatch).toHaveBeenCalledWith({ type: "cardReplaced", id: "embed-1", card: enriched }),
     );
-    expect(test.enrichEmbedMetadata).toHaveBeenCalledWith({ id: "embed-1", expectedRevision: 1 });
+    expect(test.enrichEmbedMetadata).toHaveBeenCalledWith({ id: "embed-1" });
     expect(test.cardsRef.current).toEqual([enriched]);
   });
 
@@ -77,6 +77,20 @@ describe("useEmbedMetadata", () => {
     await waitFor(() =>
       expect(test.dispatch).toHaveBeenCalledWith({ type: "failed", message: "fetch failed" }),
     );
+  });
+
+  it("stays silent when the card was deleted while its metadata was being fetched", async () => {
+    const enrichEmbedMetadata = vi.fn(async () => {
+      throw { code: "not_found", message: "embed-1" };
+    });
+    const test = harness({ cards: [embed()], enrichEmbedMetadata });
+
+    await waitFor(() => expect(enrichEmbedMetadata).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(test.dispatch).not.toHaveBeenCalled();
   });
 
   it("does not re-request the same card+revision once already attempted", async () => {
