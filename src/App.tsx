@@ -7,6 +7,7 @@ import {
   useCloseFlush,
 } from "./app/use-close-flush";
 import { useNoteFormatting } from "./app/use-note-formatting";
+import { useBoardCover } from "./app/use-board-cover";
 import { useTrashController } from "./app/use-trash-controller";
 import { buildCreateImageCardInput } from "./app/import-image-card";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
@@ -1957,92 +1958,14 @@ function App() {
     }
   }, [dispatcher, reloadCurrentBoard]);
 
-  // Board cover actions: set from clipboard, choose a file, or remove. Each
-  // updates the local portal projection immediately (cardReplaced) so the tile
-  // re-renders without a full board reload.
-  const handleSetCoverFromClipboard = useCallback(async () => {
-    if (!contextMenu) return;
-    const portal = state.cards.find(
-      (c): c is BoardPortalDto => c.kind === "board_portal" && c.id === contextMenu.cardId,
-    );
-    if (!portal) return;
-    try {
-      const asset = await gateway.importClipboardImage();
-      await gateway.setBoardCover({ boardId: portal.target.id, assetId: asset.id });
-      dispatch({
-        type: "cardReplaced",
-        id: portal.id,
-        card: { ...portal, target: { ...portal.target, coverAsset: asset } },
-      });
-      setQuickBoards((boards) =>
-        boards.map((quickBoard) =>
-          quickBoard.boardId === portal.target.id
-            ? { ...quickBoard, coverAsset: asset }
-            : quickBoard,
-        ),
-      );
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
-    }
-  }, [contextMenu, state.cards, gateway]);
-
-  const handleChooseCover = useCallback(async () => {
-    if (!contextMenu) return;
-    const portal = state.cards.find(
-      (c): c is BoardPortalDto => c.kind === "board_portal" && c.id === contextMenu.cardId,
-    );
-    if (!portal) return;
-    const picked = await pickImageFile();
-    if (!picked) return;
-    try {
-      const asset = await gateway.importAsset({
-        id: idGenerator.nextId(),
-        sourcePath: picked.path,
-        fileName: picked.fileName,
-        mimeType: picked.mimeType,
-      });
-      await gateway.setBoardCover({ boardId: portal.target.id, assetId: asset.id });
-      dispatch({
-        type: "cardReplaced",
-        id: portal.id,
-        card: { ...portal, target: { ...portal.target, coverAsset: asset } },
-      });
-      setQuickBoards((boards) =>
-        boards.map((quickBoard) =>
-          quickBoard.boardId === portal.target.id
-            ? { ...quickBoard, coverAsset: asset }
-            : quickBoard,
-        ),
-      );
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
-    }
-  }, [contextMenu, state.cards, gateway, idGenerator]);
-
-  const handleRemoveCover = useCallback(async () => {
-    if (!contextMenu) return;
-    const portal = state.cards.find(
-      (c): c is BoardPortalDto => c.kind === "board_portal" && c.id === contextMenu.cardId,
-    );
-    if (!portal) return;
-    try {
-      await gateway.removeBoardCover(portal.target.id);
-      dispatch({
-        type: "cardReplaced",
-        id: portal.id,
-        card: { ...portal, target: { ...portal.target, coverAsset: null } },
-      });
-      setQuickBoards((boards) =>
-        boards.map((quickBoard) =>
-          quickBoard.boardId === portal.target.id
-            ? { ...quickBoard, coverAsset: null }
-            : quickBoard,
-        ),
-      );
-    } catch (e) {
-      dispatch({ type: "failed", message: errorMessage(e) });
-    }
-  }, [contextMenu, state.cards, gateway]);
+  const { handleSetCoverFromClipboard, handleChooseCover, handleRemoveCover } = useBoardCover({
+    contextMenu,
+    cards: state.cards,
+    gateway,
+    idGenerator,
+    dispatch,
+    setQuickBoards,
+  });
 
   // Quick Boards: open navigates (opening/activating a tab).
   const handleQuickBoardOpen = useCallback(

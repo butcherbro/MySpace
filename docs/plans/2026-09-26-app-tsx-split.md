@@ -14,7 +14,7 @@ Behaviour does not change.
 - Dependencies go in as one explicit argument object. No new React Context: only `App` uses these
   hooks, and a context would hide what each hook depends on.
 - Keep `useCallback` dependency lists exact; do not widen them to silence lint.
-  Exception: `dispatch` from `useReducer` is stable, but once it is passed into a hook the linter
+  Exception: `dispatch` from `useReducer` and `useState` setters are stable, but once it is passed into a hook the linter
   can no longer see that, so it goes into the list explicitly. Behaviour is unchanged.
 - Callbacks move verbatim first; cleanups go in a separate commit if at all.
 
