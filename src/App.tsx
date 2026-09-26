@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { EmptyBoardHint } from "./app/EmptyBoardHint";
 import {
@@ -23,11 +23,9 @@ import { useTrashController } from "./app/use-trash-controller";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import type { CanvasCard } from "./canvas/canvas-types";
-import { renderCard as renderCardFromRegistry, type CardRenderContext } from "./cards/card-registry";
+import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
-import type { NoteEditorCommands } from "./editor/editor-commands";
-import type { TextColorId } from "./editor/text-color";
 import type { NoteColorId } from "./cards/note/note-color";
 import { CanvasErrorBanner } from "./components/errors/CanvasErrorBanner";
 import { ToolRail } from "./components/tool-rail/ToolRail";
@@ -49,13 +47,12 @@ import { UndoRedoControls } from "./navigation/UndoRedoControls";
 import { UnsortedPanel } from "./navigation/UnsortedPanel";
 import { MutationQueue } from "./persistence/entity-write-queue";
 import { createGateway } from "./services/create-gateway";
-import type { DocumentSaveOptions } from "./editor/corrupt-document";
-import type { ResizeOptions } from "./cards/resize-options";
 import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
 import { useWorkspaceShortcuts } from "./app/use-workspace-shortcuts";
+import { useStableCardHandlers } from "./app/use-stable-card-handlers";
 import { flushAllDrafts } from "./editor/draft-flush-registry";
 import type {
   BoardPortalDto,
@@ -544,12 +541,10 @@ function App() {
   });
 
   // Card callbacks handed to the canvas, as stable wrappers over the latest
-  // handlers (P1.8). The canvas keeps a card's rendered element until that card
-  // itself changes, so a handler captured at build time must never go stale
-  // (several close over `state`), and stable identities let the memoised card
-  // components skip re-rendering. Values (editing flag, highlight) are not
-  // here: they are read when a card is (re)built.
-  const cardHandlers = {
+  // handlers (P1.8): see use-stable-card-handlers.ts for the "latest ref +
+  // stable facade" pattern. Values (editing flag, highlight) are not here:
+  // they are read when a card is (re)built.
+  const stableCardHandlers = useStableCardHandlers({
     onDeactivate: handleEditDeactivate,
     onUpdateNote: handleUpdateNote,
     onFinalizeNote: handleFinalizeNote,
@@ -576,50 +571,7 @@ function App() {
     onNoteItalicStateChange: noteFormatting.handleNoteItalicStateChange,
     onNoteStrikeStateChange: noteFormatting.handleNoteStrikeStateChange,
     onNoteTextColorChange: noteFormatting.handleNoteTextColorChange,
-  } satisfies Partial<CardRenderContext>;
-  const cardHandlersRef = useRef(cardHandlers);
-  useLayoutEffect(() => {
-    cardHandlersRef.current = cardHandlers;
   });
-  const stableCardHandlers = useMemo(() => {
-    const latest = () => cardHandlersRef.current;
-    return {
-      onDeactivate: () => latest().onDeactivate(),
-      onUpdateNote: (id: string, document: unknown, options?: DocumentSaveOptions) =>
-        latest().onUpdateNote(id, document, options),
-      onFinalizeNote: (id: string, document: unknown, options?: DocumentSaveOptions) =>
-        latest().onFinalizeNote(id, document, options),
-      onUpdateImageCaption: (id: string, document: unknown, options?: DocumentSaveOptions) =>
-        latest().onUpdateImageCaption(id, document, options),
-      onFinalizeImageCaption: (id: string, document: unknown, options?: DocumentSaveOptions) =>
-        latest().onFinalizeImageCaption(id, document, options),
-      onUpdateEmbedDescription: (id: string, document: unknown, options?: DocumentSaveOptions) =>
-        latest().onUpdateEmbedDescription(id, document, options),
-      onFinalizeEmbedDescription: (id: string, document: unknown, options?: DocumentSaveOptions) =>
-        latest().onFinalizeEmbedDescription(id, document, options),
-      onRetryEmbedMetadata: (id: string) => latest().onRetryEmbedMetadata(id),
-      onOpenBoard: (boardId: string) => latest().onOpenBoard(boardId),
-      onRenameBoard: (boardId: string, title: string) => latest().onRenameBoard(boardId, title),
-      onContextMenu: (cardId: string, x: number, y: number) => latest().onContextMenu(cardId, x, y),
-      onResizeNote: (id: string, w: number, h: number, options?: ResizeOptions) =>
-        latest().onResizeNote(id, w, h, options),
-      onResizeImage: (id: string, w: number, h: number) => latest().onResizeImage(id, w, h),
-      onResizeEmbed: (id: string, w: number, h: number, options?: ResizeOptions) =>
-        latest().onResizeEmbed(id, w, h, options),
-      onResizeFilesystemAlias: (id: string, w: number, h: number) => latest().onResizeFilesystemAlias(id, w, h),
-      onLoadFolderPreview: (id: string) => latest().onLoadFolderPreview(id),
-      onOpenFolderInFinder: (id: string) => latest().onOpenFolderInFinder(id),
-      onPointFolderShortcutHere: (id: string) => latest().onPointFolderShortcutHere(id),
-      onOpenFileCard: (id: string) => latest().onOpenFileCard(id),
-      onRevealFileCard: (id: string) => latest().onRevealFileCard(id),
-      onResizeFileCard: (id: string, w: number, h: number) => latest().onResizeFileCard(id, w, h),
-      onNoteCommands: (commands: NoteEditorCommands | null) => latest().onNoteCommands(commands),
-      onNoteBoldStateChange: (active: boolean) => latest().onNoteBoldStateChange(active),
-      onNoteItalicStateChange: (active: boolean) => latest().onNoteItalicStateChange(active),
-      onNoteStrikeStateChange: (active: boolean) => latest().onNoteStrikeStateChange(active),
-      onNoteTextColorChange: (color: TextColorId) => latest().onNoteTextColorChange(color),
-    } satisfies Partial<CardRenderContext>;
-  }, []);
 
   return (
     <AppShell
