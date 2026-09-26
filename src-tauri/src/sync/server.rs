@@ -226,18 +226,20 @@ fn internal(error: WorkspaceError) -> Resp {
     status(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
 
-async fn read_json<T: for<'de> Deserialize<'de>>(req: Request<Incoming>) -> Result<T, Resp> {
+// Ответ об ошибке в Box: Response весит 144 байта и раздувает каждый Result (clippy::result_large_err).
+async fn read_json<T: for<'de> Deserialize<'de>>(req: Request<Incoming>) -> Result<T, Box<Resp>> {
     let body = Limited::new(req.into_body(), MAX_JSON_BODY)
         .collect()
         .await
         .map_err(|_| {
-            status(
+            Box::new(status(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "body too large or unreadable",
-            )
+            ))
         })?
         .to_bytes();
-    serde_json::from_slice(&body).map_err(|_| status(StatusCode::BAD_REQUEST, "invalid json"))
+    serde_json::from_slice(&body)
+        .map_err(|_| Box::new(status(StatusCode::BAD_REQUEST, "invalid json")))
 }
 
 async fn own_name(ws: &Workspace) -> Result<String, WorkspaceError> {
@@ -311,7 +313,7 @@ async fn v1(
         (&Method::POST, "/v1/changes") => {
             let body: ChangesRequest = match read_json(req).await {
                 Ok(b) => b,
-                Err(resp) => return resp,
+                Err(resp) => return *resp,
             };
             let limit = body
                 .limit
@@ -390,7 +392,7 @@ async fn pair(
 ) -> Resp {
     let envelope: PairEnvelope = match read_json(req).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let msg = envelope.message;
     if msg.fingerprint.to_ascii_lowercase() != client_fp {

@@ -318,7 +318,7 @@ pub fn flush(
             state,
         });
     }
-    emits.sort_by(|a, b| a.order.cmp(&b.order));
+    emits.sort_by_key(|a| a.order);
 
     let now = crate::db::migrations::now_millis();
     let mut written = Vec::with_capacity(emits.len());
