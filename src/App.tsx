@@ -55,6 +55,7 @@ import { errorMessage } from "./services/error-message";
 import { UuidV7Generator, type IdGenerator } from "./services/id-generator";
 import { useNativeFileDrop } from "./app/use-native-file-drop";
 import { useCanvasPaste } from "./app/use-canvas-paste";
+import { useWorkspaceShortcuts } from "./app/use-workspace-shortcuts";
 import { flushAllDrafts } from "./editor/draft-flush-registry";
 import type {
   BoardPortalDto,
@@ -531,54 +532,16 @@ function App() {
     canvasRef.current?.focus();
   }, []);
 
-  // Cmd+[ / Cmd+] navigate back/forward, Cmd+Z / Cmd+Shift+Z undo/redo,
-  // unless an editor owns focus.
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      const target = e.target as HTMLElement | null;
-      // The top-bar search field is a plain <input>, not a Tiptap editor or a
-      // textarea. Backspace/Delete inside it must edit text, not trash canvas
-      // selection, so treat any text-entry control as owning focus.
-      const inTextEntry =
-        target &&
-        (target.tagName === "TEXTAREA" ||
-          target.isContentEditable ||
-          target.tagName === "INPUT");
-      if (inTextEntry) return;
-      if (e.key === "Escape") {
-        if (trashOpen) {
-          e.preventDefault();
-          closeTrashDrawer();
-        }
-        return;
-      }
-      if (e.key === "Backspace" || e.key === "Delete") {
-        e.preventDefault();
-        void handleDeleteSelection();
-        return;
-      }
-      if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key === "[") {
-        e.preventDefault();
-        handleNavigateBack();
-      } else if (e.key === "]") {
-        e.preventDefault();
-        handleNavigateForward();
-      } else if (e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        if (e.shiftKey) {
-          void handleWorkspaceRedo();
-        } else {
-          void handleWorkspaceUndo();
-        }
-      } else if (e.key.toLowerCase() === "c") {
-        e.preventDefault();
-        handleCopySelection();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelection, trashOpen, closeTrashDrawer]);
+  useWorkspaceShortcuts({
+    handleNavigateBack,
+    handleNavigateForward,
+    handleWorkspaceUndo,
+    handleWorkspaceRedo,
+    handleDeleteSelection,
+    handleCopySelection,
+    trashOpen,
+    closeTrashDrawer,
+  });
 
   // Card callbacks handed to the canvas, as stable wrappers over the latest
   // handlers (P1.8). The canvas keeps a card's rendered element until that card
