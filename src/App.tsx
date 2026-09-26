@@ -6,6 +6,7 @@ import {
   destroyWindow,
   useCloseFlush,
 } from "./app/use-close-flush";
+import { useNoteFormatting } from "./app/use-note-formatting";
 import { useTrashController } from "./app/use-trash-controller";
 import { buildCreateImageCardInput } from "./app/import-image-card";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
@@ -17,7 +18,6 @@ import {
   MoveCardsCommand,
   CreateNoteCommand,
   MoveCardToBoardCommand,
-  SetNoteColorCommand,
 } from "./commands/card-commands";
 import { PasteCardsCommand, type PasteCardSpec } from "./commands/paste-commands";
 import { buildPasteSpecs, readCardClipboard, setCardClipboard, type CopiedCard } from "./app/card-clipboard";
@@ -145,17 +145,14 @@ function App() {
   // live further down: a result can only be opened once `navigateTo` exists.
   // Global scope is the V1 default (see docs/specs/search.md).
 
-  // Contextual note rail: the active note's editor command surface + bold state.
-  const noteCommandsRef = useRef<NoteEditorCommands | null>(null);
-  const [boldActive, setBoldActive] = useState(false);
-  const [italicActive, setItalicActive] = useState(false);
-  const [strikeActive, setStrikeActive] = useState(false);
-  const [textColor, setTextColor] = useState<TextColorId>("default");
-
   // Serializes mutations (save/drag) so they never race on a card's revision.
   const queueRef = useRef(new MutationQueue());
   // Undo/redo over workspace commands (depends only on the stable gateway).
   const dispatcher = useMemo(() => new CommandDispatcher(gateway), [gateway]);
+
+  // Contextual note rail: the active note's editor command surface + bold state.
+  const noteFormatting = useNoteFormatting({ activeNote, dispatcher, idGenerator, dispatch });
+
   // Always reflects the latest cards (notes AND portals) so queued tasks read
   // the current revision.
   const cardsRef = useRef(state.cards);
@@ -1939,66 +1936,6 @@ function App() {
   }, [reloadCurrentBoard]);
 
 
-  // The contextual note rail: command bridge + bold state come from the active
-  // note's editor (Tiptap-free contract).
-  const handleNoteCommands = useCallback((commands: NoteEditorCommands | null) => {
-    noteCommandsRef.current = commands;
-    if (!commands) {
-      setBoldActive(false);
-      setItalicActive(false);
-      setStrikeActive(false);
-    }
-  }, []);
-
-  const handleNoteBoldStateChange = useCallback((active: boolean) => {
-    setBoldActive(active);
-  }, []);
-
-  const handleNoteItalicStateChange = useCallback((active: boolean) => {
-    setItalicActive(active);
-  }, []);
-
-  const handleNoteStrikeStateChange = useCallback((active: boolean) => {
-    setStrikeActive(active);
-  }, []);
-
-  const handleNoteTextColorChange = useCallback((color: TextColorId) => {
-    setTextColor(color);
-  }, []);
-
-  const handleBold = useCallback(() => {
-    noteCommandsRef.current?.toggleBold();
-  }, []);
-
-  const handleItalic = useCallback(() => {
-    noteCommandsRef.current?.toggleItalic();
-  }, []);
-
-  const handleStrike = useCallback(() => {
-    noteCommandsRef.current?.toggleStrike();
-  }, []);
-
-  const handleTextColor = useCallback((color: TextColorId) => {
-    noteCommandsRef.current?.setTextColor(color);
-  }, []);
-
-  const handleNoteColor = useCallback(
-    (color: NoteColorId) => {
-      const note = activeNote;
-      if (!note) return;
-      const prevColor = (note.colorToken as NoteColorId) ?? "default";
-      void dispatcher
-        .execute(new SetNoteColorCommand(idGenerator.nextId(), note.id, color, prevColor))
-        .then(() => {
-          dispatch({ type: "noteColorChanged", id: note.id, colorToken: color });
-        })
-        .catch((err) => {
-          dispatch({ type: "failed", message: errorMessage(err) });
-        });
-    },
-    [activeNote, dispatcher, idGenerator],
-  );
-
   const handleBackToCreate = useCallback(() => {
     dispatch({ type: "editingStopped" });
     dispatch({ type: "selectionChanged", ids: [] });
@@ -2307,11 +2244,11 @@ function App() {
     onOpenFileCard: openFileCard,
     onRevealFileCard: revealFileCard,
     onResizeFileCard: handleResizeNote,
-    onNoteCommands: handleNoteCommands,
-    onNoteBoldStateChange: handleNoteBoldStateChange,
-    onNoteItalicStateChange: handleNoteItalicStateChange,
-    onNoteStrikeStateChange: handleNoteStrikeStateChange,
-    onNoteTextColorChange: handleNoteTextColorChange,
+    onNoteCommands: noteFormatting.handleNoteCommands,
+    onNoteBoldStateChange: noteFormatting.handleNoteBoldStateChange,
+    onNoteItalicStateChange: noteFormatting.handleNoteItalicStateChange,
+    onNoteStrikeStateChange: noteFormatting.handleNoteStrikeStateChange,
+    onNoteTextColorChange: noteFormatting.handleNoteTextColorChange,
   } satisfies Partial<CardRenderContext>;
   const cardHandlersRef = useRef(cardHandlers);
   useLayoutEffect(() => {
@@ -2385,17 +2322,17 @@ function App() {
           onAddImage={() => void handleCreateImage()}
           trashBatchCount={trash.summary?.batchCount ?? 0}
           onOpenTrash={trash.openDrawer}
-          onBold={handleBold}
-          boldActive={boldActive}
-          onItalic={handleItalic}
-          italicActive={italicActive}
-          onStrike={handleStrike}
-          strikeActive={strikeActive}
+          onBold={noteFormatting.handleBold}
+          boldActive={noteFormatting.boldActive}
+          onItalic={noteFormatting.handleItalic}
+          italicActive={noteFormatting.italicActive}
+          onStrike={noteFormatting.handleStrike}
+          strikeActive={noteFormatting.strikeActive}
           onBackToCreate={handleBackToCreate}
-          textColor={textColor}
-          onTextColor={handleTextColor}
+          textColor={noteFormatting.textColor}
+          onTextColor={noteFormatting.handleTextColor}
           noteColor={noteColor}
-          onNoteColor={handleNoteColor}
+          onNoteColor={noteFormatting.handleNoteColor}
         />
       }
       rightRail={
