@@ -26,3 +26,30 @@ test("a stale write shows its error and reloads the board to the stored state", 
   // The reload must not wipe the failed write's banner.
   await expect(page.getByTestId("error-banner")).toContainText("stale_revision: expected 1, actual 2");
 });
+
+test("typing into a note another device only moved keeps both the text and the move", async ({ page }) => {
+  await page.goto("/?fixture=stale-card-frame");
+  await waitForCanvasReady(page);
+  const note = page.getByTestId("note-card");
+  await expect(note).toContainText("Before the other device");
+  const before = await note.boundingBox();
+  if (!before) throw new Error("note not visible");
+
+  await page.mouse.click(before.x + before.width / 2, before.y + before.height / 2);
+  await expect(page.locator('.note-card [contenteditable="true"]')).toHaveCount(1);
+  await page.keyboard.press("End");
+  await page.keyboard.type(" and mine");
+
+  await expect(page.getByTestId("error-banner")).toContainText("stale_revision");
+  await expect(note).toContainText("Before the other device and mine");
+  await expect.poll(async () => (await note.boundingBox())?.x).toBeGreaterThan(before.x + 300);
+
+  // Leaving Home and coming back re-reads it from the backend.
+  await page.waitForTimeout(350);
+  await page.getByTestId("canvas").click({ position: { x: 5, y: 5 } });
+  await page.getByRole("button", { name: "New board", exact: true }).click();
+  await page.locator(".board-portal-card__tile").dblclick({ force: true });
+  await page.getByTestId("breadcrumbs").getByRole("button", { name: "Home" }).click();
+  await expect(note).toContainText("Before the other device and mine");
+  await expect.poll(async () => (await note.boundingBox())?.x).toBeGreaterThan(before.x + 300);
+});

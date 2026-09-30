@@ -227,11 +227,21 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     // Test-only stale-card fixture: the page reads one note at revision 1, and
     // right after that "another device" rewrites it at revision 2, so the
     // page's next write to it is refused as stale.
-    if (boardId === "home" && !this.staleCardFixtureSeeded && fixtureParam() === "stale-card") {
+    // `stale-card-frame`: the other device moves the note instead of rewriting it.
+    const staleFixture = fixtureParam();
+    if (
+      boardId === "home" &&
+      !this.staleCardFixtureSeeded &&
+      (staleFixture === "stale-card" || staleFixture === "stale-card-frame")
+    ) {
       this.staleCardFixtureSeeded = true;
       this.snapshot.cards = [staleCardFixtureNote(1, "Before the other device")];
       const shown = this.loadBoardSnapshot(boardId);
-      this.snapshot.cards = [staleCardFixtureNote(2, "Written on another device")];
+      this.snapshot.cards = [
+        staleFixture === "stale-card"
+          ? staleCardFixtureNote(2, "Written on another device")
+          : { ...staleCardFixtureNote(2, "Before the other device"), frame: { x: 520, y: 120, width: 240, height: 120 } },
+      ];
       return shown;
     }
     // Test-only foreign-shortcut fixture (ADR-0012): one shortcut created on
