@@ -31,8 +31,10 @@ export interface BoardNavigationOptions {
    * save cannot be abandoned by navigation.
    */
   drainPendingWrites: () => Promise<void>;
+  /** Taken right before the snapshot is requested; handed back with it. */
+  stampSnapshotRequest: () => number;
   /** Applies a loaded snapshot to the store. */
-  onSnapshotLoaded: (snapshot: BoardSnapshot) => void;
+  onSnapshotLoaded: (snapshot: BoardSnapshot, requestStamp: number) => void;
 }
 
 export interface BoardNavigation {
@@ -62,7 +64,7 @@ function tabFrom(snapshot: BoardSnapshot): BoardTab {
 }
 
 export function useBoardNavigation(options: BoardNavigationOptions): BoardNavigation {
-  const { gateway, drainPendingWrites, onSnapshotLoaded } = options;
+  const { gateway, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded } = options;
 
   const historyRef = useRef<BoardHistory | null>(null);
   // Browser-like open-board tabs (session-only). Initialized lazily once Home is
@@ -88,6 +90,7 @@ export function useBoardNavigation(options: BoardNavigationOptions): BoardNaviga
       // so a debounced save cannot be abandoned by navigation.
       await drainPendingWrites();
       if (navigationTokenRef.current !== token) return; // a newer navigation started
+      const requestStamp = stampSnapshotRequest();
       const snapshot = await gateway.loadBoardSnapshot(boardId);
       if (navigationTokenRef.current !== token) return; // superseded while loading
       if (opts?.pushHistory && historyRef.current) {
@@ -103,9 +106,9 @@ export function useBoardNavigation(options: BoardNavigationOptions): BoardNaviga
         const next = navigateBoardTab(withHome, tab, tabMode);
         return tabMode === "sync" ? activateBoardTab(next, snapshot.board.id) : next;
       });
-      onSnapshotLoaded(snapshot);
+      onSnapshotLoaded(snapshot, requestStamp);
     },
-    [drainPendingWrites, gateway, onSnapshotLoaded],
+    [drainPendingWrites, gateway, stampSnapshotRequest, onSnapshotLoaded],
   );
 
   const initialize = useCallback((snapshot: BoardSnapshot) => {

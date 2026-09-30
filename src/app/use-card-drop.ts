@@ -10,6 +10,7 @@ import type { CanvasCard } from "../canvas/canvas-types";
 import type { MutationQueue } from "../persistence/entity-write-queue";
 import type { BoardPortalDto, BoardSummary, CardDto, WorkspaceGateway } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 import type { useBoardNavigation } from "../navigation/use-board-navigation";
 
 /**
@@ -29,6 +30,8 @@ export interface CardDropDeps {
   dispatcher: CommandDispatcher;
   idGenerator: IdGenerator;
   dispatch: Dispatch<CurrentBoardAction>;
+  /** Applies every write answer to `cardsRef` and the store together. */
+  cardWrites: CardWrites;
   queueRef: RefObject<MutationQueue>;
   cardsRef: RefObject<CardDto[]>;
   boardRef: RefObject<BoardSummary | null>;
@@ -43,6 +46,7 @@ export function useCardDrop(deps: CardDropDeps) {
     dispatcher,
     idGenerator,
     dispatch,
+    cardWrites,
     queueRef,
     cardsRef,
     boardRef,
@@ -83,7 +87,7 @@ export function useCardDrop(deps: CardDropDeps) {
           for (const item of moves) {
             const revision = revisionById.get(item.id);
             if (revision === undefined) continue; // unreachable: one receipt per requested card
-            dispatch({
+            cardWrites.apply({
               type: "cardMoved",
               id: item.id,
               revision,
@@ -95,7 +99,7 @@ export function useCardDrop(deps: CardDropDeps) {
           dispatch({ type: "failed", message: errorMessage(err) });
         });
     },
-    [idGenerator, dispatcher, dispatch, queueRef, cardsRef],
+    [idGenerator, dispatcher, dispatch, cardWrites, queueRef, cardsRef],
   );
 
   // Moving a card onto a board portal. A leaf card (note/image/embed) changes
@@ -126,7 +130,7 @@ export function useCardDrop(deps: CardDropDeps) {
             ),
           )
           .then(() => {
-            dispatch({ type: "cardsRemoved", ids: [cardId] });
+            cardWrites.apply({ type: "cardsRemoved", ids: [cardId] });
           })
           .catch((err) => {
             dispatch({ type: "failed", message: errorMessage(err) });
@@ -159,17 +163,17 @@ export function useCardDrop(deps: CardDropDeps) {
           if (receipt.targetBoardId === boardRef.current?.id) {
             const moved = receipt.cards.find((c) => c.id === cardId);
             if (moved) {
-              dispatch({ type: "cardMovedToUnsorted", id: cardId, revision: moved.afterRevision });
+              cardWrites.apply({ type: "cardMovedToUnsorted", id: cardId, revision: moved.afterRevision });
             }
           } else {
-            dispatch({ type: "cardsRemoved", ids: [cardId] });
+            cardWrites.apply({ type: "cardsRemoved", ids: [cardId] });
           }
         })
         .catch((err) => {
           dispatch({ type: "failed", message: errorMessage(err) });
         });
     },
-    [gateway, dispatcher, idGenerator, dispatch, cardsRef, boardRef],
+    [gateway, dispatcher, idGenerator, dispatch, cardWrites, cardsRef, boardRef],
   );
 
   // Group drop onto a board (portal or breadcrumb): leaf cards move as one batch
@@ -211,10 +215,24 @@ export function useCardDrop(deps: CardDropDeps) {
             if (receipt.cards.length > 0) {
               if (receipt.targetBoardId === currentBoardId) {
                 for (const card of receipt.cards) {
-                  dispatch({ type: "cardMovedToUnsorted", id: card.id, revision: card.afterRevision });
+                  cardWrites.apply({ type: "cardMovedToUnsorted", id: card.id, revision: card.afterRevision });
                 }
               } else {
-                dispatch({ type: "cardsRemoved", ids: receipt.cards.map((card) => card.id) });
+                cardWrites.apply({ type: "cardsRemoved", ids: receipt.cards.map((card) => card.id) });
+              }
+            }
+            // Дроп на крошку открытой доски: портал остаётся здесь, но бэкенд
+            // переставил его и поднял обе ревизии — без этого он висит на старом
+            // месте до перезагрузки, а следующий его перенос падает с stale_revision.
+            if (receipt.targetBoardId === currentBoardId) {
+              for (const board of receipt.boards) {
+                cardWrites.apply({
+                  type: "portalMoved",
+                  id: board.portalCardId,
+                  revision: board.afterPortalRevision,
+                  boardRevision: board.afterBoardRevision,
+                  frame: board.destinationPortalFrame,
+                });
               }
             }
             const departed = receipt.boards
@@ -224,14 +242,14 @@ export function useCardDrop(deps: CardDropDeps) {
                   receipt.targetBoardId !== currentBoardId,
               )
               .map((board) => board.portalCardId);
-            if (departed.length > 0) dispatch({ type: "cardsRemoved", ids: departed });
+            if (departed.length > 0) cardWrites.apply({ type: "cardsRemoved", ids: departed });
           })
           .catch((err) => {
             dispatch({ type: "failed", message: errorMessage(err) });
           });
       }
     },
-    [gateway, dispatcher, idGenerator, dispatch, cardsRef, boardRef],
+    [gateway, dispatcher, idGenerator, dispatch, cardWrites, cardsRef, boardRef],
   );
 
   const handleCardDragEnd = useCallback((): boolean => {

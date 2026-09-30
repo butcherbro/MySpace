@@ -8,6 +8,7 @@
 // responsible for reconciliation on failure (see `rollback`/`reconcile`).
 
 import type {
+  AssetDto,
   BoardSummary,
   CardDto,
   Breadcrumb,
@@ -30,6 +31,14 @@ export interface CurrentBoardState {
   error: string | null;
 }
 
+/** Card ids changed locally after a snapshot was requested. */
+export interface SnapshotRequestChanges {
+  /** A write answer changed the card (an addition counts too). */
+  written: string[];
+  added: string[];
+  removed: string[];
+}
+
 export type CurrentBoardAction =
   | { type: "loading" }
   | {
@@ -40,17 +49,27 @@ export type CurrentBoardAction =
       viewportRevision: number;
       cards: CardDto[];
       unsortedCards: CardDto[];
+      /**
+       * Local changes made after this snapshot was requested (`CardWrites`).
+       * A same-board reload merges them in; for every other card the snapshot
+       * wins, even at a lower revision (a device sync can legitimately lower one).
+       */
+      sinceRequest?: SnapshotRequestChanges;
     }
   | { type: "cardAdded"; card: CardDto }
   | { type: "cardContentUpdated"; id: string; revision: number; documentJson: unknown; plainText: string }
   | { type: "imageCaptionUpdated"; id: string; revision: number; captionJson: unknown; captionPlainText: string }
   | { type: "embedDescriptionUpdated"; id: string; revision: number; descriptionJson: unknown; descriptionPlainText: string }
   | { type: "cardReplaced"; id: string; card: CardDto }
+  /** A board's cover was set or removed; the backend bumps no revision for it. */
+  | { type: "boardCoverChanged"; boardId: string; coverAsset: AssetDto | null }
   /** A shortcut's device-local state changed (ADR-0012: pointed at a local folder). */
   | { type: "filesystemAliasUpdated"; alias: FilesystemAliasDto }
   | { type: "unsortedCardPlaced"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardMovedToUnsorted"; id: string; revision: number }
   | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
+  /** A portal's board was reparented and the portal stayed on the open board. */
+  | { type: "portalMoved"; id: string; revision: number; boardRevision: number; frame: CardDto["frame"] }
   | { type: "noteColorChanged"; id: string; colorToken: string }
   | { type: "cardsRemoved"; ids: string[] }
   | { type: "boardRenamed"; boardId: string; title: string }
@@ -61,6 +80,23 @@ export type CurrentBoardAction =
   | { type: "viewportSaved"; revision: number }
   | { type: "failed"; message: string }
   | { type: "clearError" };
+
+/**
+ * Применяет ответ записи к карточке `id`, если своя копия не новее ответа.
+ * Инвариант: бэкенд применяет записи одной карточки строго по очереди, и каждая
+ * поднимает ревизию, поэтому копия с большей ревизией уже содержит результат
+ * записи с меньшей. Ответ ниже своей копии — ответ более ранней записи, пришедший
+ * позже (записи вне очереди — метаданные ссылки — обгоняют очередь). Применённый,
+ * он откатил бы ревизию, и следующая запись из очереди упала бы с `stale_revision`.
+ */
+export function applyCardWrite(
+  cards: CardDto[],
+  id: string,
+  revision: number,
+  update: (card: CardDto) => CardDto,
+): CardDto[] {
+  return cards.map((c) => (c.id === id && c.revision <= revision ? update(c) : c));
+}
 
 export const initialState: CurrentBoardState = {
   board: null,
@@ -93,15 +129,55 @@ export function reducer(
       // CanvasAdapter re-applies the pinned (0,0) viewport on every bump.
       const sameBoard = state.board?.id === action.board.id;
       if (sameBoard) {
-        const ids = new Set([...action.cards, ...action.unsortedCards].map((c) => c.id));
+        // Снимок мог быть прочитан раньше локальных изменений, сделанных после
+        // его запроса. Своя копия побеждает, только если её записали после
+        // запроса И её ревизия выше, чем в снимке; иначе снимок новее (другой
+        // процесс писал позже). Созданная после запроса карточка, которой в
+        // снимке ещё нет, остаётся; удалённая после запроса не возвращается.
+        // Остальных карточек без снимка больше нет — их удалил другой процесс.
+        const since = action.sinceRequest ?? { written: [], added: [], removed: [] };
+        const written = new Set(since.written);
+        const added = new Set(since.added);
+        const removed = new Set(since.removed);
+        const onCanvas = new Map(state.cards.map((c) => [c.id, c]));
+        const inUnsorted = new Map(state.unsortedCards.map((c) => [c.id, c]));
+        const snapshotIds = new Set([...action.cards, ...action.unsortedCards].map((c) => c.id));
+        const keepHeld = new Set(
+          [...action.cards, ...action.unsortedCards]
+            .filter((c) => {
+              const own = onCanvas.get(c.id) ?? inUnsorted.get(c.id);
+              return own !== undefined && written.has(c.id) && own.revision > c.revision;
+            })
+            .map((c) => c.id),
+        );
+        const merge = (fresh: CardDto[], held: Map<string, CardDto>): CardDto[] => {
+          const freshIds = new Set(fresh.map((c) => c.id));
+          return [
+            ...fresh.flatMap((c) => {
+              if (removed.has(c.id)) return [];
+              if (!keepHeld.has(c.id)) return [c];
+              const own = held.get(c.id);
+              return own ? [own] : [];
+            }),
+            ...[...held.values()].filter(
+              (c) =>
+                // Своя копия перешла между холстом и Unsorted после запроса.
+                (keepHeld.has(c.id) && !freshIds.has(c.id)) ||
+                (!snapshotIds.has(c.id) && added.has(c.id)),
+            ),
+          ];
+        };
+        const cards = merge(action.cards, onCanvas);
+        const unsortedCards = merge(action.unsortedCards, inUnsorted);
+        const ids = new Set([...cards, ...unsortedCards].map((c) => c.id));
         return {
           ...state,
           board: action.board,
           breadcrumbs: action.breadcrumbs,
           viewport: { ...state.viewport, zoom: action.viewport.zoom },
           viewportRevision: action.viewportRevision,
-          cards: action.cards,
-          unsortedCards: action.unsortedCards,
+          cards,
+          unsortedCards,
           selection: state.selection.filter((id) => ids.has(id)),
           editingCardId:
             state.editingCardId !== null && ids.has(state.editingCardId)
@@ -143,8 +219,8 @@ export function reducer(
     case "cardContentUpdated":
       return {
         ...state,
-        cards: state.cards.map((c) =>
-          c.id === action.id && c.kind === "note"
+        cards: applyCardWrite(state.cards, action.id, action.revision, (c) =>
+          c.kind === "note"
             ? {
                 ...c,
                 revision: action.revision,
@@ -160,8 +236,8 @@ export function reducer(
     case "imageCaptionUpdated":
       return {
         ...state,
-        cards: state.cards.map((c) =>
-          c.id === action.id && c.kind === "image"
+        cards: applyCardWrite(state.cards, action.id, action.revision, (c) =>
+          c.kind === "image"
             ? {
                 ...c,
                 revision: action.revision,
@@ -177,8 +253,8 @@ export function reducer(
     case "embedDescriptionUpdated":
       return {
         ...state,
-        cards: state.cards.map((c) =>
-          c.id === action.id && c.kind === "embed"
+        cards: applyCardWrite(state.cards, action.id, action.revision, (c) =>
+          c.kind === "embed"
             ? {
                 ...c,
                 revision: action.revision,
@@ -191,11 +267,27 @@ export function reducer(
         ),
       };
 
-    case "cardReplaced":
+    case "cardReplaced": {
+      const held = state.cards.find((c) => c.id === action.id);
+      // Устаревший DTO (см. applyCardWrite) не применяем целиком и редактирование не сбрасываем.
+      if (held && held.revision > action.card.revision) return state;
       return {
         ...state,
         cards: state.cards.map((c) => (c.id === action.id ? action.card : c)),
         editingCardId: state.editingCardId === action.id ? null : state.editingCardId,
+      };
+    }
+
+    case "boardCoverChanged":
+      // Only the cover moves: frame, title and revision stay whatever the store
+      // already holds, however stale the caller's copy of the portal was.
+      return {
+        ...state,
+        cards: state.cards.map((c) =>
+          c.kind === "board_portal" && c.target.id === action.boardId
+            ? { ...c, target: { ...c.target, coverAsset: action.coverAsset } }
+            : c,
+        ),
       };
 
     case "filesystemAliasUpdated": {
@@ -222,7 +314,9 @@ export function reducer(
     case "unsortedCardPlaced": {
       const card = state.unsortedCards.find((c) => c.id === action.id);
       if (!card) return state;
-      const placed = { ...card, frame: action.frame, revision: action.revision };
+      // Ревизия — max (не откатываем, см. applyCardWrite), а frame — всегда из
+      // ответа: у карточки в Unsorted своего места на холсте нет.
+      const placed = { ...card, frame: action.frame, revision: Math.max(card.revision, action.revision) };
       return {
         ...state,
         unsortedCards: state.unsortedCards.filter((c) => c.id !== action.id),
@@ -235,7 +329,7 @@ export function reducer(
       if (!card) return state;
       // The backend bumped the card's revision on the move; the receipt
       // carries the authoritative value so a later Place uses it.
-      const moved = { ...card, revision: action.revision };
+      const moved = { ...card, revision: Math.max(card.revision, action.revision) };
       return {
         ...state,
         cards: state.cards.filter((c) => c.id !== action.id),
@@ -246,9 +340,24 @@ export function reducer(
     case "cardMoved":
       return {
         ...state,
-        cards: state.cards.map((c) =>
-          c.id === action.id
-            ? { ...c, revision: action.revision, frame: action.frame }
+        cards: applyCardWrite(state.cards, action.id, action.revision, (c) => ({
+          ...c,
+          revision: action.revision,
+          frame: action.frame,
+        })),
+      };
+
+    case "portalMoved":
+      return {
+        ...state,
+        cards: applyCardWrite(state.cards, action.id, action.revision, (c) =>
+          c.kind === "board_portal"
+            ? {
+                ...c,
+                revision: action.revision,
+                frame: action.frame,
+                target: { ...c.target, boardRevision: action.boardRevision },
+              }
             : c,
         ),
       };

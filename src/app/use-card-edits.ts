@@ -15,6 +15,7 @@ import type { ResizeOptions } from "../cards/resize-options";
 import { errorMessage } from "../services/error-message";
 import type { CardDto, EmbedCardDto, ImageCardDto, NoteCardDto, WorkspaceGateway } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 import type { MutationQueue } from "../persistence/entity-write-queue";
 
 /**
@@ -33,6 +34,8 @@ import type { MutationQueue } from "../persistence/entity-write-queue";
 export interface CardEditsOptions {
   gateway: WorkspaceGateway;
   dispatch: Dispatch<CurrentBoardAction>;
+  /** Applies every write answer to `cardsRef` and the store together. */
+  cardWrites: CardWrites;
   queueRef: RefObject<MutationQueue>;
   cardsRef: RefObject<CardDto[]>;
   dispatcher: CommandDispatcher;
@@ -75,7 +78,7 @@ function displayUrl(raw: string): string {
 }
 
 export function useCardEdits(deps: CardEditsOptions): CardEditsController {
-  const { gateway, dispatch, queueRef, cardsRef, dispatcher, idGenerator } = deps;
+  const { gateway, dispatch, cardWrites, queueRef, cardsRef, dispatcher, idGenerator } = deps;
 
   // Открытые сессии правки текста по id карточки. Сессия открывается первой
   // записью (автосейв или сразу finalize) и закрывается успешным finalize, так
@@ -122,17 +125,11 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
           documentJson: document,
           ...acknowledgeCorrupt(options),
         });
-        // Keep the ref authoritative *inside this microtask*: the note's own
-        // auto-grow (NoteCard) debounces a resize write off the same keystroke
-        // and can land right behind this one in the queue, before React's
-        // effect has re-synced `cardsRef` from state (see `useEmbedMetadata`'s
-        // request handler for the same pattern).
-        cardsRef.current = cardsRef.current.map((c) =>
-          c.id === id
-            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText, corrupt: false }
-            : c,
-        );
-        dispatch({
+        // `cardWrites` keeps the ref authoritative *inside this microtask*: the
+        // note's own auto-grow (NoteCard) debounces a resize write off the same
+        // keystroke and can land right behind this one in the queue, before
+        // React's effect has re-synced `cardsRef` from state.
+        cardWrites.apply({
           type: "cardContentUpdated",
           id,
           revision: receipt.revision,
@@ -144,7 +141,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
         throw e;
       });
     },
-    [gateway, dispatch, queueRef, cardsRef, openTextSession],
+    [gateway, dispatch, cardWrites, queueRef, cardsRef, openTextSession],
   );
 
   const handleFinalizeNote = useCallback(
@@ -170,8 +167,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
             title: classification.url,
             descriptionJson: plainTextToDocument(""),
           });
-          cardsRef.current = cardsRef.current.map((c) => (c.id === id ? embed : c));
-          dispatch({ type: "cardReplaced", id, card: embed });
+          cardWrites.apply({ type: "cardReplaced", id, card: embed });
           // Превращение в ссылку в историю не пишем: заметки больше нет, а
           // `EditCardTextCommand` владеет только текстом заметки.
           textSessionsRef.current.delete(id);
@@ -186,12 +182,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
         });
         // Same ref-staleness guard as handleUpdateNote above: a pending
         // auto-grow resize can be queued right behind this finalize.
-        cardsRef.current = cardsRef.current.map((c) =>
-          c.id === id
-            ? { ...c, revision: receipt.revision, documentJson: document, plainText: receipt.plainText, corrupt: false }
-            : c,
-        );
-        dispatch({
+        cardWrites.apply({
           type: "cardContentUpdated",
           id,
           revision: receipt.revision,
@@ -204,7 +195,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
         throw e;
       });
     },
-    [gateway, dispatch, queueRef, cardsRef, openTextSession, closeTextSession],
+    [gateway, dispatch, cardWrites, queueRef, cardsRef, openTextSession, closeTextSession],
   );
 
   const saveImageCaption = useCallback(
@@ -224,7 +215,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
           captionJson: document,
           ...acknowledgeCorrupt(options),
         });
-        dispatch({
+        cardWrites.apply({
           type: "imageCaptionUpdated",
           id,
           revision: receipt.revision,
@@ -237,7 +228,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
         throw e;
       });
     },
-    [gateway, dispatch, queueRef, cardsRef, openTextSession, closeTextSession],
+    [gateway, dispatch, cardWrites, queueRef, cardsRef, openTextSession, closeTextSession],
   );
 
   const handleUpdateImageCaption = useCallback(
@@ -267,7 +258,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
           descriptionJson: document,
           ...acknowledgeCorrupt(options),
         });
-        dispatch({
+        cardWrites.apply({
           type: "embedDescriptionUpdated",
           id,
           revision: receipt.revision,
@@ -280,7 +271,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
         throw e;
       });
     },
-    [gateway, dispatch, queueRef, cardsRef, openTextSession, closeTextSession],
+    [gateway, dispatch, cardWrites, queueRef, cardsRef, openTextSession, closeTextSession],
   );
 
   const handleUpdateEmbedDescription = useCallback(
@@ -311,10 +302,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
           // auto-grow can queue a resize right behind a content autosave for
           // the same keystroke, and the two must not read the same stale
           // revision (tasks/lessons.md 2026-09-08).
-          cardsRef.current = cardsRef.current.map((c) =>
-            c.id === id ? { ...c, revision: receipt.revision, frame } : c,
-          );
-          dispatch({ type: "cardMoved", id, revision: receipt.revision, frame });
+          cardWrites.apply({ type: "cardMoved", id, revision: receipt.revision, frame });
           if (!options?.auto && !sameFrame(current.frame, frame)) {
             void dispatcher.record(new ResizeCardCommand(idGenerator.nextId(), id, current.frame, frame));
           }
@@ -323,7 +311,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
           dispatch({ type: "failed", message: errorMessage(e) });
         });
     },
-    [gateway, dispatch, queueRef, cardsRef, dispatcher, idGenerator],
+    [gateway, dispatch, cardWrites, queueRef, cardsRef, dispatcher, idGenerator],
   );
 
   return {

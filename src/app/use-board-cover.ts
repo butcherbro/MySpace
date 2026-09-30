@@ -7,7 +7,7 @@ import type { CurrentBoardAction } from "../state/current-board-store";
 
 /**
  * Board cover actions: set from clipboard, choose a file, or remove. Each
- * updates the local portal projection immediately (cardReplaced) so the tile
+ * updates the local portal projection immediately (boardCoverChanged) so the tile
  * re-renders without a full board reload.
  *
  * Extracted from `App.tsx` unchanged (docs/plans/2026-09-26-app-tsx-split.md, step 2).
@@ -41,11 +41,7 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
     try {
       const asset = await gateway.importClipboardImage();
       await gateway.setBoardCover({ boardId: portal.target.id, assetId: asset.id });
-      dispatch({
-        type: "cardReplaced",
-        id: portal.id,
-        card: { ...portal, target: { ...portal.target, coverAsset: asset } },
-      });
+      dispatch({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: asset });
       setQuickBoards((boards) =>
         boards.map((quickBoard) =>
           quickBoard.boardId === portal.target.id
@@ -76,11 +72,9 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
         mimeType: picked.mimeType,
       });
       await gateway.setBoardCover({ boardId: portal.target.id, assetId: asset.id });
-      dispatch({
-        type: "cardReplaced",
-        id: portal.id,
-        card: { ...portal, target: { ...portal.target, coverAsset: asset } },
-      });
+      // Не cardReplaced с копией портала из замыкания: за секунды выбора файла
+      // портал мог уйти на новую ревизию, и устаревшая копия была бы отброшена.
+      dispatch({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: asset });
       setQuickBoards((boards) =>
         boards.map((quickBoard) =>
           quickBoard.boardId === portal.target.id
@@ -101,11 +95,7 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
     if (!portal) return;
     try {
       await gateway.removeBoardCover(portal.target.id);
-      dispatch({
-        type: "cardReplaced",
-        id: portal.id,
-        card: { ...portal, target: { ...portal.target, coverAsset: null } },
-      });
+      dispatch({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: null });
       setQuickBoards((boards) =>
         boards.map((quickBoard) =>
           quickBoard.boardId === portal.target.id

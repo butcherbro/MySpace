@@ -27,17 +27,40 @@ function harness(load: (boardId: string) => Promise<BoardSnapshot>) {
   const loadBoardSnapshot = vi.fn(load);
   const drainPendingWrites = vi.fn(async () => {});
   const onSnapshotLoaded = vi.fn();
+  const stampSnapshotRequest = vi.fn(() => 42);
   const gateway = { loadBoardSnapshot } as unknown as WorkspaceGateway;
 
   const { result } = renderHook(() =>
-    useBoardNavigation({ gateway, drainPendingWrites, onSnapshotLoaded }),
+    useBoardNavigation({ gateway, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded }),
   );
 
   act(() => result.current.initialize(snapshot("home")));
-  return { result, loadBoardSnapshot, drainPendingWrites, onSnapshotLoaded };
+  return { result, loadBoardSnapshot, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded };
 }
 
 describe("useBoardNavigation", () => {
+  it("stamps the snapshot request after draining and before loading, and hands the stamp over with the snapshot", async () => {
+    const order: string[] = [];
+    const test = harness(async (boardId) => {
+      order.push("load");
+      return snapshot(boardId);
+    });
+    test.drainPendingWrites.mockImplementation(async () => {
+      order.push("drain");
+    });
+    test.stampSnapshotRequest.mockImplementation(() => {
+      order.push("stamp");
+      return 42;
+    });
+
+    await act(async () => {
+      await test.result.current.navigateTo("home");
+    });
+
+    expect(order).toEqual(["drain", "stamp", "load"]);
+    expect(test.onSnapshotLoaded).toHaveBeenCalledWith(snapshot("home"), 42);
+  });
+
   it("drains pending writes before loading, then applies the snapshot", async () => {
     const order: string[] = [];
     const test = harness(async (boardId) => {
@@ -191,6 +214,7 @@ describe("useBoardNavigation", () => {
       useBoardNavigation({
         gateway,
         drainPendingWrites: async () => {},
+        stampSnapshotRequest: () => 0,
         onSnapshotLoaded,
       }),
     );

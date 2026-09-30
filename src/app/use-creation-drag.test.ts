@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardSummary, CardDto, WorkspaceGateway } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import { useCreationDrag, type CreationDragDeps } from "./use-creation-drag";
 
 function board(overrides: Partial<BoardSummary> = {}): BoardSummary {
@@ -68,6 +69,7 @@ function harness(
     board: currentBoard,
     gateway,
     dispatch,
+    cardWrites: createCardWrites({ current: overrides.cards ?? [] }, { current: overrides.unsortedCards ?? [card()] }, dispatch),
     screenToFlowRef,
     handleCreateNote,
     handleCreateLink,

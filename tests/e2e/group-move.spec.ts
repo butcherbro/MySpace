@@ -1,4 +1,4 @@
-import { selectNotesOnly } from "./gestures";
+import { selectNotesOnly, waitForCanvasReady } from "./gestures";
 import { expect, test } from "./fixtures";
 
 // Group move: dragging one card of a multi-selection onto a breadcrumb moves the
@@ -42,6 +42,7 @@ test("dragging a multi-selection onto a breadcrumb moves all cards", async ({ pa
 });
 test("dragging a multi-selection onto a board portal moves all cards", async ({ page }) => {
   await page.goto("/");
+  await waitForCanvasReady(page);
 
   // A child board on Home, so its portal card is a drop target, plus two notes.
   await page.getByRole("button", { name: "New board", exact: true }).click();

@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type Dispatch, type RefObject } from "re
 import { errorMessage } from "../services/error-message";
 import type { BoardSummary, CardDto, WorkspaceGateway } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 
 /** A tool draggable out of the rail: Note, Link, and Board (Image uses a file picker). */
 export type ToolKind = "note" | "link" | "board";
@@ -22,6 +23,8 @@ export interface CreationDragDeps {
   board: BoardSummary | null;
   gateway: WorkspaceGateway;
   dispatch: Dispatch<CurrentBoardAction>;
+  /** Applies every write answer to `cardsRef` and the store together. */
+  cardWrites: CardWrites;
   screenToFlowRef: RefObject<((x: number, y: number) => { x: number; y: number }) | null>;
   handleCreateNote: (position?: { x: number; y: number }) => void | Promise<void>;
   handleCreateLink: (position?: { x: number; y: number }) => void;
@@ -43,6 +46,7 @@ export function useCreationDrag(deps: CreationDragDeps): CreationDragController 
     board,
     gateway,
     dispatch,
+    cardWrites,
     screenToFlowRef,
     handleCreateNote,
     handleCreateLink,
@@ -64,7 +68,7 @@ export function useCreationDrag(deps: CreationDragDeps): CreationDragController 
       void gateway
         .placeUnsortedCard({ id: cardId, expectedRevision: card.revision, frame })
         .then((receipt) => {
-          dispatch({
+          cardWrites.apply({
             type: "unsortedCardPlaced",
             id: cardId,
             frame,
@@ -75,7 +79,7 @@ export function useCreationDrag(deps: CreationDragDeps): CreationDragController 
           dispatch({ type: "failed", message: errorMessage(e) });
         });
     },
-    [unsortedCards, cards, board, gateway, dispatch],
+    [unsortedCards, cards, board, gateway, dispatch, cardWrites],
   );
 
   // Pointer-drag a card out of the Unsorted panel onto the canvas: track the
@@ -127,7 +131,7 @@ export function useCreationDrag(deps: CreationDragDeps): CreationDragController 
         void gateway
           .placeUnsortedCard({ id, expectedRevision: card.revision, frame })
           .then((receipt) => {
-            dispatch({
+            cardWrites.apply({
               type: "unsortedCardPlaced",
               id,
               frame,
@@ -144,7 +148,7 @@ export function useCreationDrag(deps: CreationDragDeps): CreationDragController 
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [unsortedCards, gateway, cleanupUnsortedDrag, dispatch, screenToFlowRef],
+    [unsortedCards, gateway, cleanupUnsortedDrag, dispatch, cardWrites, screenToFlowRef],
   );
 
   // Drag-to-create a tool out of the rail: on release over the canvas, the item

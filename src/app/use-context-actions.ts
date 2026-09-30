@@ -13,6 +13,7 @@ import type {
   WorkspaceGateway,
 } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 
 /**
  * Context-menu and selection actions: card/pane context-menu state, delete
@@ -37,6 +38,8 @@ export interface ContextActionsDeps {
   dispatcher: CommandDispatcher;
   idGenerator: IdGenerator;
   dispatch: Dispatch<CurrentBoardAction>;
+  /** Applies every local card change to the refs and the store together. */
+  cardWrites: CardWrites;
   refreshTrash: () => Promise<void>;
 }
 
@@ -57,7 +60,7 @@ export interface ContextActionsController {
 }
 
 export function useContextActions(deps: ContextActionsDeps): ContextActionsController {
-  const { cards, selection, contextMenu, setContextMenu, screenToFlowRef, gateway, dispatcher, idGenerator, dispatch, refreshTrash } =
+  const { cards, selection, contextMenu, setContextMenu, screenToFlowRef, gateway, dispatcher, idGenerator, dispatch, cardWrites, refreshTrash } =
     deps;
 
   // x/y — экранные координаты для позиционирования меню; flowX/flowY — координаты
@@ -103,14 +106,14 @@ export function useContextActions(deps: ContextActionsDeps): ContextActionsContr
 
     try {
       await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
-      dispatch({ type: "cardsRemoved", ids: [...selection, ...extraIds] });
+      cardWrites.apply({ type: "cardsRemoved", ids: [...selection, ...extraIds] });
       void refreshTrash();
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
     // dispatch стабилен (useReducer), но вне App линтер этого не видит —
     // указываем явно.
-  }, [selection, cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds, dispatch]);
+  }, [selection, cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds, dispatch, cardWrites]);
 
   const handleCardsSelected = useCallback(
     (e: { ids: string[] }) => {
@@ -194,13 +197,13 @@ export function useContextActions(deps: ContextActionsDeps): ContextActionsContr
     void dispatcher
       .execute(new TrashSelectionCommand(idGenerator.nextId(), items))
       .then(() => {
-        dispatch({ type: "cardsRemoved", ids: [...ids, ...extraIds] });
+        cardWrites.apply({ type: "cardsRemoved", ids: [...ids, ...extraIds] });
         void refreshTrash();
       })
       .catch((e) => {
         dispatch({ type: "failed", message: errorMessage(e) });
       });
-  }, [contextMenu, selection, cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds, dispatch, setContextMenu]);
+  }, [contextMenu, selection, cards, dispatcher, idGenerator, refreshTrash, cascadedShortcutIds, dispatch, setContextMenu, cardWrites]);
 
   const handlePaneContextMenu = useCallback(
     (x: number, y: number) => {
@@ -235,13 +238,13 @@ export function useContextActions(deps: ContextActionsDeps): ContextActionsContr
               },
             }),
           );
-          dispatch({ type: "cardAdded", card: receipt.portal });
+          cardWrites.apply({ type: "cardAdded", card: receipt.portal });
         } catch (e) {
           dispatch({ type: "failed", message: errorMessage(e) });
         }
       })();
     },
-    [dispatcher, idGenerator, dispatch],
+    [dispatcher, idGenerator, dispatch, cardWrites],
   );
 
   // "Create shortcut" on a portal or on another shortcut (todo.md №17): a new
@@ -269,13 +272,13 @@ export function useContextActions(deps: ContextActionsDeps): ContextActionsContr
           }),
         )
         .then((created) => {
-          dispatch({ type: "cardAdded", card: created });
+          cardWrites.apply({ type: "cardAdded", card: created });
         })
         .catch((e) => {
           dispatch({ type: "failed", message: errorMessage(e) });
         });
     },
-    [dispatcher, idGenerator, dispatch],
+    [dispatcher, idGenerator, dispatch, cardWrites],
   );
 
   return {

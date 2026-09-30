@@ -6,6 +6,7 @@ import { useBoardNavigation, type BoardNavigation } from "../navigation/use-boar
 import type { MutationQueue } from "../persistence/entity-write-queue";
 import type { BoardSnapshot, WorkspaceGateway } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 import type { useViewportController } from "../state/use-viewport-controller";
 
 /**
@@ -20,37 +21,42 @@ import type { useViewportController } from "../state/use-viewport-controller";
 export interface BoardLoadingDeps {
   gateway: WorkspaceGateway;
   dispatch: Dispatch<CurrentBoardAction>;
+  /** Tells a same-board reload which cards were written after it was requested. */
+  cardWrites: CardWrites;
   queueRef: RefObject<MutationQueue>;
   viewportController: ReturnType<typeof useViewportController>;
 }
 
 export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
-  const { gateway, dispatch, queueRef, viewportController } = deps;
+  const { gateway, dispatch, cardWrites, queueRef, viewportController } = deps;
 
   // Applying a loaded snapshot is the store's concern, not navigation's: note
   // documents are normalized here, and both the startup load and every later
   // navigation go through this one place.
   const applySnapshot = useCallback(
-    (snapshot: BoardSnapshot) => {
-      dispatch({
-        type: "snapshotLoaded",
-        board: snapshot.board,
-        breadcrumbs: snapshot.breadcrumbs,
-        viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
-        viewportRevision: snapshot.viewport.revision,
-        cards: snapshot.cards.map((c) =>
-          c.kind === "note"
-            ? { ...c, documentJson: normalizeDocument(c.documentJson) }
-            : c,
-        ),
-        unsortedCards: snapshot.unsortedCards.map((c) =>
-          c.kind === "note"
-            ? { ...c, documentJson: normalizeDocument(c.documentJson) }
-            : c,
-        ),
-      });
+    (snapshot: BoardSnapshot, requestStamp: number) => {
+      // Через cardWrites: cardsRef получает слитые карточки в том же шаге, что и store.
+      cardWrites.applySnapshot(
+        {
+          board: snapshot.board,
+          breadcrumbs: snapshot.breadcrumbs,
+          viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
+          viewportRevision: snapshot.viewport.revision,
+          cards: snapshot.cards.map((c) =>
+            c.kind === "note"
+              ? { ...c, documentJson: normalizeDocument(c.documentJson) }
+              : c,
+          ),
+          unsortedCards: snapshot.unsortedCards.map((c) =>
+            c.kind === "note"
+              ? { ...c, documentJson: normalizeDocument(c.documentJson) }
+              : c,
+          ),
+        },
+        requestStamp,
+      );
     },
-    [dispatch],
+    [cardWrites],
   );
 
   // The navigation spine: snapshot loading, open-board tabs, back/forward
@@ -68,6 +74,7 @@ export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
       await queueRef.current.flush();
       await viewportController.flush();
     }, [viewportController, queueRef]),
+    stampSnapshotRequest: cardWrites.snapshotRequested,
     onSnapshotLoaded: applySnapshot,
   });
   const initializeNavigation = navigation.initialize;
@@ -80,10 +87,11 @@ export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
       dispatch({ type: "loading" });
       try {
         const home = await gateway.getHomeBoard();
+        const requestStamp = cardWrites.snapshotRequested();
         const snapshot = await gateway.loadBoardSnapshot(home.id);
         if (cancelled) return;
         initializeNavigation(snapshot);
-        applySnapshot(snapshot);
+        applySnapshot(snapshot, requestStamp);
       } catch (e) {
         if (!cancelled) {
           dispatch({ type: "failed", message: errorMessage(e) });
@@ -94,7 +102,7 @@ export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
     return () => {
       cancelled = true;
     };
-  }, [applySnapshot, gateway, initializeNavigation, dispatch]);
+  }, [applySnapshot, gateway, initializeNavigation, dispatch, cardWrites]);
 
   return navigation;
 }

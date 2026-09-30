@@ -9,6 +9,7 @@ import type {
   WorkspaceGateway,
 } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import { MutationQueue } from "../persistence/entity-write-queue";
 import { useCardEdits, type CardEditsOptions } from "./use-card-edits";
 import { EditCardTextCommand, ResizeCardCommand } from "../commands/card-commands";
@@ -119,8 +120,10 @@ function harness(
   let nextId = 0;
   const idGenerator = { nextId: () => `cmd-${++nextId}` };
 
+  const cardWrites = createCardWrites(cardsRef, { current: [] }, dispatch);
+
   const { result } = renderHook(() =>
-    useCardEdits({ gateway, dispatch, queueRef, cardsRef, dispatcher, idGenerator }),
+    useCardEdits({ gateway, dispatch, cardWrites, queueRef, cardsRef, dispatcher, idGenerator }),
   );
 
   return { result, dispatch, cardsRef, record, updateNote, convertNoteToEmbed, updateImageCaption, updateEmbedDescription, moveCard };
@@ -129,7 +132,10 @@ function harness(
 describe("useCardEdits", () => {
   describe("handleUpdateNote", () => {
     it("persists the note and dispatches the receipt", async () => {
-      const test = harness({ cards: [note({ revision: 3 })] });
+      const test = harness({
+        cards: [note({ revision: 3 })],
+        updateNote: vi.fn(async () => ({ id: "note-1", revision: 4, plainText: "edited" })),
+      });
 
       await act(async () => {
         await test.result.current.handleUpdateNote("note-1", doc);
@@ -143,12 +149,26 @@ describe("useCardEdits", () => {
       expect(test.dispatch).toHaveBeenCalledWith({
         type: "cardContentUpdated",
         id: "note-1",
-        revision: 2,
+        revision: 4,
         documentJson: doc,
         plainText: "edited",
       });
       // Ref stays authoritative inside the same microtask (see comment in the hook).
-      expect(test.cardsRef.current[0]).toMatchObject({ revision: 2, documentJson: doc, plainText: "edited", corrupt: false });
+      expect(test.cardsRef.current[0]).toMatchObject({ revision: 4, documentJson: doc, plainText: "edited", corrupt: false });
+    });
+
+    it("does not move cardsRef back when a newer write landed while the save was in flight", async () => {
+      const test = harness({ cards: [note({ revision: 4 })] });
+      test.updateNote.mockImplementation(async () => {
+        test.cardsRef.current = [note({ revision: 6 })];
+        return { id: "note-1", revision: 5, plainText: "edited" };
+      });
+
+      await act(async () => {
+        await test.result.current.handleUpdateNote("note-1", doc);
+      });
+
+      expect(test.cardsRef.current[0].revision).toBe(6);
     });
 
     it("forwards acknowledgeCorrupt only when set", async () => {
@@ -213,7 +233,7 @@ describe("useCardEdits", () => {
 
   describe("handleFinalizeNote", () => {
     it("converts a bare-URL note to an embed and dispatches cardReplaced", async () => {
-      const converted = embed({ id: "note-1" });
+      const converted = embed({ id: "note-1", revision: 6 });
       const test = harness({
         cards: [note({ id: "note-1", revision: 5 })],
         convertNoteToEmbed: vi.fn(async () => converted),
@@ -337,6 +357,20 @@ describe("useCardEdits", () => {
         captionJson: doc,
         captionPlainText: "caption",
       });
+    });
+
+    it("brings cardsRef to the receipt's revision together with the store, before any re-render", async () => {
+      const test = harness({
+        cards: [image({ revision: 4 })],
+        updateImageCaption: vi.fn(async () => ({ id: "image-1", revision: 5, plainText: "caption" })),
+      });
+
+      await act(async () => {
+        await test.result.current.handleUpdateImageCaption("image-1", doc);
+      });
+
+      // cardsRef здесь — простой объект, а не useLatestRef: его обновляет только сам обработчик.
+      expect(test.cardsRef.current[0]).toMatchObject({ revision: 5, captionJson: doc, captionPlainText: "caption" });
     });
 
     it("forwards acknowledgeCorrupt only when set", async () => {
@@ -485,7 +519,10 @@ describe("useCardEdits", () => {
 
   describe("handleResizeNote", () => {
     it("persists the new frame and dispatches cardMoved", async () => {
-      const test = harness({ cards: [note({ revision: 7, frame: { x: 10, y: 20, width: 240, height: 120 } })] });
+      const test = harness({
+        cards: [note({ revision: 7, frame: { x: 10, y: 20, width: 240, height: 120 } })],
+        moveCard: vi.fn(async () => ({ id: "note-1", revision: 8 })),
+      });
 
       act(() => {
         test.result.current.handleResizeNote("note-1", 300, 200);
@@ -503,10 +540,38 @@ describe("useCardEdits", () => {
       expect(test.dispatch).toHaveBeenCalledWith({
         type: "cardMoved",
         id: "note-1",
-        revision: 2,
+        revision: 8,
         frame: { x: 10, y: 20, width: 300, height: 200 },
       });
-      expect(test.cardsRef.current[0]).toMatchObject({ revision: 2, frame: { width: 300, height: 200 } });
+      expect(test.cardsRef.current[0]).toMatchObject({ revision: 8, frame: { width: 300, height: 200 } });
+    });
+
+    it("does not move cardsRef back when a newer write landed while the resize was in flight", async () => {
+      let resolveMove!: (receipt: { id: string; revision: number }) => void;
+      const moveCard = vi.fn(
+        () =>
+          new Promise<{ id: string; revision: number }>((resolve) => {
+            resolveMove = resolve;
+          }),
+      );
+      const test = harness({ cards: [note({ revision: 4 })], moveCard });
+
+      act(() => {
+        test.result.current.handleResizeNote("note-1", 300, 200);
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(moveCard).toHaveBeenCalledTimes(1);
+      // Метаданные ссылки (вне очереди) успели записать ревизию 6 и вернуться первыми.
+      test.cardsRef.current = [note({ revision: 6 })];
+      await act(async () => {
+        resolveMove({ id: "note-1", revision: 5 });
+        await Promise.resolve();
+      });
+
+      expect(test.cardsRef.current[0].revision).toBe(6);
     });
 
     it("does nothing when the card is gone from cardsRef", () => {

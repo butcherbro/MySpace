@@ -14,6 +14,7 @@ import type {
   WorkspaceGateway,
 } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import { useContextActions, type ContextActionsDeps } from "./use-context-actions";
 
 const mocks = vi.hoisted(() => ({
@@ -152,6 +153,7 @@ function harness(
     dispatcher,
     idGenerator,
     dispatch,
+    cardWrites: createCardWrites({ current: cards }, { current: [] }, dispatch),
     refreshTrash,
   };
 
