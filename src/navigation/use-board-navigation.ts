@@ -37,6 +37,8 @@ export interface BoardNavigationOptions {
   onSnapshotLoaded: (snapshot: BoardSnapshot, requestStamp: number) => void;
 }
 
+type NavigateOptions = Parameters<BoardNavigation["navigateTo"]>[1];
+
 export interface BoardNavigation {
   /** Open-board tabs, or null until `initialize` has run. */
   tabs: BoardTabsState | null;
@@ -49,8 +51,10 @@ export interface BoardNavigation {
       tabMode?: "open" | "sync";
       /**
        * A reload of the board already open (stale answer, change poll, sync,
-       * undo). It is dropped while a navigation to another board is in flight:
-       * that navigation loads a fresh snapshot of its own target anyway.
+       * undo). It never supersedes a user navigation in flight, only an older
+       * reload. Next to a user navigation to the same board it is dropped (that
+       * navigation loads a fresh snapshot anyway); next to one to another board
+       * it waits and runs only if that navigation ends without switching boards.
        */
       reload?: boolean;
     },
@@ -88,45 +92,61 @@ export function useBoardNavigation(options: BoardNavigationOptions): BoardNaviga
   // newer navigation. Each call claims a monotonically increasing token before
   // awaiting; the snapshot is applied only if no newer call has started.
   const navigationTokenRef = useRef(0);
-  // Target of the navigation holding the current token, until it finishes.
-  const inFlightTargetRef = useRef<string | null>(null);
+  // The navigation holding the current token, until it finishes.
+  const inFlightRef = useRef<{ target: string; reload: boolean } | null>(null);
+  // A reload that yielded to a user navigation to another board; it runs if
+  // that navigation ends without switching the board.
+  const yieldedReloadRef = useRef<string | null>(null);
 
   const navigateTo = useCallback(
-    async (
-      boardId: string,
-      opts?: { pushHistory?: boolean; tabMode?: "open" | "sync"; reload?: boolean },
-    ) => {
-      // Перезагрузка текущей доски не должна отменять начатый переход на другую:
-      // иначе клик по вкладке теряется, а пользователь остаётся где был.
-      const inFlight = inFlightTargetRef.current;
-      if (opts?.reload && inFlight !== null && inFlight !== boardId) return;
-      const token = ++navigationTokenRef.current;
-      inFlightTargetRef.current = boardId;
-      try {
-        // Flush any pending note/viewport writes before replacing the projection,
-        // so a debounced save cannot be abandoned by navigation.
-        await drainPendingWrites();
-        if (navigationTokenRef.current !== token) return; // a newer navigation started
-        const requestStamp = stampSnapshotRequest();
-        const snapshot = await gateway.loadBoardSnapshot(boardId);
-        if (navigationTokenRef.current !== token) return; // superseded while loading
-        if (opts?.pushHistory && historyRef.current) {
-          historyRef.current.push(boardId);
+    (boardId: string, opts?: NavigateOptions): Promise<void> => {
+      const go = async (boardId: string, opts?: NavigateOptions): Promise<void> => {
+        // Перезагрузка не отменяет начатый пользователем переход: иначе теряется
+        // клик по вкладке, а для той же доски — запись в истории и открытие
+        // вкладки. Переход на ту же доску и так загрузит свежий снимок;
+        // перезагрузку другой доски запоминаем на случай, если переход её не сменит.
+        const inFlight = inFlightRef.current;
+        if (opts?.reload && inFlight !== null && !inFlight.reload) {
+          if (inFlight.target !== boardId) yieldedReloadRef.current = boardId;
+          return;
         }
-        const tabMode = opts?.tabMode ?? "sync";
-        // Track the board as an open tab: explicit navigation opens/activates a
-        // tab; a reload just re-syncs the active id to the loaded board.
-        setTabs((prev) => {
-          const tab = tabFrom(snapshot);
-          const base = prev ?? createBoardTabs(tab);
-          const withHome = base.tabs.length === 0 ? createBoardTabs(tab) : base;
-          const next = navigateBoardTab(withHome, tab, tabMode);
-          return tabMode === "sync" ? activateBoardTab(next, snapshot.board.id) : next;
-        });
-        onSnapshotLoaded(snapshot, requestStamp);
-      } finally {
-        if (navigationTokenRef.current === token) inFlightTargetRef.current = null;
-      }
+        const token = ++navigationTokenRef.current;
+        inFlightRef.current = { target: boardId, reload: opts?.reload === true };
+        let switched = false;
+        try {
+          // Flush any pending note/viewport writes before replacing the projection,
+          // so a debounced save cannot be abandoned by navigation.
+          await drainPendingWrites();
+          if (navigationTokenRef.current !== token) return; // a newer navigation started
+          const requestStamp = stampSnapshotRequest();
+          const snapshot = await gateway.loadBoardSnapshot(boardId);
+          if (navigationTokenRef.current !== token) return; // superseded while loading
+          if (opts?.pushHistory && historyRef.current) {
+            historyRef.current.push(boardId);
+          }
+          const tabMode = opts?.tabMode ?? "sync";
+          // Track the board as an open tab: explicit navigation opens/activates a
+          // tab; a reload just re-syncs the active id to the loaded board.
+          setTabs((prev) => {
+            const tab = tabFrom(snapshot);
+            const base = prev ?? createBoardTabs(tab);
+            const withHome = base.tabs.length === 0 ? createBoardTabs(tab) : base;
+            const next = navigateBoardTab(withHome, tab, tabMode);
+            return tabMode === "sync" ? activateBoardTab(next, snapshot.board.id) : next;
+          });
+          onSnapshotLoaded(snapshot, requestStamp);
+          switched = true;
+        } finally {
+          if (navigationTokenRef.current === token) {
+            inFlightRef.current = null;
+            const yielded = yieldedReloadRef.current;
+            yieldedReloadRef.current = null;
+            // Переход упал — открыта всё ещё прежняя доска, и её перезагрузка нужна.
+            if (yielded !== null && !switched) void go(yielded, { reload: true }).catch(() => undefined);
+          }
+        }
+      };
+      return go(boardId, opts);
     },
     [drainPendingWrites, gateway, stampSnapshotRequest, onSnapshotLoaded],
   );

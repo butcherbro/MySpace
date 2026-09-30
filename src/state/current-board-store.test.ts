@@ -333,6 +333,22 @@ describe("current board reducer", () => {
     expect(state.viewport).toEqual({ x: 0, y: 0, zoom: 1.5 });
   });
 
+  it("keeps the error banner when the same board is reloaded (a stale write reloads it)", () => {
+    const reloaded = reducer(
+      { ...initialState, board: home, error: "stale_revision: expected 1, actual 2" },
+      {
+        type: "snapshotLoaded",
+        board: home,
+        breadcrumbs: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+        viewportRevision: 1,
+        cards: [],
+        unsortedCards: [],
+      },
+    );
+    expect(reloaded.error).toBe("stale_revision: expected 1, actual 2");
+  });
+
   it("records errors and clears them", () => {
     let state: CurrentBoardState = reducer(initialState, { type: "failed", message: "boom" });
     expect(state.error).toBe("boom");

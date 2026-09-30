@@ -160,6 +160,91 @@ describe("useBoardNavigation", () => {
 
       expect(loaded).toEqual(["home-1"]);
     });
+
+    /** Loads that the test settles by hand, per board, in call order. */
+    function manualLoads() {
+      const pending: Array<{ boardId: string; resolve: () => void; reject: (e: unknown) => void }> = [];
+      const test = harness(
+        (boardId) =>
+          new Promise<BoardSnapshot>((resolve, reject) => {
+            pending.push({ boardId, resolve: () => resolve(snapshot(boardId)), reject });
+          }),
+      );
+      return { test, pending };
+    }
+
+    it("runs a reload it yielded to a switch once that switch fails", async () => {
+      // Переход на B, пока sync-applied просит перезагрузить A; загрузка B падает.
+      const { test, pending } = manualLoads();
+
+      await act(async () => {
+        const toB = test.result.current.navigateTo("board-b", { tabMode: "open" }).catch(() => undefined);
+        await tick();
+        await test.result.current.navigateTo("home", { reload: true });
+        pending[0].reject(new Error("board-b is gone"));
+        await toB;
+        await tick();
+        pending[1]?.resolve();
+        await tick();
+      });
+
+      expect(pending.map((p) => p.boardId)).toEqual(["board-b", "home"]);
+      expect(test.onSnapshotLoaded).toHaveBeenCalledTimes(1);
+      expect(test.onSnapshotLoaded.mock.calls[0][0].board.id).toBe("home");
+    });
+
+    it("discards the yielded reload when the switch succeeds", async () => {
+      const { test, pending } = manualLoads();
+
+      await act(async () => {
+        const toB = test.result.current.navigateTo("board-b", { tabMode: "open" });
+        await tick();
+        await test.result.current.navigateTo("home", { reload: true });
+        pending[0].resolve();
+        await toB;
+        await tick();
+      });
+
+      expect(pending.map((p) => p.boardId)).toEqual(["board-b"]);
+      expect(test.result.current.tabs?.activeBoardId).toBe("board-b");
+    });
+
+    it("lets later reloads through after a switch failed", async () => {
+      const { test, pending } = manualLoads();
+
+      await act(async () => {
+        const toB = test.result.current.navigateTo("board-b", { tabMode: "open" }).catch(() => undefined);
+        await tick();
+        pending[0].reject(new Error("board-b is gone"));
+        await toB;
+        const reload = test.result.current.navigateTo("home", { reload: true });
+        await tick();
+        pending[1]?.resolve();
+        await reload;
+      });
+
+      expect(pending.map((p) => p.boardId)).toEqual(["board-b", "home"]);
+    });
+
+    it("does not supersede a user navigation to the same board, so its history push survives", async () => {
+      const { test, pending } = manualLoads();
+
+      await act(async () => {
+        const toB = test.result.current.navigateTo("board-b", { pushHistory: true, tabMode: "open" });
+        await tick();
+        await test.result.current.navigateTo("board-b", { reload: true });
+        pending[0].resolve();
+        await toB;
+      });
+      expect(pending.map((p) => p.boardId)).toEqual(["board-b"]);
+
+      // История записала переход: «назад» ведёт на home.
+      act(() => test.result.current.goBack());
+      await act(async () => {
+        await tick();
+      });
+      expect(pending.map((p) => p.boardId)).toEqual(["board-b", "home"]);
+    });
   });
 
   it("ignores a slow load that a newer navigation superseded", async () => {

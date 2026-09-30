@@ -28,8 +28,13 @@ const handledStaleAnswers = new WeakSet<object>();
 
 /**
  * Marks a `stale_revision` rejection as handled by its caller (it retries with
- * fresh revisions), so it does not reload the board. Call it inside the
- * caller's own `catch`, in the same task the rejection arrives.
+ * fresh revisions), so it does not reload the board.
+ *
+ * Contract: call it synchronously in the caller's own `catch`, before anything
+ * that yields to a macrotask (a timer, an IPC call, an `await` on one). The
+ * wrapper decides in a zero-delay timer queued when the rejection passes
+ * through it; an error marked after that timer has run has already triggered
+ * the reload. Awaiting other microtasks first is fine.
  */
 export function markStaleRevisionHandled(err: unknown): void {
   if (typeof err === "object" && err !== null) handledStaleAnswers.add(err);

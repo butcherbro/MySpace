@@ -67,6 +67,15 @@ import { documentToPlainText } from "../editor/document-codec";
 import { fileNameFromPath } from "./platform-path";
 
 /**
+ * The rejection the Tauri gateway passes on for Rust's
+ * `WorkspaceError::StaleRevision` (serde tag/content): the mock refuses with
+ * the same shape, so browser mode exercises the same handling.
+ */
+function staleRevision(expected: number, actual: number) {
+  return { code: "stale_revision", message: { expected, actual } };
+}
+
+/**
  * In-memory gateway for browser-mode tests and fixtures. It keeps a single
  * Home board and persists notes only for the lifetime of the instance.
  */
@@ -108,6 +117,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   /** Seeded once by the `?fixture=corrupt-note` fixture (P1.7). */
   private corruptFixtureSeeded = false;
+
+  /** Seeded once by the `?fixture=stale-card` fixture. */
+  private staleCardFixtureSeeded = false;
 
   /** Seeded once by the `?fixture=foreign-shortcut` fixture (ADR-0012). */
   private foreignShortcutFixtureSeeded = false;
@@ -212,6 +224,16 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       this.corruptFixtureSeeded = true;
       this.snapshot.cards = corruptNoteFixtureCards();
     }
+    // Test-only stale-card fixture: the page reads one note at revision 1, and
+    // right after that "another device" rewrites it at revision 2, so the
+    // page's next write to it is refused as stale.
+    if (boardId === "home" && !this.staleCardFixtureSeeded && fixtureParam() === "stale-card") {
+      this.staleCardFixtureSeeded = true;
+      this.snapshot.cards = [staleCardFixtureNote(1, "Before the other device")];
+      const shown = this.loadBoardSnapshot(boardId);
+      this.snapshot.cards = [staleCardFixtureNote(2, "Written on another device")];
+      return shown;
+    }
     // Test-only foreign-shortcut fixture (ADR-0012): one shortcut created on
     // another device (no locator here) next to one local shortcut. Seeded
     // once, so "Point to a folder on this computer…" survives reloads.
@@ -281,7 +303,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       return Promise.reject(new Error(`note not found: ${input.id}`));
     }
     if (card.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
+      return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
     if (card.corrupt && !input.acknowledgeCorrupt) {
       return Promise.reject(new Error(CORRUPT_REJECTION));
@@ -299,7 +321,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       return Promise.reject(new Error(`card not found: ${input.id}`));
     }
     if (card.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
+      return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
     card.revision += 1;
     card.frame = { ...input.frame };
@@ -313,7 +335,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(new Error(`card not found: ${item.id}`));
       }
       if (card.revision !== item.expectedRevision) {
-        return Promise.reject(new Error(`stale revision for ${item.id}`));
+        return Promise.reject(staleRevision(item.expectedRevision, card.revision));
       }
     }
     const receipts: CardReceipt[] = [];
@@ -332,7 +354,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       return Promise.reject(new Error(`card not found: ${input.id}`));
     }
     if (card.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
+      return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
     card.revision += 1;
     card.boardId = input.targetBoardId;
@@ -348,11 +370,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       return Promise.reject(new Error(`board not found: ${input.boardId}`));
     }
     if (board.revision !== input.expectedBoardRevision) {
-      return Promise.reject(
-        new Error(
-          `stale revision for board ${input.boardId}: expected ${input.expectedBoardRevision}, actual ${board.revision}`,
-        ),
-      );
+      return Promise.reject(staleRevision(input.expectedBoardRevision, board.revision));
     }
     const portal = this.snapshot.cards.find(
       (c) => c.kind === "board_portal" && c.target.id === input.boardId,
@@ -361,11 +379,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       return Promise.reject(new Error(`portal not found for board: ${input.boardId}`));
     }
     if (portal.revision !== input.expectedPortalRevision) {
-      return Promise.reject(
-        new Error(
-          `stale revision for portal ${portal.id}: expected ${input.expectedPortalRevision}, actual ${portal.revision}`,
-        ),
-      );
+      return Promise.reject(staleRevision(input.expectedPortalRevision, portal.revision));
     }
     board.parentBoardId = input.targetParentBoardId;
     board.revision += 1;
@@ -380,7 +394,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   saveViewport(input: SaveViewportInput): Promise<ViewportReceipt> {
     if (this.snapshot.viewport.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for viewport`));
+      return Promise.reject(staleRevision(input.expectedRevision, this.snapshot.viewport.revision));
     }
     this.snapshot.viewport = {
       x: input.x,
@@ -834,7 +848,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       return Promise.reject(new Error(`image not found: ${input.id}`));
     }
     if (card.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
+      return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
     if (card.corrupt && !input.acknowledgeCorrupt) {
       return Promise.reject(new Error(CORRUPT_REJECTION));
@@ -854,7 +868,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       return Promise.reject(new Error(`embed not found: ${input.id}`));
     }
     if (card.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
+      return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
     if (card.corrupt && !input.acknowledgeCorrupt) {
       return Promise.reject(new Error(CORRUPT_REJECTION));
@@ -878,7 +892,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       { kind: "note" }
     >;
     if (note.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
+      return Promise.reject(staleRevision(input.expectedRevision, note.revision));
     }
     const descriptionPlainText = documentToPlainText(input.descriptionJson);
     const embed: EmbedCardDto = {
@@ -1299,7 +1313,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       const card = this.snapshot.cards.find((c) => c.id === item.id);
       if (!card) return Promise.reject(new Error(`card not found: ${item.id}`));
       if (card.revision !== item.expectedRevision) {
-        return Promise.reject(new Error(`stale revision for ${item.id}`));
+        return Promise.reject(staleRevision(item.expectedRevision, card.revision));
       }
     }
     const receipts: CardReceipt[] = [];
@@ -1338,7 +1352,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           throw new Error(`board portal ${item.id} must be moved as a board`);
         }
         if (card.revision !== item.expectedRevision) {
-          throw new Error(`stale revision for ${item.id}`);
+          throw staleRevision(item.expectedRevision, card.revision);
         }
         return card;
       });
@@ -1350,7 +1364,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           throw new Error("the selection contains the destination board");
         }
         if (board.revision !== item.expectedBoardRevision) {
-          throw new Error(`stale revision for board ${item.boardId}`);
+          throw staleRevision(item.expectedBoardRevision, board.revision);
         }
         const portal = this.snapshot.cards.find(
           (c) => c.kind === "board_portal" && c.target.id === item.boardId,
@@ -1359,7 +1373,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           throw new Error(`portal not found for board: ${item.boardId}`);
         }
         if (portal.revision !== item.expectedPortalRevision) {
-          throw new Error(`stale revision for portal ${portal.id}`);
+          throw staleRevision(item.expectedPortalRevision, portal.revision);
         }
         return { board, portal };
       });
@@ -1425,7 +1439,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         const card = this.snapshot.cards.find((c) => c.id === entry.id);
         if (!card) throw new Error(`card not found: ${entry.id}`);
         if (card.revision !== entry.afterRevision) {
-          throw new Error(`stale revision for ${entry.id}`);
+          throw staleRevision(entry.afterRevision, card.revision);
         }
       }
       for (const entry of receipt.boards) {
@@ -1436,7 +1450,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           board.revision !== entry.afterBoardRevision ||
           portal.revision !== entry.afterPortalRevision
         ) {
-          throw new Error(`stale revision for board ${entry.boardId}`);
+          throw board.revision !== entry.afterBoardRevision
+            ? staleRevision(entry.afterBoardRevision, board.revision)
+            : staleRevision(entry.afterPortalRevision, portal.revision);
         }
       }
       for (const entry of receipt.cards) {
@@ -1466,7 +1482,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     const card = this.snapshot.cards.find((c) => c.id === input.id);
     if (!card) return Promise.reject(new Error(`card not found: ${input.id}`));
     if (card.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
+      return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
     card.revision += 1;
     (card as { unsorted?: boolean }).unsorted = false;
@@ -1717,6 +1733,21 @@ function foreignShortcutFixtureCards(thisDeviceName: string): CardDto[] {
  */
 export function fixturePickedFolder(): string | null {
   return fixtureParam() === "foreign-shortcut" ? "/mock/home/Research" : null;
+}
+
+/** The single note of the `?fixture=stale-card` board, as stored at `revision`. */
+function staleCardFixtureNote(revision: number, text: string): CardDto {
+  return {
+    kind: "note",
+    id: "stale-note",
+    boardId: "home",
+    frame: { x: 120, y: 120, width: 240, height: 120 },
+    zIndex: 0,
+    revision,
+    documentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
+    plainText: text,
+    colorToken: "default",
+  };
 }
 
 /** Cards of the `?fixture=corrupt-note` board (P1.7). */

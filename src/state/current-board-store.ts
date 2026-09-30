@@ -211,7 +211,9 @@ export function reducer(
               ? state.editingCardId
               : null,
           loading: false,
-          error: null,
+          // Перезагрузку той же доски часто и вызывает ошибка (stale_revision):
+          // её баннер должен остаться, пока пользователь его не закроет.
+          error: state.error,
         };
       }
 
