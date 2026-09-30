@@ -701,3 +701,49 @@ fn snapshot_of_a_pre_0020_database_still_lists_assets() {
     assert!(manifest["assets"][0]["sha256"].is_null());
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// Snapshots a workspace whose asset rows share file paths and checks that
+/// every live file keeps its bytes, the snapshot holds the same bytes, and the
+/// manifest still lists every row.
+fn assert_shared_paths_survive(tag: &str, files: &[(&str, &[u8])]) {
+    let root = live_workspace_with_assets(tag, files);
+    let report = snapshot(&root);
+    for (name, bytes) in files {
+        assert_eq!(
+            std::fs::read(root.join("assets").join(name)).unwrap(),
+            *bytes,
+            "live {name}"
+        );
+        assert_eq!(
+            std::fs::read(report.dir.join("assets").join(name)).unwrap(),
+            *bytes,
+            "snapshot {name}"
+        );
+    }
+    assert_eq!(report.asset_count, files.len());
+    assert!(report.missing_assets.is_empty());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report.dir.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["assets"].as_array().unwrap().len(), files.len());
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn two_asset_rows_sharing_a_file_keep_its_bytes() {
+    assert_shared_paths_survive(
+        "shared",
+        &[("shared.png", b"live bytes"), ("shared.png", b"live bytes")],
+    );
+}
+
+#[test]
+fn shared_files_keep_their_bytes_when_linked_on_several_threads() {
+    let names: Vec<String> = (0..8).map(|i| format!("file-{i}.png")).collect();
+    let bytes: Vec<Vec<u8>> = (0..8)
+        .map(|i| format!("content {i}").repeat(i + 1).into_bytes())
+        .collect();
+    let files: Vec<(&str, &[u8])> = (0..24)
+        .map(|k| (names[k % 8].as_str(), bytes[k % 8].as_slice()))
+        .collect();
+    assert_shared_paths_survive("shared-par", &files);
+}
