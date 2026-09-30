@@ -9,8 +9,9 @@
 //! Triggers of a pass: startup; every [`TICK`] while a paired peer has an
 //! address (discovered, or the last one that worked); [`DEBOUNCE`] after a
 //! local journaled write (`Workspace::local_writes`), which also POKEs the
-//! peers so they pull at once instead of on their next tick; a peer's poke;
-//! `sync_now`. One pass at a time.
+//! peers so they pull at once instead of on their next tick; within
+//! [`EXTERNAL_POLL`] of a journaled write by another process (the MCP server),
+//! which pokes too; a peer's poke; `sync_now`. One pass at a time.
 //!
 //! A pass, per peer: `/v1/info` (identity check) → `/v1/changes` with our
 //! cursors until `next` is empty, each page applied through the funnel →
@@ -44,6 +45,10 @@ use super::server::{self, ServerHandle, ServerHooks, ServerState};
 pub const TICK: Duration = Duration::from_secs(5);
 /// Delay after a local write, so a burst of writes is one pass.
 pub const DEBOUNCE: Duration = Duration::from_millis(500);
+/// How often the loop looks for journaled writes by another process, which
+/// `local_writes` never reports (only while a peer is paired). Also their
+/// debounce.
+pub const EXTERNAL_POLL: Duration = Duration::from_millis(500);
 /// Rows per `/v1/changes` page.
 pub const PAGE: usize = 500;
 /// Longest wait between automatic attempts at an unreachable peer.
@@ -570,10 +575,13 @@ impl LanSync {
 
     async fn run_loop(self: Arc<Self>, mut stop: watch::Receiver<bool>) {
         let local_writes = self.ws.local_writes();
+        // Own journal cursor as of the last poke: rows up to it were announced.
+        let mut announced = self.own_cursor().await.ok().flatten();
         let mut first = true;
         loop {
             let (mut force, mut poke) = (first, false);
             if !first {
+                let paired = self.has_peers().await;
                 tokio::select! {
                     _ = stop.changed() => break,
                     _ = tokio::time::sleep(TICK) => {}
@@ -583,11 +591,28 @@ impl LanSync {
                         poke = true;
                     }
                     _ = self.wake.notified() => force = true,
+                    _ = self.unannounced_write(&announced), if paired => {
+                        // An own write that raced this poll left a pending
+                        // `local_writes` permit; this pass announces it too
+                        // (the cursor is read below), so drop the permit.
+                        tokio::select! {
+                            biased;
+                            _ = local_writes.notified() => {}
+                            _ = std::future::ready(()) => {}
+                        }
+                        force = true;
+                        poke = true;
+                    }
                 }
             }
             first = false;
             if *stop.borrow() {
                 break;
+            }
+            if poke {
+                if let Ok(cursor) = self.own_cursor().await {
+                    announced = cursor;
+                }
             }
             let report = self.pass(force, poke).await;
             if !report.errors.is_empty() {
@@ -595,6 +620,32 @@ impl LanSync {
                     errors = report.errors.len(),
                     "sync: pass finished with errors"
                 );
+            }
+        }
+    }
+
+    async fn has_peers(&self) -> bool {
+        self.ws
+            .read(peers::list_peers)
+            .await
+            .is_ok_and(|peers| !peers.is_empty())
+    }
+
+    /// This device's own journal cursor: it moves only on a journaled local
+    /// write, by this process or another one on the same database.
+    async fn own_cursor(&self) -> Result<Option<String>, WorkspaceError> {
+        let device_id = self.device_id().to_string();
+        self.ws.read(move |c| journal::cursor(c, &device_id)).await
+    }
+
+    /// Resolves once the own cursor is past `announced`. This process's writes
+    /// refresh `announced` before their poke (`local_writes`), so what is left
+    /// is another process's write (the MCP server), which nothing else reports.
+    async fn unannounced_write(&self, announced: &Option<String>) {
+        loop {
+            tokio::time::sleep(EXTERNAL_POLL).await;
+            if matches!(self.own_cursor().await, Ok(cursor) if cursor != *announced) {
+                return;
             }
         }
     }

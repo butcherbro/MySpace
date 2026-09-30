@@ -17,18 +17,23 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::future::Future;
+use std::io::Read;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-use http_body_util::{BodyExt, Full, Limited};
-use hyper::body::{Bytes, Incoming};
+use http_body_util::{BodyExt, Either, Full, Limited};
+use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
 use hyper::header::{HeaderValue, CONTENT_TYPE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
@@ -50,6 +55,14 @@ pub const DEVICE_HEADER: &str = "x-myspace-device";
 const MAX_JSON_BODY: usize = 1024 * 1024;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// A write to a peer that makes no progress this long drops the connection.
+/// A stalled connection holds only an async task, so the limit can be
+/// generous: a receiver pausing (antivirus on the partial file, a disk spinning
+/// up) must not restart a large blob from zero. Same as the client's
+/// request timeout.
+const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// A blob is sent in frames of at most this many bytes.
+const BLOB_CHUNK: usize = 64 * 1024;
 
 /// `GET /v1/info` and `GET /pair`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,7 +189,10 @@ pub fn spawn(
                 let conn = http1::Builder::new()
                     .timer(TokioTimer::new())
                     .header_read_timeout(HEADER_READ_TIMEOUT)
-                    .serve_connection(TokioIo::new(tls), service);
+                    .serve_connection(
+                        TokioIo::new(StallGuard::new(tls, WRITE_STALL_TIMEOUT)),
+                        service,
+                    );
                 tokio::pin!(conn);
                 tokio::select! {
                     _ = conn.as_mut() => {}
@@ -194,12 +210,12 @@ pub fn spawn(
     })
 }
 
-type Resp = Response<Full<Bytes>>;
+type Resp = Response<Either<Full<Bytes>, BlobBody>>;
 
 fn status(code: StatusCode, message: &str) -> Resp {
-    let mut resp = Response::new(Full::new(Bytes::from(
+    let mut resp = Response::new(Either::Left(Full::new(Bytes::from(
         serde_json::json!({ "error": message }).to_string(),
-    )));
+    ))));
     *resp.status_mut() = code;
     resp.headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -209,7 +225,7 @@ fn status(code: StatusCode, message: &str) -> Resp {
 fn json<T: Serialize>(value: &T) -> Resp {
     match serde_json::to_vec(value) {
         Ok(body) => {
-            let mut resp = Response::new(Full::new(Bytes::from(body)));
+            let mut resp = Response::new(Either::Left(Full::new(Bytes::from(body))));
             resp.headers_mut()
                 .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             resp
@@ -330,7 +346,7 @@ async fn v1(
         }
         (&Method::POST, "/v1/poke") => {
             state.hooks.poked(peer);
-            let mut resp = Response::new(Full::new(Bytes::new()));
+            let mut resp = Response::new(Either::Left(Full::new(Bytes::new())));
             *resp.status_mut() = StatusCode::NO_CONTENT;
             resp
         }
@@ -362,18 +378,22 @@ async fn blob(state: &ServerState, sha: &str) -> Resp {
         Err(e) => return internal(e),
     };
     let assets_dir = state.ws.paths().assets_dir();
-    let read = tokio::task::spawn_blocking(move || {
+    let opened = tokio::task::spawn_blocking(move || {
         files
             .iter()
             .filter(|f| crate::is_safe_asset_name(f))
-            .find_map(|f| std::fs::read(assets_dir.join(f)).ok())
+            .find_map(|f| {
+                let file = std::fs::File::open(assets_dir.join(f)).ok()?;
+                let meta = file.metadata().ok()?;
+                meta.is_file().then(|| BlobBody::new(file, meta.len()))
+            })
     })
     .await
     .ok()
     .flatten();
-    match read {
-        Some(bytes) => {
-            let mut resp = Response::new(Full::new(Bytes::from(bytes)));
+    match opened {
+        Some(body) => {
+            let mut resp = Response::new(Either::Right(body));
             resp.headers_mut().insert(
                 CONTENT_TYPE,
                 HeaderValue::from_static("application/octet-stream"),
@@ -381,6 +401,180 @@ async fn blob(state: &ServerState, sha: &str) -> Resp {
             resp
         }
         None => status(StatusCode::NOT_FOUND, "blob not held"),
+    }
+}
+
+/// A blob answer streamed from disk, [`BLOB_CHUNK`] bytes per frame. Each
+/// chunk is one short blocking read: nothing holds a blocking thread while
+/// the peer is slow to take the next frame. The exact length makes hyper send
+/// `Content-Length`, so a file that ends early is a broken transfer, not EOF.
+struct BlobBody {
+    /// `None` while a read is in flight.
+    file: Option<std::fs::File>,
+    reading: Option<tokio::task::JoinHandle<(std::fs::File, std::io::Result<Bytes>)>>,
+    remaining: u64,
+}
+
+impl BlobBody {
+    fn new(file: std::fs::File, len: u64) -> Self {
+        Self {
+            file: Some(file),
+            reading: None,
+            remaining: len,
+        }
+    }
+}
+
+impl Body for BlobBody {
+    type Data = Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+        let this = self.get_mut();
+        if this.remaining == 0 {
+            return Poll::Ready(None);
+        }
+        if this.reading.is_none() {
+            let Some(mut file) = this.file.take() else {
+                return Poll::Ready(None);
+            };
+            let want = this.remaining.min(BLOB_CHUNK as u64) as usize;
+            this.reading = Some(tokio::task::spawn_blocking(move || {
+                let mut buf = vec![0; want];
+                let read = loop {
+                    match file.read(&mut buf) {
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        other => break other,
+                    }
+                };
+                let chunk = read.map(|n| {
+                    buf.truncate(n);
+                    Bytes::from(buf)
+                });
+                (file, chunk)
+            }));
+        }
+        let reading = this.reading.as_mut().expect("a read is in flight");
+        let joined = std::task::ready!(Pin::new(reading).poll(cx));
+        this.reading = None;
+        let chunk = match joined {
+            Ok((file, chunk)) => {
+                this.file = Some(file);
+                chunk
+            }
+            Err(e) => Err(std::io::Error::other(e)),
+        };
+        Poll::Ready(Some(match chunk {
+            Ok(bytes) if bytes.is_empty() => Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "blob file shorter than its length",
+            )),
+            Ok(bytes) => {
+                this.remaining -= bytes.len() as u64;
+                Ok(Frame::data(bytes))
+            }
+            Err(e) => Err(e),
+        }))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.remaining == 0
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.remaining)
+    }
+}
+
+/// Fails a write that makes no progress for `limit`: a peer that stops
+/// reading without closing must not pin its connection and response forever.
+struct StallGuard<T> {
+    inner: T,
+    limit: Duration,
+    stalled: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl<T> StallGuard<T> {
+    fn new(inner: T, limit: Duration) -> Self {
+        Self {
+            inner,
+            limit,
+            stalled: None,
+        }
+    }
+
+    fn watch<R>(
+        &mut self,
+        cx: &mut Context<'_>,
+        poll: Poll<std::io::Result<R>>,
+    ) -> Poll<std::io::Result<R>> {
+        if poll.is_ready() {
+            self.stalled = None;
+            return poll;
+        }
+        let limit = self.limit;
+        let stalled = self
+            .stalled
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(limit)));
+        if stalled.as_mut().poll(cx).is_ready() {
+            self.stalled = None;
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "peer stopped reading",
+            )));
+        }
+        Poll::Pending
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for StallGuard<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for StallGuard<T> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.inner).poll_write(cx, buf);
+        this.watch(cx, poll)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.inner).poll_write_vectored(cx, bufs);
+        this.watch(cx, poll)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.inner).poll_flush(cx);
+        this.watch(cx, poll)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.inner).poll_shutdown(cx);
+        this.watch(cx, poll)
     }
 }
 
@@ -454,4 +648,213 @@ async fn pair(
         },
         port: Some(state.port),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::WorkspacePaths;
+    use crate::domain::asset_service;
+    use sha2::{Digest, Sha256};
+
+    struct NoHooks;
+
+    impl ServerHooks for NoHooks {
+        fn paired(&self, _device_id: &str) {}
+        fn poked(&self, _device_id: &str) {}
+    }
+
+    /// A server state over a fresh workspace holding one asset with `bytes`.
+    struct Fixture {
+        state: ServerState,
+        asset: crate::domain::models::AssetDto,
+        dir: std::path::PathBuf,
+    }
+
+    impl Fixture {
+        async fn new(bytes: &[u8]) -> Self {
+            let dir = std::env::temp_dir().join(format!("myspace-blob-{}", uuid::Uuid::now_v7()));
+            let ws = Workspace::open(WorkspacePaths::new(&dir)).unwrap();
+            let staged = asset_service::stage_asset_bytes(
+                &ws.paths().assets_dir(),
+                "big.bin",
+                "application/octet-stream",
+                bytes,
+            )
+            .unwrap();
+            ws.apply(Mutation::InsertAsset(staged.asset.clone()))
+                .await
+                .unwrap();
+            let identity = match ws
+                .apply(Mutation::SyncPeers(PeerWrite::EnsureTransportIdentity))
+                .await
+                .unwrap()
+                .into_peer_outcome()
+                .unwrap()
+            {
+                peers::PeerOutcome::Identity(identity) => identity,
+                peers::PeerOutcome::Unit => unreachable!(),
+            };
+            let state = ServerState {
+                ws,
+                identity,
+                pairing: Mutex::new(PairingWindow::default()),
+                hooks: Arc::new(NoHooks),
+                port: 0,
+            };
+            Self {
+                state,
+                asset: staged.asset,
+                dir,
+            }
+        }
+
+        fn sha(&self) -> String {
+            self.asset.sha256.clone().unwrap()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn big_bytes() -> Vec<u8> {
+        (0..32usize << 20).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// Reads a whole body: (bytes, largest frame, sha256 hex).
+    async fn drain<B>(mut body: B) -> (usize, usize, String)
+    where
+        B: Body<Data = Bytes> + Unpin,
+        B::Error: std::fmt::Debug,
+    {
+        let (mut total, mut largest) = (0, 0);
+        let mut hasher = Sha256::new();
+        while let Some(frame) = body.frame().await {
+            let data = frame.unwrap().into_data().unwrap();
+            total += data.len();
+            largest = largest.max(data.len());
+            hasher.update(&data);
+        }
+        (total, largest, format!("{:x}", hasher.finalize()))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_large_blob_is_served_from_disk_in_bounded_frames() {
+        let bytes = big_bytes();
+        let fixture = Fixture::new(&bytes).await;
+        let resp = blob(&fixture.state, &fixture.sha()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body();
+        assert_eq!(
+            body.size_hint().exact(),
+            Some(bytes.len() as u64),
+            "no exact length: no Content-Length"
+        );
+
+        let (total, largest, sha) = drain(body).await;
+        assert_eq!(total, bytes.len());
+        assert_eq!(sha, fixture.sha());
+        assert!(largest <= 1 << 20, "a {largest}-byte frame: not streamed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreadable_candidate_falls_through_to_the_next_file() {
+        let fixture = Fixture::new(b"the real bytes").await;
+        // A second row for the same hash, sorted first, whose "file" is a directory.
+        let mut shadow = fixture.asset.clone();
+        shadow.id = uuid::Uuid::now_v7().to_string();
+        shadow.file_path = format!("0{}", fixture.asset.file_path);
+        std::fs::create_dir(
+            fixture
+                .state
+                .ws
+                .paths()
+                .assets_dir()
+                .join(&shadow.file_path),
+        )
+        .unwrap();
+        fixture
+            .state
+            .ws
+            .apply(Mutation::InsertAsset(shadow))
+            .await
+            .unwrap();
+
+        let resp = blob(&fixture.state, &fixture.sha()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let (_, _, sha) = drain(resp.into_body()).await;
+        assert_eq!(sha, fixture.sha());
+    }
+
+    #[test]
+    fn a_stalled_transfer_holds_no_blocking_thread() {
+        // One blocking thread in the whole runtime: if the unread body keeps
+        // it, nothing else that needs one (pooled reads) ever runs again.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let fixture = Fixture::new(&big_bytes()).await;
+            let mut body = blob(&fixture.state, &fixture.sha()).await.into_body();
+            body.frame().await.unwrap().unwrap();
+            // The peer stops reading: the body is not polled any more.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let other =
+                tokio::time::timeout(Duration::from_secs(2), tokio::task::spawn_blocking(|| ()))
+                    .await;
+            assert!(other.is_ok(), "the unread body holds the blocking thread");
+            drop(body);
+        });
+    }
+
+    #[tokio::test]
+    async fn a_write_that_makes_no_progress_times_out() {
+        use tokio::io::AsyncWriteExt;
+        // The far end never reads: the 1 KiB pipe fills and writes stall.
+        let (near, _far) = tokio::io::duplex(1024);
+        let mut guarded = StallGuard::new(near, Duration::from_millis(200));
+        let write =
+            tokio::time::timeout(Duration::from_secs(2), guarded.write_all(&[0u8; 64 * 1024]))
+                .await
+                .expect("the stalled write was never cut off");
+        assert_eq!(write.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    /// A stream whose shutdown never completes (a peer that stopped reading
+    /// the TLS close_notify).
+    struct StuckShutdown;
+
+    impl AsyncWrite for StuckShutdown {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_that_makes_no_progress_times_out() {
+        use tokio::io::AsyncWriteExt;
+        let mut guarded = StallGuard::new(StuckShutdown, Duration::from_millis(200));
+        let shutdown = tokio::time::timeout(Duration::from_secs(2), guarded.shutdown())
+            .await
+            .expect("the stalled shutdown was never cut off");
+        assert_eq!(shutdown.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    }
 }

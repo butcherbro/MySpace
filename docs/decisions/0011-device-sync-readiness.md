@@ -198,7 +198,14 @@ pill), README "Sync (LAN)".
   or `last_error`. Triggers: start, 5 s tick, 500 ms after a local journaled
   write (`Workspace::local_writes`, a `tokio::sync::Notify` signalled by the
   writer thread after a journaled commit; the pass also pokes the peers), a
-  peer's poke, pairing, `sync_now`. Replays do not signal, so no ping-pong.
+  journaled write by another process on the same database (the MCP server:
+  while at least one peer is paired, a pooled reader compares this device's
+  journal cursor every 500 ms with the cursor as of the last poke; a
+  difference runs a poking pass), a peer's poke, pairing, `sync_now`. Replays
+  do not signal, so no ping-pong.
+- **Blob serving:** the server streams an asset file from disk in 64 KiB
+  chunks with an exact `Content-Length`; a connection whose write makes no
+  progress within the stall timeout is dropped.
 - **Events:** `sync-applied` (touched board ids, plus boards showing a blob
   that just arrived) → the open board reloads through the same path as the
   external-change poll; `sync-state` `{peers: [{deviceId, name, online,

@@ -83,6 +83,14 @@ pub fn advance_cursor(conn: &Connection, origin: &str, hlc: &str) -> Result<(), 
     Ok(())
 }
 
+/// The highest HLC held from `origin`, if any.
+pub fn cursor(conn: &Connection, origin: &str) -> Result<Option<String>, WorkspaceError> {
+    Ok(conn
+        .prepare_cached("SELECT last_hlc FROM sync_cursors WHERE peer_device_id = ?1")?
+        .query_row([origin], |r| r.get(0))
+        .optional()?)
+}
+
 /// This device's vector clock: per origin device, the highest HLC held.
 pub fn our_cursors(conn: &Connection) -> Result<BTreeMap<String, String>, WorkspaceError> {
     let mut stmt = conn.prepare("SELECT peer_device_id, last_hlc FROM sync_cursors")?;

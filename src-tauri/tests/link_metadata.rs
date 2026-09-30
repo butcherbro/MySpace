@@ -6,9 +6,9 @@ use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::asset_service;
 use myspace_lib::domain::errors::WorkspaceError;
 use myspace_lib::domain::link_metadata::{
-    enrich_embed_blocking, extract_html_metadata, extract_youtube_feed_metadata,
-    plan_embed_enrichment, validate_public_http_url, youtube_channel_feed_url, EmbedEnrichmentPlan,
-    FetchError, FetchResponse, MetadataFetcher,
+    commit_embed_enrichment, enrich_embed_blocking, extract_html_metadata,
+    extract_youtube_feed_metadata, plan_embed_enrichment, validate_public_http_url,
+    youtube_channel_feed_url, EmbedEnrichmentPlan, FetchError, FetchResponse, MetadataFetcher,
 };
 use myspace_lib::domain::models::{
     ConvertNoteToEmbedInput, CreateNoteInput, Frame, TrashItem, TrashSelectionInput,
@@ -298,9 +298,7 @@ fn enrich_reuses_a_cached_favicon_without_fetching_it_again() {
     assert_eq!(fetcher.image_calls(), 1);
 
     // The second card hits the cache: nothing is fetched or staged.
-    let plan =
-        t.ws.read_blocking(|conn| plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "second"))
-            .unwrap();
+    let plan = plan_embed_enrichment(&t.ws, &fetcher, "second").unwrap();
     assert!(plan.staged_assets.is_empty());
     assert!(plan.favicon_cache_entries.is_empty());
     assert_eq!(fetcher.image_calls(), 1, "a cache hit does not fetch");
@@ -320,10 +318,7 @@ impl TestWorkspace {
     /// Runs the network half of enrichment for `id` and returns the plan with
     /// the paths of its staged files.
     fn plan(&self, fetcher: &StubFetcher, id: &str) -> (EmbedEnrichmentPlan, Vec<PathBuf>) {
-        let plan = self
-            .ws
-            .read_blocking(|conn| plan_embed_enrichment(conn, &self.asset_dir(), fetcher, id))
-            .unwrap();
+        let plan = plan_embed_enrichment(&self.ws, fetcher, id).unwrap();
         let staged = plan
             .staged_assets
             .iter()
@@ -768,9 +763,7 @@ fn enrich_reuses_an_existing_asset_with_the_same_bytes() {
         .unwrap()
         .execute("DELETE FROM favicon_cache", [])
         .unwrap();
-    let plan =
-        t.ws.read_blocking(|conn| plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "second"))
-            .unwrap();
+    let plan = plan_embed_enrichment(&t.ws, &fetcher, "second").unwrap();
     assert!(plan.staged_assets.is_empty(), "hash hit stages nothing");
     assert_eq!(t.asset_files(), 1, "the fresh download was discarded");
 
@@ -784,5 +777,250 @@ fn enrich_reuses_an_existing_asset_with_the_same_bytes() {
         Some(first_asset.clone())
     );
     assert_eq!(second.favicon_asset.map(|a| a.id), Some(first_asset));
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 1);
+}
+
+/// Blocks every page fetch until `release`, reporting each entry on `entered`.
+struct GatedFetcher {
+    entered: std::sync::Mutex<std::sync::mpsc::Sender<()>>,
+    gate: (std::sync::Mutex<bool>, std::sync::Condvar),
+}
+
+impl GatedFetcher {
+    fn release(&self) {
+        *self.gate.0.lock().unwrap() = true;
+        self.gate.1.notify_all();
+    }
+}
+
+impl MetadataFetcher for GatedFetcher {
+    fn fetch_text(&self, _url: &str) -> Result<FetchResponse, FetchError> {
+        self.entered.lock().unwrap().send(()).unwrap();
+        let mut open = self.gate.0.lock().unwrap();
+        while !*open {
+            open = self.gate.1.wait(open).unwrap();
+        }
+        html_page(FULL_PAGE)
+    }
+
+    fn fetch_image(&self, _url: &str) -> Result<FetchResponse, FetchError> {
+        Err(FetchError::Network("no images".to_string()))
+    }
+}
+
+#[test]
+fn reads_complete_while_enrichments_wait_on_the_network() {
+    // P1.1: the network phase must not hold a pooled reader. With every pool
+    // slot's worth of enrichments stuck in a fetch, an ordinary read still runs.
+    use myspace_lib::app::workspace::READ_POOL_SIZE;
+    use std::time::Duration;
+
+    let t = TestWorkspace::new("network-no-conn");
+    let ids: Vec<String> = (0..READ_POOL_SIZE).map(|i| format!("link-{i}")).collect();
+    for id in &ids {
+        t.create_pending_embed(id, "https://example.com/page");
+    }
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let fetcher = GatedFetcher {
+        entered: std::sync::Mutex::new(entered_tx),
+        gate: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+    };
+
+    let (t, fetcher) = (&t, &fetcher);
+    std::thread::scope(|scope| {
+        let enrichments: Vec<_> = ids
+            .iter()
+            .map(|id| scope.spawn(move || enrich_embed_blocking(&t.ws, fetcher, id)))
+            .collect();
+        let all_entered = ids
+            .iter()
+            .all(|_| entered_rx.recv_timeout(Duration::from_secs(5)).is_ok());
+
+        let (read_tx, read_rx) = std::sync::mpsc::channel();
+        if all_entered {
+            scope.spawn(move || {
+                let cards = t.count("SELECT COUNT(*) FROM cards");
+                read_tx.send(cards).ok();
+            });
+        }
+        let read = read_rx.recv_timeout(Duration::from_secs(2));
+        // Release before asserting: on failure the scoped threads would hang.
+        fetcher.release();
+        let statuses: Vec<_> = enrichments
+            .into_iter()
+            .map(|e| e.join().unwrap().map(|embed| embed.metadata_status))
+            .collect();
+        assert!(
+            all_entered,
+            "an enrichment never reached the network phase: {statuses:?}"
+        );
+        assert!(
+            read.is_ok(),
+            "a read was blocked by enrichments in their network phase"
+        );
+        for status in statuses {
+            assert_eq!(status.unwrap(), "ready");
+        }
+    });
+}
+
+#[test]
+fn concurrent_enrichments_sharing_a_favicon_store_it_once() {
+    // Enrichments in flight at once all miss the favicon cache and the hash
+    // lookup before any of them commits; the commit must still store one copy.
+    let t = TestWorkspace::new("favicon-race");
+    let page = br#"<meta property="og:title" content="T"><link rel="icon" href="https://example.com/favicon.png">"#;
+    let fetcher = StubFetcher::new(html_page(page), png(b"ICON"));
+    let ids: Vec<String> = (0..5).map(|i| format!("link-{i}")).collect();
+    for id in &ids {
+        t.create_pending_embed(id, "https://example.com/page");
+    }
+
+    let plans: Vec<_> = ids
+        .iter()
+        .map(|id| plan_embed_enrichment(&t.ws, &fetcher, id).unwrap())
+        .collect();
+    assert_eq!(t.asset_files(), ids.len(), "each plan staged its own copy");
+    let favicons: Vec<String> = plans
+        .into_iter()
+        .map(|plan| {
+            t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))
+                .unwrap()
+                .into_embed()
+                .unwrap()
+                .favicon_asset
+                .expect("favicon")
+                .id
+        })
+        .collect();
+
+    assert!(favicons.iter().all(|id| *id == favicons[0]), "{favicons:?}");
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 1);
+    assert_eq!(t.count("SELECT COUNT(*) FROM favicon_cache"), 1);
+    assert_eq!(t.asset_files(), 1, "redundant staged copies were removed");
+}
+
+#[test]
+fn at_most_four_enrichments_fetch_at_once() {
+    use myspace_lib::domain::link_metadata::enrich_embed;
+    use std::time::Duration;
+
+    let t = TestWorkspace::new("enrich-limit");
+    let ids: Vec<String> = (0..6).map(|i| format!("link-{i}")).collect();
+    for id in &ids {
+        t.create_pending_embed(id, "https://example.com/page");
+    }
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let fetcher = std::sync::Arc::new(GatedFetcher {
+        entered: std::sync::Mutex::new(entered_tx),
+        gate: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+    });
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let tasks: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            let (ws, fetcher, id) = (t.ws.clone(), fetcher.clone(), id.clone());
+            runtime.spawn(async move { enrich_embed(&ws, fetcher, id).await })
+        })
+        .collect();
+    let mut entered = 0;
+    while entered_rx.recv_timeout(Duration::from_secs(1)).is_ok() {
+        entered += 1;
+    }
+    fetcher.release();
+    for task in tasks {
+        let embed = runtime.block_on(task).unwrap().unwrap();
+        assert_eq!(embed.metadata_status, "ready");
+    }
+    assert_eq!(entered, 4, "enrichments fetching at once");
+}
+
+/// Serves every image except favicons, so a plan stages only its preview.
+struct PreviewOnlyFetcher {
+    page: Result<FetchResponse, FetchError>,
+}
+
+impl MetadataFetcher for PreviewOnlyFetcher {
+    fn fetch_text(&self, _url: &str) -> Result<FetchResponse, FetchError> {
+        self.page.clone()
+    }
+
+    fn fetch_image(&self, url: &str) -> Result<FetchResponse, FetchError> {
+        if url.contains("favicon") {
+            return Err(FetchError::Network("no favicon".to_string()));
+        }
+        Ok(png(b"SAME-PREVIEW").unwrap())
+    }
+}
+
+fn preview_page(image_url: &str) -> PreviewOnlyFetcher {
+    let body = format!(
+        r#"<meta property="og:title" content="T"><meta property="og:image" content="{image_url}">"#
+    );
+    PreviewOnlyFetcher {
+        page: html_page(body.as_bytes()),
+    }
+}
+
+#[test]
+fn concurrent_previews_with_the_same_bytes_store_them_once() {
+    // Different preview URLs, identical bytes, both planned before either
+    // commits: the hash check at commit time keeps one asset and one file.
+    let t = TestWorkspace::new("preview-race");
+    t.create_pending_embed("first", "https://example.com/page");
+    t.create_pending_embed("second", "https://example.com/page");
+    let first_plan = plan_embed_enrichment(
+        &t.ws,
+        &preview_page("https://a.example.com/one.png"),
+        "first",
+    )
+    .unwrap();
+    let second_plan = plan_embed_enrichment(
+        &t.ws,
+        &preview_page("https://b.example.com/two.png"),
+        "second",
+    )
+    .unwrap();
+    assert_eq!(t.asset_files(), 2);
+
+    let previews: Vec<String> = [first_plan, second_plan]
+        .into_iter()
+        .map(|plan| {
+            let embed =
+                t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))
+                    .unwrap()
+                    .into_embed()
+                    .unwrap();
+            assert!(embed.favicon_asset.is_none());
+            embed.preview_asset.expect("preview").id
+        })
+        .collect();
+
+    assert_eq!(previews[0], previews[1]);
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 1);
+    assert_eq!(t.count("SELECT COUNT(*) FROM favicon_cache"), 0);
+    assert_eq!(t.asset_files(), 1);
+}
+
+#[test]
+fn committing_the_same_plan_twice_keeps_its_files() {
+    // A busy retry after the commit runs the commit again with the same plan:
+    // the rows it finds are its own, not duplicates to drop.
+    let t = TestWorkspace::new("commit-retry");
+    t.create_pending_embed("link-card", "https://example.com/page");
+    let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"image-bytes"));
+    let (plan, staged) = t.plan(&fetcher, "link-card");
+    assert_eq!(staged.len(), 1);
+
+    let mut conn = rusqlite::Connection::open(t.ws.paths().db_path()).unwrap();
+    let first = commit_embed_enrichment(&mut conn, &plan).unwrap();
+    let second = commit_embed_enrichment(&mut conn, &plan).unwrap();
+
+    assert_eq!(
+        first.preview_asset.map(|a| a.id),
+        second.preview_asset.map(|a| a.id)
+    );
+    assert!(staged[0].exists(), "the committed asset's file was deleted");
     assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 1);
 }
