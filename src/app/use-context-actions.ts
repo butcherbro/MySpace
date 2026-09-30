@@ -12,7 +12,7 @@ import type {
   FolderPreviewDto,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 
 /**
@@ -37,7 +37,7 @@ export interface ContextActionsDeps {
   gateway: WorkspaceGateway;
   dispatcher: CommandDispatcher;
   idGenerator: IdGenerator;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   /** Applies every local card change to the refs and the store together. */
   cardWrites: CardWrites;
   refreshTrash: () => Promise<void>;
@@ -165,10 +165,10 @@ export function useContextActions(deps: ContextActionsDeps): ContextActionsContr
         const picked = await pickFolder();
         if (!picked) return;
         const alias = await gateway.setFilesystemAliasLocalTarget(id, picked);
-        dispatch({ type: "filesystemAliasUpdated", alias });
+        cardWrites.apply({ type: "filesystemAliasUpdated", alias });
       })().catch((error) => dispatch({ type: "failed", message: errorMessage(error) }));
     },
-    [gateway, dispatch],
+    [gateway, dispatch, cardWrites],
   );
 
   const handleContextDelete = useCallback(() => {

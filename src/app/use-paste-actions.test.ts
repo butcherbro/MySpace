@@ -12,7 +12,7 @@ import type {
   WorkspaceGateway,
 } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
-import { createCardWrites } from "../state/card-writes";
+import { loadedCardWrites } from "../state/card-writes-fixture";
 import { clearCardClipboard, setCardClipboard, type CopiedCard } from "./card-clipboard";
 import { usePasteActions } from "./use-paste-actions";
 
@@ -116,7 +116,7 @@ function harness(
       notes,
       gateway,
       dispatch,
-      cardWrites: createCardWrites(cardsRef, { current: [] }, dispatch),
+      cardWrites: loadedCardWrites(cardsRef, dispatch),
       dispatcher,
       idGenerator,
       createFolderShortcut,

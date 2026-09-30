@@ -7,7 +7,8 @@ import type { TextColorId } from "../editor/text-color";
 import { errorMessage } from "../services/error-message";
 import type { IdGenerator } from "../services/id-generator";
 import type { NoteCardDto } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 
 /**
  * Note formatting: the contextual note rail's command bridge and toggle state.
@@ -31,7 +32,9 @@ export interface NoteFormattingOptions {
   activeNote: NoteCardDto | undefined;
   dispatcher: CommandDispatcher;
   idGenerator: IdGenerator;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
+  /** Applies every local card change to the refs and the store together. */
+  cardWrites: CardWrites;
 }
 
 export interface NoteFormattingController {
@@ -52,7 +55,7 @@ export interface NoteFormattingController {
 }
 
 export function useNoteFormatting(options: NoteFormattingOptions): NoteFormattingController {
-  const { activeNote, dispatcher, idGenerator, dispatch } = options;
+  const { activeNote, dispatcher, idGenerator, dispatch, cardWrites } = options;
 
   const noteCommandsRef = useRef<NoteEditorCommands | null>(null);
   const [boldActive, setBoldActive] = useState(false);
@@ -109,14 +112,14 @@ export function useNoteFormatting(options: NoteFormattingOptions): NoteFormattin
       void dispatcher
         .execute(new SetNoteColorCommand(idGenerator.nextId(), note.id, color, prevColor))
         .then(() => {
-          dispatch({ type: "noteColorChanged", id: note.id, colorToken: color });
+          cardWrites.apply({ type: "noteColorChanged", id: note.id, colorToken: color });
         })
         .catch((err) => {
           dispatch({ type: "failed", message: errorMessage(err) });
         });
     },
     // dispatch стабилен (useReducer), но вне App линтер этого не видит — указываем явно.
-    [activeNote, dispatcher, idGenerator, dispatch],
+    [activeNote, dispatcher, idGenerator, dispatch, cardWrites],
   );
 
   return {

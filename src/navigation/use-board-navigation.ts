@@ -44,7 +44,16 @@ export interface BoardNavigation {
   initialize: (snapshot: BoardSnapshot) => void;
   navigateTo: (
     boardId: string,
-    options?: { pushHistory?: boolean; tabMode?: "open" | "sync" },
+    options?: {
+      pushHistory?: boolean;
+      tabMode?: "open" | "sync";
+      /**
+       * A reload of the board already open (stale answer, change poll, sync,
+       * undo). It is dropped while a navigation to another board is in flight:
+       * that navigation loads a fresh snapshot of its own target anyway.
+       */
+      reload?: boolean;
+    },
   ) => Promise<void>;
   goBack: () => void;
   goForward: () => void;
@@ -79,34 +88,45 @@ export function useBoardNavigation(options: BoardNavigationOptions): BoardNaviga
   // newer navigation. Each call claims a monotonically increasing token before
   // awaiting; the snapshot is applied only if no newer call has started.
   const navigationTokenRef = useRef(0);
+  // Target of the navigation holding the current token, until it finishes.
+  const inFlightTargetRef = useRef<string | null>(null);
 
   const navigateTo = useCallback(
     async (
       boardId: string,
-      opts?: { pushHistory?: boolean; tabMode?: "open" | "sync" },
+      opts?: { pushHistory?: boolean; tabMode?: "open" | "sync"; reload?: boolean },
     ) => {
+      // Перезагрузка текущей доски не должна отменять начатый переход на другую:
+      // иначе клик по вкладке теряется, а пользователь остаётся где был.
+      const inFlight = inFlightTargetRef.current;
+      if (opts?.reload && inFlight !== null && inFlight !== boardId) return;
       const token = ++navigationTokenRef.current;
-      // Flush any pending note/viewport writes before replacing the projection,
-      // so a debounced save cannot be abandoned by navigation.
-      await drainPendingWrites();
-      if (navigationTokenRef.current !== token) return; // a newer navigation started
-      const requestStamp = stampSnapshotRequest();
-      const snapshot = await gateway.loadBoardSnapshot(boardId);
-      if (navigationTokenRef.current !== token) return; // superseded while loading
-      if (opts?.pushHistory && historyRef.current) {
-        historyRef.current.push(boardId);
+      inFlightTargetRef.current = boardId;
+      try {
+        // Flush any pending note/viewport writes before replacing the projection,
+        // so a debounced save cannot be abandoned by navigation.
+        await drainPendingWrites();
+        if (navigationTokenRef.current !== token) return; // a newer navigation started
+        const requestStamp = stampSnapshotRequest();
+        const snapshot = await gateway.loadBoardSnapshot(boardId);
+        if (navigationTokenRef.current !== token) return; // superseded while loading
+        if (opts?.pushHistory && historyRef.current) {
+          historyRef.current.push(boardId);
+        }
+        const tabMode = opts?.tabMode ?? "sync";
+        // Track the board as an open tab: explicit navigation opens/activates a
+        // tab; a reload just re-syncs the active id to the loaded board.
+        setTabs((prev) => {
+          const tab = tabFrom(snapshot);
+          const base = prev ?? createBoardTabs(tab);
+          const withHome = base.tabs.length === 0 ? createBoardTabs(tab) : base;
+          const next = navigateBoardTab(withHome, tab, tabMode);
+          return tabMode === "sync" ? activateBoardTab(next, snapshot.board.id) : next;
+        });
+        onSnapshotLoaded(snapshot, requestStamp);
+      } finally {
+        if (navigationTokenRef.current === token) inFlightTargetRef.current = null;
       }
-      const tabMode = opts?.tabMode ?? "sync";
-      // Track the board as an open tab: explicit navigation opens/activates a
-      // tab; a reload just re-syncs the active id to the loaded board.
-      setTabs((prev) => {
-        const tab = tabFrom(snapshot);
-        const base = prev ?? createBoardTabs(tab);
-        const withHome = base.tabs.length === 0 ? createBoardTabs(tab) : base;
-        const next = navigateBoardTab(withHome, tab, tabMode);
-        return tabMode === "sync" ? activateBoardTab(next, snapshot.board.id) : next;
-      });
-      onSnapshotLoaded(snapshot, requestStamp);
     },
     [drainPendingWrites, gateway, stampSnapshotRequest, onSnapshotLoaded],
   );

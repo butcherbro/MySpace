@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
 import { errorMessage } from "../services/error-message";
 import type { CardDto, EmbedCardDto, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 
 /**
@@ -16,7 +16,7 @@ export interface EmbedMetadataOptions {
   cards: CardDto[];
   cardsRef: RefObject<CardDto[]>;
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   cardWrites: CardWrites;
 }
 

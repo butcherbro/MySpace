@@ -9,6 +9,7 @@ import {
   type CurrentBoardAction,
   type CurrentBoardState,
 } from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import { useBoardCover, type BoardCoverOptions } from "./use-board-cover";
 
 const mocks = vi.hoisted(() => ({
@@ -92,8 +93,10 @@ function harness(
   const cards = overrides.cards ?? [portal()];
   const contextMenu = overrides.contextMenu === undefined ? { cardId: "portal-1" } : overrides.contextMenu;
 
+  const cardWrites = createCardWrites({ current: cards }, { current: [] }, dispatch);
+
   const { result } = renderHook(() =>
-    useBoardCover({ contextMenu, cards, gateway, idGenerator, dispatch, setQuickBoards }),
+    useBoardCover({ contextMenu, cards, gateway, idGenerator, dispatch, cardWrites, setQuickBoards }),
   );
 
   return {

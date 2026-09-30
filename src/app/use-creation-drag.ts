@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, type Dispatch, type RefObject } from "react";
 import { errorMessage } from "../services/error-message";
 import type { BoardSummary, CardDto, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 
 /** A tool draggable out of the rail: Note, Link, and Board (Image uses a file picker). */
@@ -22,7 +22,7 @@ export interface CreationDragDeps {
   cards: CardDto[];
   board: BoardSummary | null;
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   /** Applies every write answer to `cardsRef` and the store together. */
   cardWrites: CardWrites;
   screenToFlowRef: RefObject<((x: number, y: number) => { x: number; y: number }) | null>;

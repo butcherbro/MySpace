@@ -1,7 +1,9 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { useEffect, useLayoutEffect, useReducer, type Dispatch } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { BoardSummary, CardDto, NoteCardDto } from "../services/workspace-gateway";
-import { createCardWrites, type LoadedSnapshot } from "./card-writes";
-import type { CurrentBoardAction } from "./current-board-store";
+import { createCardWrites, useCardWrites, type LoadedSnapshot } from "./card-writes";
+import { initialState, reducer, type BoardViewAction, type CurrentBoardAction } from "./current-board-store";
 
 function note(id: string, revision: number): NoteCardDto {
   return {
@@ -108,6 +110,38 @@ describe("createCardWrites", () => {
     expect(test.cardsRef.current).toEqual([{ ...note("a", 3), frame }, note("b", 5)]);
   });
 
+  it("ignores a late cardAdded for the board that was open before", () => {
+    const test = harness();
+    test.writes.applySnapshot(loaded("board-b", []), test.writes.snapshotRequested());
+    test.dispatch.mockClear();
+
+    // «New note» нажали на доске A, ответ пришёл, когда уже открыта B.
+    test.writes.apply({ type: "cardAdded", card: { ...note("late", 1), boardId: "board-a" } });
+
+    expect(test.cardsRef.current).toEqual([]);
+    expect(test.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("brings changes without a revision (colour, cover, shortcut) into the refs at once", () => {
+    const portal = {
+      kind: "board_portal",
+      id: "p",
+      boardId: "home",
+      frame,
+      zIndex: 0,
+      revision: 1,
+      target: { id: "child", boardRevision: 1, coverAsset: null },
+    } as unknown as CardDto;
+    const test = harness([note("a", 1), portal]);
+    const cover = { id: "asset-1" } as unknown as NonNullable<Extract<CardDto, { kind: "board_portal" }>["target"]["coverAsset"]>;
+
+    test.writes.apply({ type: "noteColorChanged", id: "a", colorToken: "sun" });
+    test.writes.apply({ type: "boardCoverChanged", boardId: "child", coverAsset: cover });
+
+    expect(test.cardsRef.current[0]).toMatchObject({ colorToken: "sun" });
+    expect(test.cardsRef.current[1]).toMatchObject({ target: { coverAsset: cover } });
+  });
+
   it("forgets the stamps when another board is opened", () => {
     const test = harness([note("a", 1)]);
     test.writes.applySnapshot(loaded("home", test.cardsRef.current), test.writes.snapshotRequested());
@@ -118,5 +152,59 @@ describe("createCardWrites", () => {
     test.writes.applySnapshot(loaded("other", []), 0);
 
     expect(sinceRequest(test.dispatch)).toEqual({ written: [], added: [], removed: [] });
+  });
+});
+
+describe("useCardWrites", () => {
+  const frame = { x: 5, y: 6, width: 200, height: 80 };
+
+  it("keeps cardsRef ahead of a commit whose effects run after a newer apply", async () => {
+    // Вне act: React рендерит и коммитит в одной задаче, а пассивные эффекты
+    // выполняет в следующей — между ними успевает микрозадача с новой записью.
+    const actEnvironment = (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+    const seen: Array<{ state: number; ref: number }> = [];
+    const { result } = renderHook(() => {
+      const [state, dispatch] = useReducer(reducer, initialState);
+      const { cardsRef, cardWrites } = useCardWrites(dispatch);
+      const revision = state.cards[0]?.revision ?? 0;
+      useLayoutEffect(() => {
+        // Ответ следующей записи приходит сразу после коммита первой.
+        if (revision === 2) {
+          queueMicrotask(() => cardWrites.apply({ type: "cardMoved", id: "a", revision: 3, frame }));
+        }
+      }, [revision, cardWrites]);
+      useEffect(() => {
+        seen.push({ state: revision, ref: cardsRef.current[0]?.revision ?? 0 });
+      });
+      return cardWrites;
+    });
+    act(() => result.current.applySnapshot(loaded("home", [note("a", 1)]), 0));
+
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      result.current.apply({ type: "cardMoved", id: "a", revision: 2, frame });
+      await waitFor(() => expect(seen.some((s) => s.state === 3)).toBe(true));
+    } finally {
+      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = actEnvironment;
+    }
+
+    // Эффекты коммита с ревизией 2 уже видят ответ с ревизией 3 в ref.
+    expect(seen.filter((s) => s.state === 2).map((s) => s.ref)).toEqual([3]);
+  });
+});
+
+describe("single writer", () => {
+  it("does not let a hook dispatch a card change or a snapshot directly (checked by tsc)", () => {
+    const dispatched: BoardViewAction[] = [];
+    const dispatch: Dispatch<BoardViewAction> = (action) => dispatched.push(action);
+    const frame = { x: 0, y: 0, width: 1, height: 1 };
+
+    // @ts-expect-error — card changes go through CardWrites, never a hook's dispatch
+    dispatch({ type: "cardMoved", id: "a", revision: 2, frame });
+    // @ts-expect-error — so does the snapshot
+    dispatch({ type: "snapshotLoaded", ...loaded("home", []) });
+    dispatch({ type: "selectionChanged", ids: ["a"] });
+
+    expect(dispatched).toHaveLength(3);
   });
 });

@@ -83,6 +83,85 @@ describe("useBoardNavigation", () => {
     expect(test.result.current.tabs?.activeBoardId).toBe("board-b");
   });
 
+  describe("reload of the open board", () => {
+    const tick = async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    };
+
+    it("does not cancel a switch to another board that is still draining its writes", async () => {
+      // Вкладка C нажата, пока в очереди доски B автосейв; он падает с
+      // stale_revision, и обёртка шлёт перезагрузку текущей доски.
+      let releaseDrain!: () => void;
+      const test = harness(async (boardId) => snapshot(boardId));
+      test.drainPendingWrites.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseDrain = resolve;
+          }),
+      );
+
+      await act(async () => {
+        const toC = test.result.current.navigateTo("board-c", { tabMode: "open" });
+        await tick();
+        const reload = test.result.current.navigateTo("home", { reload: true });
+        await tick();
+        releaseDrain();
+        await Promise.all([toC, reload]);
+      });
+
+      expect(test.loadBoardSnapshot.mock.calls.map(([id]) => id)).toEqual(["board-c"]);
+      expect(test.onSnapshotLoaded).toHaveBeenCalledTimes(1);
+      expect(test.result.current.tabs?.activeBoardId).toBe("board-c");
+    });
+
+    it("does not cancel a switch that is already loading its snapshot (the change_seq poll case)", async () => {
+      const releases: Array<() => void> = [];
+      const test = harness(
+        (boardId) =>
+          new Promise<BoardSnapshot>((resolve) => {
+            releases.push(() => resolve(snapshot(boardId)));
+          }),
+      );
+
+      await act(async () => {
+        const toC = test.result.current.navigateTo("board-c", { tabMode: "open" });
+        await tick();
+        // Опрос change_seq ещё видит открытой «home» и перезагружает её.
+        await test.result.current.navigateTo("home", { reload: true });
+        releases[0]();
+        await toC;
+      });
+
+      expect(test.loadBoardSnapshot).toHaveBeenCalledTimes(1);
+      expect(test.result.current.tabs?.activeBoardId).toBe("board-c");
+    });
+
+    it("still supersedes an older reload of the same board", async () => {
+      const releases: Array<() => void> = [];
+      const loaded: string[] = [];
+      const test = harness(
+        (boardId) =>
+          new Promise<BoardSnapshot>((resolve) => {
+            const n = releases.length;
+            releases.push(() => resolve(snapshot(boardId, `${boardId}-${n}`)));
+          }),
+      );
+      test.onSnapshotLoaded.mockImplementation((s: BoardSnapshot) => loaded.push(s.board.title));
+
+      await act(async () => {
+        const first = test.result.current.navigateTo("home", { reload: true });
+        await tick();
+        const second = test.result.current.navigateTo("home", { reload: true });
+        await tick();
+        releases[1]();
+        releases[0]();
+        await Promise.all([first, second]);
+      });
+
+      expect(loaded).toEqual(["home-1"]);
+    });
+  });
+
   it("ignores a slow load that a newer navigation superseded", async () => {
     // The real race: the slow load has already been requested when the user
     // navigates again, and it comes back last.

@@ -23,7 +23,7 @@ import type {
   NoteCardDto,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 
 /**
@@ -46,7 +46,7 @@ export interface CardCreationDeps {
   gateway: WorkspaceGateway;
   dispatcher: CommandDispatcher;
   idGenerator: IdGenerator;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   /** Applies every local card change to the refs and the store together. */
   cardWrites: CardWrites;
 }

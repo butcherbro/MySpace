@@ -72,7 +72,6 @@ export type CurrentBoardAction =
   | { type: "portalMoved"; id: string; revision: number; boardRevision: number; frame: CardDto["frame"] }
   | { type: "noteColorChanged"; id: string; colorToken: string }
   | { type: "cardsRemoved"; ids: string[] }
-  | { type: "boardRenamed"; boardId: string; title: string }
   | { type: "selectionChanged"; ids: string[] }
   | { type: "editingStarted"; id: string }
   | { type: "editingStopped" }
@@ -97,6 +96,34 @@ export function applyCardWrite(
 ): CardDto[] {
   return cards.map((c) => (c.id === id && c.revision <= revision ? update(c) : c));
 }
+
+/**
+ * Actions that change the open board's cards. Only the card ledger
+ * (`CardWrites`) dispatches these, together with `snapshotLoaded`: it keeps
+ * `cardsRef` and the Unsorted ref in step with the store.
+ */
+export type CardChangeAction = Extract<
+  CurrentBoardAction,
+  {
+    type:
+      | "cardAdded"
+      | "cardsRemoved"
+      | "cardContentUpdated"
+      | "imageCaptionUpdated"
+      | "embedDescriptionUpdated"
+      | "cardReplaced"
+      | "cardMoved"
+      | "portalMoved"
+      | "cardMovedToUnsorted"
+      | "unsortedCardPlaced"
+      | "noteColorChanged"
+      | "boardCoverChanged"
+      | "filesystemAliasUpdated";
+  }
+>;
+
+/** What hooks may dispatch directly; card changes go through `CardWrites`. */
+export type BoardViewAction = Exclude<CurrentBoardAction, CardChangeAction | { type: "snapshotLoaded" }>;
 
 export const initialState: CurrentBoardState = {
   board: null,
@@ -378,20 +405,6 @@ export function reducer(
         cards: state.cards.filter((c) => !action.ids.includes(c.id)),
         selection: [],
         editingCardId: null,
-      };
-
-    case "boardRenamed":
-      return {
-        ...state,
-        cards: state.cards.map((c) =>
-          c.kind === "board_portal" && c.target.id === action.boardId
-            ? { ...c, target: { ...c.target, title: action.title } }
-            : c,
-        ),
-        board:
-          state.board?.id === action.boardId
-            ? { ...state.board, title: action.title }
-            : state.board,
       };
 
     case "selectionChanged":

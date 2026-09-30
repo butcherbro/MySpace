@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { EmptyBoardHint } from "./app/EmptyBoardHint";
 import {
@@ -18,6 +18,7 @@ import { useContextActions } from "./app/use-context-actions";
 import { useCardDrop } from "./app/use-card-drop";
 import { useBoardLoading } from "./app/use-board-loading";
 import { useBoardRefresh } from "./app/use-board-refresh";
+import { createStaleRevisionReload } from "./app/stale-revision-reload";
 import { useCreationDrag } from "./app/use-creation-drag";
 import { useTrashController } from "./app/use-trash-controller";
 import { useErrorReports } from "./app/error-reports";
@@ -68,13 +69,21 @@ import {
   initialState,
   reducer,
 } from "./state/current-board-store";
-import { createCardWrites } from "./state/card-writes";
+import { useCardWrites } from "./state/card-writes";
 
 function App() {
-  const gateway: WorkspaceGateway = useMemo(() => createGateway(), []);
+  // A `stale_revision` answer to any write re-reads the open board once, so a
+  // card whose local copy diverged from the database does not stay diverged.
+  // The reload is registered below, once navigation exists.
+  const [staleRevisionReload] = useState(() => createStaleRevisionReload(createGateway()));
+  const gateway: WorkspaceGateway = staleRevisionReload.gateway;
   const idGenerator: IdGenerator = useMemo(() => new UuidV7Generator(), []);
 
   const [state, dispatch] = useReducer(reducer, initialState);
+  // The one way to change the open board's cards or apply its snapshot. The
+  // ledger alone writes `cardsRef` (notes AND portals) and the Unsorted ref,
+  // so queued tasks always read the current revision.
+  const { cardsRef, cardWrites } = useCardWrites(dispatch);
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
   const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
@@ -115,17 +124,8 @@ function App() {
   const dispatcher = useMemo(() => new CommandDispatcher(gateway), [gateway]);
 
   // Contextual note rail: the active note's editor command surface + bold state.
-  const noteFormatting = useNoteFormatting({ activeNote, dispatcher, idGenerator, dispatch });
+  const noteFormatting = useNoteFormatting({ activeNote, dispatcher, idGenerator, dispatch, cardWrites });
 
-  // Always reflects the latest cards (notes AND portals) so queued tasks read the current revision.
-  const cardsRef = useLatestRef(state.cards);
-  const unsortedCardsRef = useLatestRef(state.unsortedCards);
-  // The one way to change the open board's cards or apply its snapshot: the
-  // refs and the store move together.
-  const cardWrites = useMemo(
-    () => createCardWrites(cardsRef, unsortedCardsRef, dispatch),
-    [cardsRef, unsortedCardsRef, dispatch],
-  );
 
   // Last known pointer position over the canvas, in board-space (flow
   // coordinates); drives paste placement (todo.md №15). See
@@ -425,6 +425,9 @@ function App() {
     loadQuickBoards,
     reloadBoardRef,
   });
+  useEffect(() => {
+    staleRevisionReload.setReload(reloadCurrentBoard);
+  }, [staleRevisionReload, reloadCurrentBoard]);
 
 
   const handleBackToCreate = useCallback(() => {
@@ -439,6 +442,7 @@ function App() {
     gateway,
     idGenerator,
     dispatch,
+    cardWrites,
     setQuickBoards,
   });
 

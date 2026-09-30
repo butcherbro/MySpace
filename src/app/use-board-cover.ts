@@ -3,7 +3,8 @@ import { errorMessage } from "../services/error-message";
 import type { IdGenerator } from "../services/id-generator";
 import { pickImageFile } from "../services/asset-picker";
 import type { BoardPortalDto, CardDto, QuickBoardDto, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 
 /**
  * Board cover actions: set from clipboard, choose a file, or remove. Each
@@ -19,7 +20,9 @@ export interface BoardCoverOptions {
   cards: CardDto[];
   gateway: WorkspaceGateway;
   idGenerator: IdGenerator;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
+  /** Applies every local card change to the refs and the store together. */
+  cardWrites: CardWrites;
   setQuickBoards: Dispatch<SetStateAction<QuickBoardDto[]>>;
 }
 
@@ -30,7 +33,7 @@ export interface BoardCoverController {
 }
 
 export function useBoardCover(options: BoardCoverOptions): BoardCoverController {
-  const { contextMenu, cards, gateway, idGenerator, dispatch, setQuickBoards } = options;
+  const { contextMenu, cards, gateway, idGenerator, dispatch, cardWrites, setQuickBoards } = options;
 
   const handleSetCoverFromClipboard = useCallback(async () => {
     if (!contextMenu) return;
@@ -41,7 +44,7 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
     try {
       const asset = await gateway.importClipboardImage();
       await gateway.setBoardCover({ boardId: portal.target.id, assetId: asset.id });
-      dispatch({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: asset });
+      cardWrites.apply({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: asset });
       setQuickBoards((boards) =>
         boards.map((quickBoard) =>
           quickBoard.boardId === portal.target.id
@@ -54,7 +57,7 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
     }
     // dispatch и setQuickBoards стабильны (useReducer/useState), но вне App
     // линтер этого не видит — указываем явно.
-  }, [contextMenu, cards, gateway, dispatch, setQuickBoards]);
+  }, [contextMenu, cards, gateway, dispatch, cardWrites, setQuickBoards]);
 
   const handleChooseCover = useCallback(async () => {
     if (!contextMenu) return;
@@ -74,7 +77,7 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
       await gateway.setBoardCover({ boardId: portal.target.id, assetId: asset.id });
       // Не cardReplaced с копией портала из замыкания: за секунды выбора файла
       // портал мог уйти на новую ревизию, и устаревшая копия была бы отброшена.
-      dispatch({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: asset });
+      cardWrites.apply({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: asset });
       setQuickBoards((boards) =>
         boards.map((quickBoard) =>
           quickBoard.boardId === portal.target.id
@@ -85,7 +88,7 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
-  }, [contextMenu, cards, gateway, idGenerator, dispatch, setQuickBoards]);
+  }, [contextMenu, cards, gateway, idGenerator, dispatch, cardWrites, setQuickBoards]);
 
   const handleRemoveCover = useCallback(async () => {
     if (!contextMenu) return;
@@ -95,7 +98,7 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
     if (!portal) return;
     try {
       await gateway.removeBoardCover(portal.target.id);
-      dispatch({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: null });
+      cardWrites.apply({ type: "boardCoverChanged", boardId: portal.target.id, coverAsset: null });
       setQuickBoards((boards) =>
         boards.map((quickBoard) =>
           quickBoard.boardId === portal.target.id
@@ -106,7 +109,7 @@ export function useBoardCover(options: BoardCoverOptions): BoardCoverController 
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
     }
-  }, [contextMenu, cards, gateway, dispatch, setQuickBoards]);
+  }, [contextMenu, cards, gateway, dispatch, cardWrites, setQuickBoards]);
 
   return { handleSetCoverFromClipboard, handleChooseCover, handleRemoveCover };
 }

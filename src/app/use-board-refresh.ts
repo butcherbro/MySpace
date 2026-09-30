@@ -3,7 +3,7 @@ import { errorMessage } from "../services/error-message";
 import type { CommandDispatcher } from "../commands/command-dispatcher";
 import type { BoardNavigation } from "../navigation/use-board-navigation";
 import type { BoardSummary, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import { shouldReload, type ChangeSample } from "../state/external-change-detector";
 import { useSyncAppliedReload } from "../sync/use-sync-state";
 
@@ -20,7 +20,7 @@ export interface BoardRefreshDeps {
   gateway: WorkspaceGateway;
   board: BoardSummary | null;
   dispatcher: CommandDispatcher;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   navigateTo: BoardNavigation["navigateTo"];
   refreshTrash: () => Promise<void>;
   loadQuickBoards: () => void;
@@ -33,7 +33,7 @@ export function useBoardRefresh(deps: BoardRefreshDeps) {
   // Reload the current board (no history push). Used to reconcile UI with the
   // database after undo/redo.
   const reloadCurrentBoard = useCallback(async () => {
-    if (board) await navigateTo(board.id);
+    if (board) await navigateTo(board.id, { reload: true });
   }, [board, navigateTo]);
 
   useEffect(() => {
@@ -74,7 +74,7 @@ export function useBoardRefresh(deps: BoardRefreshDeps) {
           const next: ChangeSample = { boardId: openBoardId, ...v };
           const decision = shouldReload(changeSampleRef.current, next);
           changeSampleRef.current = next;
-          if (decision.reloadBoard) void navigateTo(openBoardId);
+          if (decision.reloadBoard) void navigateTo(openBoardId, { reload: true });
           if (decision.refreshTrash) void refreshTrash();
         },
         () => {
@@ -98,7 +98,7 @@ export function useBoardRefresh(deps: BoardRefreshDeps) {
   useSyncAppliedReload(
     gateway,
     openBoardId,
-    (boardId) => void navigateTo(boardId),
+    (boardId) => void navigateTo(boardId, { reload: true }),
     () => {
       // Quick boards and the trash badge are not part of the board load.
       void refreshTrash();

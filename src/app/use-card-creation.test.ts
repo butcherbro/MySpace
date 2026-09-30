@@ -19,7 +19,7 @@ import type {
   WorkspaceGateway,
 } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
-import { createCardWrites } from "../state/card-writes";
+import { loadedCardWrites } from "../state/card-writes-fixture";
 import { useCardCreation, type CardCreationDeps } from "./use-card-creation";
 
 const mocks = vi.hoisted(() => ({
@@ -163,7 +163,7 @@ function harness(
     dispatcher,
     idGenerator,
     dispatch,
-    cardWrites: createCardWrites(cardsRef, { current: [] }, dispatch),
+    cardWrites: loadedCardWrites(cardsRef, dispatch, currentBoard?.id),
   };
 
   const { result } = renderHook(() => useCardCreation(deps));

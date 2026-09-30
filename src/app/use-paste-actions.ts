@@ -15,7 +15,7 @@ import type {
   PathClassificationDto,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 import { buildPasteSpecs, readCardClipboard, type CopiedCard } from "./card-clipboard";
 
@@ -32,7 +32,7 @@ export interface PasteActionsOptions {
   board: BoardSummary | null;
   notes: NoteCardDto[];
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   /** Applies every local card change to the refs and the store together. */
   cardWrites: CardWrites;
   dispatcher: CommandDispatcher;

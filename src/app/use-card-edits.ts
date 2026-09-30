@@ -14,7 +14,7 @@ import type { IdGenerator } from "../services/id-generator";
 import type { ResizeOptions } from "../cards/resize-options";
 import { errorMessage } from "../services/error-message";
 import type { CardDto, EmbedCardDto, ImageCardDto, NoteCardDto, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 import type { MutationQueue } from "../persistence/entity-write-queue";
 
@@ -33,7 +33,7 @@ import type { MutationQueue } from "../persistence/entity-write-queue";
 
 export interface CardEditsOptions {
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   /** Applies every write answer to `cardsRef` and the store together. */
   cardWrites: CardWrites;
   queueRef: RefObject<MutationQueue>;

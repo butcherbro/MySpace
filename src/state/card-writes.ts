@@ -1,30 +1,16 @@
-import type { Dispatch, RefObject } from "react";
+import { useState, type Dispatch, type RefObject } from "react";
 import type { BoardSummary, CardDto } from "../services/workspace-gateway";
 import {
   initialState,
   reducer,
+  type CardChangeAction,
   type CurrentBoardAction,
   type CurrentBoardState,
   type SnapshotRequestChanges,
 } from "./current-board-store";
 
 /** Store actions that change the open board's cards locally. */
-export type CardWriteAction = Extract<
-  CurrentBoardAction,
-  {
-    type:
-      | "cardAdded"
-      | "cardsRemoved"
-      | "cardContentUpdated"
-      | "imageCaptionUpdated"
-      | "embedDescriptionUpdated"
-      | "cardReplaced"
-      | "cardMoved"
-      | "portalMoved"
-      | "cardMovedToUnsorted"
-      | "unsortedCardPlaced";
-  }
->;
+export type CardWriteAction = CardChangeAction;
 
 /** A loaded board snapshot, before the local changes are merged in. */
 export type LoadedSnapshot = Omit<
@@ -85,6 +71,8 @@ export function createCardWrites(
 
   return {
     apply(action) {
+      // Ответ создания пришёл, когда уже открыта другая доска: карточка не отсюда.
+      if (action.type === "cardAdded" && action.card.boardId !== board?.id) return;
       const before = { cards: cardsRef.current, unsortedCards: unsortedCardsRef.current };
       const next = run(action);
       const at = ++seq;
@@ -93,7 +81,7 @@ export function createCardWrites(
         addedAt.set(action.card.id, at);
       } else if (action.type === "cardsRemoved") {
         for (const id of action.ids) lastChange.set(id, { at, kind: "remove" });
-      } else if (held(before, action.id) !== held(next, action.id)) {
+      } else if ("id" in action && held(before, action.id) !== held(next, action.id)) {
         // Штампуем только ответ, который действительно изменил карточку:
         // отброшенный как устаревший не даёт своей копии права на снимок.
         lastChange.set(action.id, { at, kind: "write" });
@@ -119,4 +107,17 @@ export function createCardWrites(
       dispatch(action);
     },
   };
+}
+
+/** The open board's card refs and the ledger that alone writes them. */
+export function useCardWrites(dispatch: Dispatch<CurrentBoardAction>) {
+  // Не зеркало state через эффект: отложенный эффект старого коммита вернул бы
+  // ref назад, поверх ответа, уже применённого ledger-ом.
+  // dispatch из useReducer стабилен, поэтому ledger создаётся один раз.
+  const [owned] = useState(() => {
+    const cardsRef: RefObject<CardDto[]> = { current: [] };
+    const unsortedCardsRef: RefObject<CardDto[]> = { current: [] };
+    return { cardsRef, unsortedCardsRef, cardWrites: createCardWrites(cardsRef, unsortedCardsRef, dispatch) };
+  });
+  return owned;
 }

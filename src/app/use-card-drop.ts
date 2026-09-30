@@ -9,7 +9,7 @@ import type { useCrossBoardDragSession } from "../canvas/use-cross-board-drag";
 import type { CanvasCard } from "../canvas/canvas-types";
 import type { MutationQueue } from "../persistence/entity-write-queue";
 import type { BoardPortalDto, BoardSummary, CardDto, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 import type { useBoardNavigation } from "../navigation/use-board-navigation";
 
@@ -29,7 +29,7 @@ export interface CardDropDeps {
   gateway: WorkspaceGateway;
   dispatcher: CommandDispatcher;
   idGenerator: IdGenerator;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   /** Applies every write answer to `cardsRef` and the store together. */
   cardWrites: CardWrites;
   queueRef: RefObject<MutationQueue>;

@@ -5,7 +5,7 @@ import { flushAllDrafts } from "../editor/draft-flush-registry";
 import { useBoardNavigation, type BoardNavigation } from "../navigation/use-board-navigation";
 import type { MutationQueue } from "../persistence/entity-write-queue";
 import type { BoardSnapshot, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 import type { useViewportController } from "../state/use-viewport-controller";
 
@@ -20,7 +20,7 @@ import type { useViewportController } from "../state/use-viewport-controller";
 
 export interface BoardLoadingDeps {
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   /** Tells a same-board reload which cards were written after it was requested. */
   cardWrites: CardWrites;
   queueRef: RefObject<MutationQueue>;
