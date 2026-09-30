@@ -7,6 +7,7 @@ import { useDocumentDraft } from "../../editor/use-document-draft";
 import type { NoteEditorCommands } from "../../editor/editor-commands";
 import type { TextColorId } from "../../editor/text-color";
 import type { NoteCardDto } from "../../services/workspace-gateway";
+import type { ResizeOptions } from "../resize-options";
 import "./note-card.css";
 
 interface NoteCardProps {
@@ -21,8 +22,8 @@ interface NoteCardProps {
   onFinalize?: DocumentSave;
   /** Request a context menu (right-click) for this card. */
   onContextMenu: (cardId: string, x: number, y: number) => void;
-  /** Persist a manual resize (width/height in CSS px). */
-  onResize: (id: string, width: number, height: number) => void;
+  /** Persist a manual resize (width/height in CSS px), or an auto-grow (`auto`). */
+  onResize: (id: string, width: number, height: number, options?: ResizeOptions) => void;
   /** Transient search phrase to highlight (UI-only; never persisted). */
   highlightQuery?: string;
   /** Called with the editing command surface (or null when leaving edit mode). */
@@ -123,7 +124,7 @@ export const NoteCard = memo(function NoteCard({
       growTimer.current = null;
     }
     if (growPendingRef.current !== null) {
-      onResize(note.id, appliedWidth, growPendingRef.current);
+      onResize(note.id, appliedWidth, growPendingRef.current, { auto: true });
       growPendingRef.current = null;
     }
   }
@@ -147,7 +148,7 @@ export const NoteCard = memo(function NoteCard({
     // буква могла бы триггерить отдельную запись revision в БД.
     growTimer.current = setTimeout(() => {
       growTimer.current = null;
-      onResize(note.id, appliedWidth, needed);
+      onResize(note.id, appliedWidth, needed, { auto: true });
       growPendingRef.current = null;
     }, 250);
     // eslint-disable-next-line react-hooks/exhaustive-deps

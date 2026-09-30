@@ -123,7 +123,7 @@ describe("EmbedCard metadata states", () => {
       />,
     );
 
-    expect(onResize).toHaveBeenCalledWith("embed-1", 320, 418);
+    expect(onResize).toHaveBeenCalledWith("embed-1", 320, 418, { auto: true });
     scrollHeight.mockRestore();
   });
 

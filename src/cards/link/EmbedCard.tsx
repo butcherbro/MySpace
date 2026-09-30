@@ -6,6 +6,7 @@ import { StaticDocument } from "../../editor/StaticDocument";
 import { DamagedDocument } from "../../editor/DamagedDocument";
 import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
+import type { ResizeOptions } from "../resize-options";
 import { openExternalUrl } from "../../services/url-opener";
 import "./link-card.css";
 import { assetUrl } from "../../services/asset-url";
@@ -14,8 +15,10 @@ interface EmbedCardProps {
   embed: EmbedCardDto;
   /** Persist the description body as an authoritative document. Rejects on failure. */
   onUpdate: DocumentSave;
-  /** Persist a manual resize. */
-  onResize: (id: string, width: number, height: number) => void;
+  /** Finalize a description edit (blur); falls back to `onUpdate` when absent. */
+  onFinalize?: DocumentSave;
+  /** Persist a manual resize, or an automatic fit to the enriched content (`auto`). */
+  onResize: (id: string, width: number, height: number, options?: ResizeOptions) => void;
   /** Request a context menu (right-click). */
   onContextMenu: (cardId: string, x: number, y: number) => void;
   /** Retry a failed metadata fetch without changing the source URL. */
@@ -33,6 +36,7 @@ interface EmbedCardProps {
 export const EmbedCard = memo(function EmbedCard({
   embed,
   onUpdate,
+  onFinalize,
   onResize,
   onContextMenu,
   onRetryMetadata,
@@ -46,11 +50,12 @@ export const EmbedCard = memo(function EmbedCard({
 
   // P1.7: a corrupt description shows its recovered text and never
   // autosaves until the user starts a repair (see editor/corrupt-document.ts).
-  const repair = useCorruptRepair({ corrupt: embed.corrupt === true, onUpdate });
+  const repair = useCorruptRepair({ corrupt: embed.corrupt === true, onUpdate, onFinalize });
   const { draft, saving, error, handleChange, handleBlur, replaceDraft } = useDocumentDraft({
     id: embed.id,
     persistedDocument: embed.descriptionJson,
     onUpdate: repair.onUpdate,
+    onFinalize: repair.onFinalize,
     onSaved: () => setEditing(false),
     corrupt: repair.damaged,
   });
@@ -84,7 +89,7 @@ export const EmbedCard = memo(function EmbedCard({
     const requestKey = `${embed.revision}:${embed.frame.width}:${measuredHeight}`;
     if (lastAutoSizeRequest.current === requestKey) return;
     lastAutoSizeRequest.current = requestKey;
-    onResize(embed.id, embed.frame.width, measuredHeight);
+    onResize(embed.id, embed.frame.width, measuredHeight, { auto: true });
   }, [embed.frame.height, embed.frame.width, embed.id, embed.metadataStatus, embed.revision, onResize]);
 
   useLayoutEffect(() => {
