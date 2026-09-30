@@ -720,12 +720,20 @@ M3 Max, release-сборка, код `main` (f443eb4). В норме: снапш
       существующим ассетом (`src-tauri/src/sync/image.rs:546–565`); UNIQUE на
       `assets.file_path` нет. Бэкап от этого больше не теряет данные, но сам
       ряд стоит отклонять.
-- [ ] **Release workflow, шаг «Verify latest.json»**: `gh api -H "Accept:
-      application/octet-stream" …/releases/assets/<id>` в CI трижды подряд
-      вернул `BlobNotFound` (404) на релизе 0.2.3, хотя та же команда локально
-      отдаёт файл. 0.2.3 опубликован вручную после тех же проверок. Выяснить
-      причину (токен `RELEASES_TOKEN`, версия `gh` на раннере) или заменить
-      шаг на `gh release download`.
+- [x] **Release 0.2.3, джоба `publish` не стартовала** (раньше записано как
+      `BlobNotFound` на шаге «Verify latest.json»). Причина: GitHub заблокировал
+      запуск джоб аккаунта (аннотация: «The job was not started because recent
+      account payments have failed or your spending limit needs to be
+      increased»). Джобы длились 2-3 с и имели 0 шагов; `BlobNotFound` это ответ
+      API на запрос логов у джобы без логов, а не ошибка шага. Сам шаг
+      «Verify latest.json» рабочий, менять его не нужно. Лечение: биллинг, затем
+      «Re-run failed jobs» (сборки переиспользуются).
+- [ ] Объяснить и задокументировать экономику GitHub Actions для приватного
+      репо: 2000 минут в месяц, множители macOS ×10 и Windows ×2 (Linux ×1).
+      В сентябре ушло около 2170 минут, из них `gates` на macOS около 920
+      (27 запусков). В `ci.yml` уже убраны дубли (push в main, PR Dependabot,
+      правки одних доков); осталось записать бюджет и как его смотреть
+      (Settings -> Billing -> Usage).
 - [ ] `list_backups` запускает `integrity_check` на каждом снапшоте: около
       10 × 0,4 с на базе 214 MiB при открытии диалога «Backups…».
 - [ ] Prune бэкапов: 0,9 с на снапшот при 20 000 файлов × 10 снапшотов.

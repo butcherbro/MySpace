@@ -3,10 +3,15 @@ name: CI
 # Non-deploying gate: this workflow only proves the tree is green. It never
 # signs, packages, publishes or touches a secret, so it is safe to run on every
 # pull request and on every push to main.
+# Правки одних доков не меняют код, поэтому не тратят платные минуты раннеров.
+# Это безопасно, пока у `main` нет required status checks (на приватном репо
+# без платного плана их нет): иначе PR с одними доками ждал бы их вечно.
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "tasks/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "tasks/**"]
 
 permissions:
   contents: read
@@ -27,6 +32,12 @@ jobs:
   gates:
     # macOS is required, not preferred: folder bookmarks and asset paths are
     # built on macOS-only APIs, so their tests cannot run on a Linux runner.
+    # Только на pull_request: в main коммит попадает через PR, где эти гейты уже
+    # прошли, а минута macOS стоит x10 от лимита приватного репо. На push в main
+    # остаются linux-cargo и security-audit. PR Dependabot пропускаем из-за
+    # цены: их бывает по десять за раз, а macOS-гейты по ним гоняются локально
+    # перед слиянием (CLAUDE.md), на сервере остаются linux-cargo и audit.
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -131,6 +142,8 @@ jobs:
     # frontend correctness stays with the macOS `gates` job, which remains the
     # required one. No `tauri build` here: packaging is too slow for CI, and
     # `cargo test` already compiles and links the app.
+    # Dependabot пропускаем: минута Windows стоит x2 от лимита приватного репо.
+    if: github.actor != 'dependabot[bot]'
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
