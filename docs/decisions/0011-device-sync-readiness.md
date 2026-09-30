@@ -211,3 +211,63 @@ pill), README "Sync (LAN)".
   external-change poll; `sync-state` `{peers: [{deviceId, name, online,
   discovered, lastSyncAt, lastError, lastAddress}], discovering,
   discoveryError, syncing, port, addresses}`.
+
+## Amendment 2026-09-30: journal compaction (accepted, not yet implemented)
+
+**Problem (measured, release build, M3 Max).** Every journaled write stores a
+full entity image, about 1.6 KiB on disk per change. 100 000 changes are
+about 160 MB (75 % of the database), a fresh device replays them in about
+50 s, and the journal never shrinks.
+
+**Decision: dominance compaction, independent of peers.** Merging is
+last-writer-wins per register and a missing entity is created from a full
+image, so a row that another row of the same entity supersedes on every
+register is never needed for convergence — not by a device that never synced,
+one that was offline for months, or one reached through forwarding. No
+per-peer state, no snapshot format, no wire change, no migration.
+
+Rules, applied per entity on the writer thread in bounded chunks:
+
+- **R1.** Delete row R if another row R' of the same entity has
+  `clocks[r] >= R.clocks[r]` for every register.
+- **R2.** Never delete: purge rows; the newest row of each origin (the HLC
+  high-water mark); for notes, the row whose HLC equals the current body
+  clock in `entity_clocks`; for notes, a body-setting row whose `prev.body`
+  came from another device, together with that prev row, while its wall age
+  is under **G = 90 days**. R2 exists for the conflict-copy detector
+  (`conflict_copy_plan`), which judges "sequential or concurrent" from the
+  row that set the body and its one-hop `prev`.
+- **R3.** For a purged entity, delete every row except its purge row, so the
+  text of a purged note is not shipped to new devices. `purged` tombstones
+  and `entity_clocks` are kept forever in this version.
+- **R4.** Compaction is a local-only `Mutation` (`CompactJournal`). It runs
+  at startup maintenance and after a sync pass that received rows, with a
+  watermark in `local_meta`. The first compaction of an existing database is
+  preceded by a backup snapshot. After a compaction that frees more than
+  25 % of the file, `VACUUM` runs once at the next startup.
+
+**Consequences accepted.**
+
+- A device that returns after more than G may show extra "Conflict copy"
+  notes; no text is lost.
+- Fewer conflict copies than before: intermediate rows of a concurrent run
+  no longer each produce their own copy.
+- Delivery is no longer a plain prefix of the journal. Replay must therefore
+  skip a row whose HLC is not above the cursor of its origin (dedupe can no
+  longer rely on the row being present), and must retry parked rows to a
+  fixpoint instead of a fixed number of passes, because retained rows lose
+  creation order.
+
+**Rejected.** Dropping superseded rows at write time (breaks conflict
+lineage and puts a DELETE on the write path); dropping only what every known
+peer has passed (no per-peer state exists, one offline peer blocks it
+forever, and a new peer still needs a bootstrap); a separate snapshot format
+(the dominance set already is the snapshot).
+
+**Required tests.** Property test: three replicas with random operations,
+exchange order, batch sizes and compaction points converge to the same state
+as the uncompacted run, modulo conflict copies. A replica bootstrapped from a
+compacted journal equals one built from the full journal. Lineage cases: two
+or more autosaves then sync back give zero copies; a concurrent edit whose
+head row is a move still gives exactly one copy. Compaction is idempotent;
+no resurrection after purge; boards nested deeper than the old retry cap.
