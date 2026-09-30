@@ -50,5 +50,6 @@ test-results/
 playwright-report/
 
 # Agent/process handoff artifacts (transient, not product)
+.claude/worktrees/
 .continue-here.md
 docs/review-brief*.md
