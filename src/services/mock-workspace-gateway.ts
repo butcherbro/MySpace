@@ -24,6 +24,8 @@ import type {
   EmbedCardDto,
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
+  ErrorReportInput,
+  ErrorReportSaved,
   DropPathClassificationDto,
   PathClassificationDto,
   FileCardDto,
@@ -98,6 +100,12 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   private dataVersion = 0;
 
+  /** The `?fixture=load-failure` fixture fails only the first Home load. */
+  private loadFailureFixtureUsed = false;
+
+  /** Error reports "saved" by `recordErrorReport`, oldest first. */
+  errorReports: ErrorReportInput[] = [];
+
   /** Seeded once by the `?fixture=corrupt-note` fixture (P1.7). */
   private corruptFixtureSeeded = false;
 
@@ -162,6 +170,12 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot> {
+    // Test-only load-failure fixture: the first Home load fails, so the
+    // canvas error banner (and its error report) can be driven from e2e.
+    if (boardId === "home" && !this.loadFailureFixtureUsed && fixtureParam() === "load-failure") {
+      this.loadFailureFixtureUsed = true;
+      return Promise.reject(new Error("mock: the Home board could not be loaded"));
+    }
     // Test-only folder-shortcut fixture: a single alias, no other cards.
     if (
       boardId === "home" &&
@@ -897,9 +911,6 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       (candidate): candidate is EmbedCardDto => candidate.kind === "embed" && candidate.id === input.id,
     );
     if (!card) return Promise.reject(new Error(`embed not found: ${input.id}`));
-    if (card.revision !== input.expectedRevision) {
-      return Promise.reject(new Error(`stale revision for ${input.id}`));
-    }
 
     const host = new URL(card.sourceUrl).hostname.replace(/^www\./, "");
     card.revision += 1;
@@ -1501,6 +1512,20 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     // chosen) and resolves — callers should not rely on this ever settling.
     console.log(`mock: restore requested from backup "${dirName}"`);
     return Promise.resolve() as unknown as Promise<never>;
+  }
+
+  recordErrorReport(input: ErrorReportInput): Promise<ErrorReportSaved> {
+    this.errorReports.push({ ...input });
+    const path = `/mock/error-reports/report-${this.errorReports.length}.json`;
+    const text = [
+      "MySpace error report (mock)",
+      `App version: ${input.frontendVersion}`,
+      `Source: ${input.source ?? "unknown"}`,
+      `Message: ${input.message}`,
+      `User agent: ${input.userAgent}`,
+      `Saved to: ${path}`,
+    ].join("\n");
+    return Promise.resolve({ path, text });
   }
 
   // ---- device sync (ADR-0011 S3) ----------------------------------------

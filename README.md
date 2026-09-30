@@ -93,6 +93,17 @@ folder in and open it, open/reveal a File Card, "Copy File Path" and "Copy
 Image" then paste into Explorer/a chat app, paste `C:\…` and a quoted
 path onto the canvas, check that images and `.md`/`.html` previews load.
 
+### Error reports
+
+App data lives in `~/Library/Application Support/com.bro.myspace` (macOS)
+and `%APPDATA%\com.bro.myspace` (Windows); logs are under `logs/`. Whenever
+the app shows an error, it saves a report to `error-reports/` there: a JSON
+file with the message, where it happened, the app version, OS/arch and the
+last 40 log lines (without the routine polling lines). The newest 200 are
+kept. Reports are local files, never synced. The error banner's
+**Copy report** button copies the same report as text, so it can be pasted
+into a chat when the files are out of reach (on Windows the banner says so).
+
 ## Sync (LAN)
 
 Two computers on the same network (the Mac and the Windows PC on one Wi-Fi)

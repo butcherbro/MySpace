@@ -228,6 +228,7 @@ pub fn run() {
             commands::startup::get_startup_failure,
             commands::backup::list_backups,
             commands::backup::request_restore,
+            commands::error_reports::record_error_report,
             commands::boards::load_board_snapshot,
             commands::boards::get_home_board,
             commands::boards::save_viewport,

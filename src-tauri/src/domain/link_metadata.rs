@@ -8,7 +8,7 @@
 //!    preview/favicon images as files. Produces an [`EmbedEnrichmentPlan`].
 //! 2. `Mutation::ApplyEmbedMetadata(Box::new(plan))` — on the writer thread, no network:
 //!    [`commit_embed_enrichment`] records the asset and favicon-cache rows and
-//!    applies the revision-guarded card update.
+//!    applies the card update, unless the card's URL changed meanwhile.
 //!
 //! [`enrich_embed`] (async, Tauri) and [`enrich_embed_blocking`] (MCP, tests)
 //! compose the two halves through a [`Workspace`].
@@ -29,7 +29,6 @@ use crate::domain::asset_service::{self, StagedAsset};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{ApplyEmbedMetadataInput, EmbedCardDto};
 use crate::domain::mutation::Mutation;
-use crate::domain::plain_text::plain_text_to_document as plain_text_document;
 use crate::repositories::workspace_repository;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -424,21 +423,19 @@ pub fn plan_embed_enrichment(
     asset_dir: &Path,
     fetcher: &dyn MetadataFetcher,
     id: &str,
-    expected_revision: i64,
 ) -> Result<EmbedEnrichmentPlan, WorkspaceError> {
-    let embed = workspace_repository::load_embed_for_metadata(conn, id, expected_revision)?;
+    let embed = workspace_repository::load_embed_for_metadata(conn, id)?;
     let source_url = embed.source_url.clone();
 
     let mut plan = EmbedEnrichmentPlan {
         update: ApplyEmbedMetadataInput {
             id: id.to_string(),
-            expected_revision,
+            source_url: source_url.clone(),
             display_url: embed.display_url.clone(),
             site_name: None,
             title: embed.title.clone(),
             provider: None,
-            description_json: plain_text_document(&embed.description_plain_text),
-            description_origin: embed.description_origin.clone(),
+            site_description: None,
             preview_asset_id: None,
             favicon_asset_id: None,
             metadata_status: "failed".to_string(),
@@ -485,34 +482,14 @@ pub fn plan_embed_enrichment(
         }
     };
 
-    // A user-authored description is authoritative and never overwritten by
-    // site metadata. Fall back to the site description only when empty.
-    let user_description = embed.description_plain_text.trim();
-    let is_user_origin = embed.description_origin.as_deref() == Some("user");
-    let (description, description_origin) = if !user_description.is_empty() && is_user_origin {
-        (user_description.to_string(), Some("user".to_string()))
-    } else if user_description.is_empty() {
-        let site = metadata.description.unwrap_or_default();
-        let origin = if site.is_empty() {
-            None
-        } else {
-            Some("site".to_string())
-        };
-        (site, origin)
-    } else {
-        // Non-empty but not user-marked (legacy rows): keep it, mark as user.
-        (user_description.to_string(), Some("user".to_string()))
-    };
-
     plan.update = ApplyEmbedMetadataInput {
         id: id.to_string(),
-        expected_revision,
+        source_url,
         display_url: display_url(&metadata.final_url).unwrap_or(embed.display_url),
         site_name: metadata.site_name,
         title: metadata.title.unwrap_or(embed.title),
         provider: metadata.provider,
-        description_json: plain_text_document(&description),
-        description_origin,
+        site_description: Some(metadata.description.unwrap_or_default()),
         preview_asset_id,
         favicon_asset_id,
         metadata_status: "ready".to_string(),
@@ -536,7 +513,13 @@ pub fn insert_favicon_cache_entry(
 
 /// Records an enrichment plan on the writer connection in ONE immediate
 /// transaction: asset rows for the staged files, favicon-cache rows, then the
-/// card update with its revision guard. No network I/O.
+/// card update. No network I/O.
+///
+/// The update is not guarded by the revision the plan was read at: a resize
+/// or a description edit during the fetch does not void the metadata. If the
+/// card now holds another URL, the metadata is obsolete: nothing is written,
+/// the staged files are deleted and the current card is returned. A card
+/// trashed meanwhile (or no longer a Link) yields `NotFound`.
 ///
 /// Failure handling follows the writer's retry contract: on a busy database
 /// nothing was written and the staged files stay on disk for the re-run; on
@@ -561,13 +544,19 @@ fn commit_embed_enrichment_rows(
     plan: &EmbedEnrichmentPlan,
 ) -> Result<EmbedCardDto, WorkspaceError> {
     let tx = crate::repositories::immediate_tx(conn)?;
+    let current = workspace_repository::load_embed_for_metadata(&tx, &plan.update.id)?;
+    if current.source_url != plan.update.source_url {
+        drop(tx);
+        plan.discard();
+        return workspace_repository::load_embed_card(conn, &plan.update.id);
+    }
     for staged in &plan.staged_assets {
         asset_service::insert_asset_row(&tx, &staged.asset)?;
     }
     for entry in &plan.favicon_cache_entries {
         insert_favicon_cache_entry(&tx, entry)?;
     }
-    workspace_repository::apply_embed_metadata_in_tx(&tx, &plan.update)?;
+    workspace_repository::apply_embed_metadata_in_tx(&tx, &plan.update, &current)?;
     tx.commit()?;
     workspace_repository::load_embed_card(conn, &plan.update.id)
 }
@@ -578,7 +567,6 @@ pub async fn enrich_embed(
     ws: &Workspace,
     fetcher: Arc<dyn MetadataFetcher + Send + Sync>,
     id: String,
-    expected_revision: i64,
 ) -> Result<EmbedCardDto, WorkspaceError> {
     let reader = ws.clone();
     // TODO(P1.x): the network phase holds one of the READ_POOL_SIZE (2) pooled
@@ -587,9 +575,7 @@ pub async fn enrich_embed(
     // connection checked out.
     let plan = tokio::task::spawn_blocking(move || {
         let asset_dir = reader.paths().assets_dir();
-        reader.read_blocking(|conn| {
-            plan_embed_enrichment(conn, &asset_dir, fetcher.as_ref(), &id, expected_revision)
-        })
+        reader.read_blocking(|conn| plan_embed_enrichment(conn, &asset_dir, fetcher.as_ref(), &id))
     })
     .await
     .map_err(|e| WorkspaceError::Database(format!("metadata task failed: {e}")))??;
@@ -604,12 +590,9 @@ pub fn enrich_embed_blocking(
     ws: &Workspace,
     fetcher: &dyn MetadataFetcher,
     id: &str,
-    expected_revision: i64,
 ) -> Result<EmbedCardDto, WorkspaceError> {
     let asset_dir = ws.paths().assets_dir();
-    let plan = ws.read_blocking(|conn| {
-        plan_embed_enrichment(conn, &asset_dir, fetcher, id, expected_revision)
-    })?;
+    let plan = ws.read_blocking(|conn| plan_embed_enrichment(conn, &asset_dir, fetcher, id))?;
     ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))?
         .into_embed()
 }

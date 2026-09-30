@@ -304,4 +304,15 @@ describe("MockWorkspaceGateway", () => {
     await gateway.restoreTrashBatch(batchId);
     await expect(gateway.readCard("folder-1")).resolves.toMatchObject({ kind: "filesystem_alias" });
   });
+
+  it("keeps error reports in memory and returns a synthetic text", async () => {
+    const gateway = new MockWorkspaceGateway();
+    const input = { message: "boom", source: "canvas", frontendVersion: "0.2.3", userAgent: "UA" };
+
+    const saved = await gateway.recordErrorReport(input);
+
+    expect(gateway.errorReports).toEqual([input]);
+    expect(saved.text).toContain("boom");
+    expect(saved.text).toContain("0.2.3");
+  });
 });

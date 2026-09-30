@@ -203,10 +203,10 @@ describe("TauriWorkspaceGateway", () => {
     });
     const gw = new TauriWorkspaceGateway();
 
-    const result = await gw.enrichEmbedMetadata({ id: "note-1", expectedRevision: 2 });
+    const result = await gw.enrichEmbedMetadata({ id: "note-1" });
 
     expect(invokeMock).toHaveBeenCalledWith("enrich_embed_metadata", {
-      input: { id: "note-1", expectedRevision: 2 },
+      input: { id: "note-1" },
     });
     expect(result.kind).toBe("embed");
     expect(result.title).toBe("Example Domain");
@@ -439,5 +439,15 @@ describe("TauriWorkspaceGateway", () => {
     const gw = new TauriWorkspaceGateway();
     void gw.requestRestore("2026-09-20T12-00-00Z");
     expect(invokeMock).toHaveBeenCalledWith("request_restore", { snapshot: "2026-09-20T12-00-00Z" });
+  });
+
+  it("calls record_error_report with the report", async () => {
+    const saved = { path: "/data/error-reports/r.json", text: "MySpace error report" };
+    invokeMock.mockResolvedValue(saved);
+    const gw = new TauriWorkspaceGateway();
+    const input = { message: "boom", source: "canvas", frontendVersion: "0.2.3", userAgent: "UA" };
+    const result = await gw.recordErrorReport(input);
+    expect(invokeMock).toHaveBeenCalledWith("record_error_report", { report: input });
+    expect(result).toEqual(saved);
   });
 });

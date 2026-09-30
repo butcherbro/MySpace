@@ -38,16 +38,20 @@ export function useEmbedMetadata(options: EmbedMetadataOptions): EmbedMetadataCo
       metadataInFlightRef.current.add(embed.id);
       metadataAttemptedRef.current.add(attemptKey);
       void gateway
-        .enrichEmbedMetadata({ id: embed.id, expectedRevision: embed.revision })
+        .enrichEmbedMetadata({ id: embed.id })
         .then((enriched) => {
-          // Keep the mutation ref authoritative before the enriched card mounts:
-          // Link Card may immediately persist a larger content-driven height.
+          // The backend returns the current row (any write made during the
+          // fetch included), so it replaces the local card as is. Keep the
+          // mutation ref authoritative before the enriched card mounts: Link
+          // Card may immediately persist a larger content-driven height.
           cardsRef.current = cardsRef.current.map((card) =>
             card.id === embed.id ? enriched : card,
           );
           dispatch({ type: "cardReplaced", id: embed.id, card: enriched });
         })
         .catch((cause) => {
+          // Карточку удалили, пока шёл fetch: метаданные просто устарели.
+          if (isNotFound(cause)) return;
           dispatch({ type: "failed", message: errorMessage(cause) });
         })
         .finally(() => {
@@ -79,4 +83,8 @@ export function useEmbedMetadata(options: EmbedMetadataOptions): EmbedMetadataCo
   );
 
   return { requestEmbedMetadata, handleRetryEmbedMetadata };
+}
+
+function isNotFound(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "not_found";
 }

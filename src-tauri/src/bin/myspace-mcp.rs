@@ -399,25 +399,7 @@ fn handle_tool_call(
             let fetcher = ReqwestMetadataFetcher::new().map_err(|e| e.to_string())?;
             let mut results = Vec::new();
             for id in &card_ids {
-                // Resolve the card's current revision first: enrichment is guarded
-                // by an optimistic revision, and agent-created cards may already
-                // have been enriched/edited (revision > 1).
-                let revision = match WorkspaceService::read_card(ws, id) {
-                    Ok(card) => match &card {
-                        myspace_lib::domain::models::CardDto::Note(n) => n.revision,
-                        myspace_lib::domain::models::CardDto::BoardPortal(p) => p.revision,
-                        myspace_lib::domain::models::CardDto::Image(i) => i.revision,
-                        myspace_lib::domain::models::CardDto::Embed(e) => e.revision,
-                        myspace_lib::domain::models::CardDto::FilesystemAlias(a) => a.revision,
-                        myspace_lib::domain::models::CardDto::File(f) => f.revision,
-                        myspace_lib::domain::models::CardDto::BoardShortcut(s) => s.revision,
-                    },
-                    Err(e) => {
-                        results.push(serde_json::json!({ "id": id, "status": "failed", "error": e.to_string() }));
-                        continue;
-                    }
-                };
-                match enrich_embed_blocking(ws, &fetcher, id, revision) {
+                match enrich_embed_blocking(ws, &fetcher, id) {
                     Ok(embed) => results.push(
                         serde_json::json!({ "id": id, "status": "ready", "title": embed.title }),
                     ),

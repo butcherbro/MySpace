@@ -30,6 +30,8 @@ import type {
   EmbedCardDto,
   EmptyTrashResult,
   EnrichEmbedMetadataInput,
+  ErrorReportInput,
+  ErrorReportSaved,
   FileCardDto,
   ImportAssetInput,
   DropPathClassificationDto,
@@ -304,6 +306,10 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   requestRestore(dirName: string): Promise<never> {
     return invoke<never>("request_restore", { snapshot: dirName });
+  }
+
+  recordErrorReport(input: ErrorReportInput): Promise<ErrorReportSaved> {
+    return invoke<ErrorReportSaved>("record_error_report", { report: input });
   }
 
   getSyncState(): Promise<SyncState> {

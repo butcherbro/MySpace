@@ -4,13 +4,15 @@ use std::path::PathBuf;
 use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::db::{bootstrap, open_in_memory};
 use myspace_lib::domain::asset_service;
+use myspace_lib::domain::errors::WorkspaceError;
 use myspace_lib::domain::link_metadata::{
     enrich_embed_blocking, extract_html_metadata, extract_youtube_feed_metadata,
-    plan_embed_enrichment, validate_public_http_url, youtube_channel_feed_url, FetchError,
-    FetchResponse, MetadataFetcher,
+    plan_embed_enrichment, validate_public_http_url, youtube_channel_feed_url, EmbedEnrichmentPlan,
+    FetchError, FetchResponse, MetadataFetcher,
 };
 use myspace_lib::domain::models::{
-    ConvertNoteToEmbedInput, CreateNoteInput, Frame, UpdateEmbedDescriptionInput,
+    ConvertNoteToEmbedInput, CreateNoteInput, Frame, TrashItem, TrashSelectionInput,
+    UpdateCardFrameInput, UpdateEmbedDescriptionInput,
 };
 use myspace_lib::domain::mutation::Mutation;
 
@@ -230,10 +232,10 @@ fn youtube_channel_feed_provides_channel_title_and_preview() {
 #[test]
 fn enrich_embed_with_html_metadata_persists_ready_card_and_assets() {
     let t = TestWorkspace::new("ready");
-    let revision = t.create_pending_embed("link-card", "https://example.com/page");
+    t.create_pending_embed("link-card", "https://example.com/page");
     let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"image-bytes"));
 
-    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card", revision).unwrap();
+    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card").unwrap();
 
     assert_eq!(embed.metadata_status, "ready");
     assert_eq!(embed.title, "Example Title");
@@ -271,10 +273,10 @@ fn enrich_embed_with_html_metadata_persists_ready_card_and_assets() {
 #[test]
 fn enrich_embed_persists_failed_status_without_losing_source() {
     let t = TestWorkspace::new("failed");
-    let revision = t.create_pending_embed("link-card", "https://example.com/page");
+    t.create_pending_embed("link-card", "https://example.com/page");
     let fetcher = StubFetcher::new(Err(FetchError::Network("offline".to_string())), None);
 
-    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card", revision).unwrap();
+    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card").unwrap();
 
     assert_eq!(embed.metadata_status, "failed");
     assert_eq!(embed.source_url, "https://example.com/page");
@@ -287,20 +289,18 @@ fn enrich_embed_persists_failed_status_without_losing_source() {
 #[test]
 fn enrich_reuses_a_cached_favicon_without_fetching_it_again() {
     let t = TestWorkspace::new("favicon-cache");
-    let first_rev = t.create_pending_embed("first", "https://example.com/page");
-    let second_rev = t.create_pending_embed("second", "https://example.com/page");
+    t.create_pending_embed("first", "https://example.com/page");
+    t.create_pending_embed("second", "https://example.com/page");
     let page = br#"<meta property="og:title" content="T"><link rel="icon" href="https://example.com/favicon.png">"#;
 
     let fetcher = StubFetcher::new(html_page(page), png(b"ICON"));
-    let first = enrich_embed_blocking(&t.ws, &fetcher, "first", first_rev).unwrap();
+    let first = enrich_embed_blocking(&t.ws, &fetcher, "first").unwrap();
     assert_eq!(fetcher.image_calls(), 1);
 
     // The second card hits the cache: nothing is fetched or staged.
     let plan =
-        t.ws.read_blocking(|conn| {
-            plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "second", second_rev)
-        })
-        .unwrap();
+        t.ws.read_blocking(|conn| plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "second"))
+            .unwrap();
     assert!(plan.staged_assets.is_empty());
     assert!(plan.favicon_cache_entries.is_empty());
     assert_eq!(fetcher.image_calls(), 1, "a cache hit does not fetch");
@@ -316,28 +316,75 @@ fn enrich_reuses_a_cached_favicon_without_fetching_it_again() {
     assert_eq!(t.count("SELECT COUNT(*) FROM favicon_cache"), 1);
 }
 
+impl TestWorkspace {
+    /// Runs the network half of enrichment for `id` and returns the plan with
+    /// the paths of its staged files.
+    fn plan(&self, fetcher: &StubFetcher, id: &str) -> (EmbedEnrichmentPlan, Vec<PathBuf>) {
+        let plan = self
+            .ws
+            .read_blocking(|conn| plan_embed_enrichment(conn, &self.asset_dir(), fetcher, id))
+            .unwrap();
+        let staged = plan
+            .staged_assets
+            .iter()
+            .map(|s| s.file_abs.clone())
+            .collect();
+        (plan, staged)
+    }
+
+    /// Writes through a separate connection: pooled readers never write and
+    /// no local mutation changes a Link's source URL (a sync replay can).
+    fn raw_execute(&self, sql: &str) {
+        rusqlite::Connection::open(self.ws.paths().db_path())
+            .unwrap()
+            .execute(sql, [])
+            .unwrap();
+    }
+}
+
 #[test]
-fn a_stale_apply_discards_staged_files_and_records_no_rows() {
-    let t = TestWorkspace::new("stale");
+fn enrichment_applies_after_the_card_was_resized_during_the_fetch() {
+    let t = TestWorkspace::new("resized");
     let revision = t.create_pending_embed("link-card", "https://example.com/page");
     let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"image-bytes"));
+    let (plan, staged) = t.plan(&fetcher, "link-card");
+    assert_eq!(staged.len(), 1);
 
-    let plan =
-        t.ws.read_blocking(|conn| {
-            plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "link-card", revision)
-        })
-        .unwrap();
-    // The stub serves the same bytes for preview and favicon, so hash dedup
-    // (P1.2) stages them once.
-    assert_eq!(plan.staged_assets.len(), 1);
-    assert!(plan.staged_assets.iter().all(|s| s.file_abs.exists()));
-    let staged: Vec<PathBuf> = plan
-        .staged_assets
-        .iter()
-        .map(|s| s.file_abs.clone())
-        .collect();
+    // The auto-fit resize lands while the fetch is in flight.
+    let frame = Frame {
+        x: 0.0,
+        y: 0.0,
+        width: 320.0,
+        height: 260.0,
+    };
+    t.ws.apply_blocking(Mutation::MoveCard(UpdateCardFrameInput {
+        id: "link-card".to_string(),
+        expected_revision: revision,
+        frame,
+    }))
+    .unwrap();
 
-    // The user edits the card while the fetch is in flight.
+    let embed =
+        t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))
+            .unwrap()
+            .into_embed()
+            .unwrap();
+    assert_eq!(embed.metadata_status, "ready");
+    assert_eq!(embed.title, "Example Title");
+    assert_eq!(embed.frame, frame, "the concurrent resize is kept");
+    assert_eq!(embed.revision, revision + 2);
+    assert!(staged.iter().all(|p| p.exists()));
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 1);
+}
+
+#[test]
+fn a_description_edited_during_the_fetch_survives_enrichment() {
+    let t = TestWorkspace::new("edited");
+    let revision = t.create_pending_embed("link-card", "https://example.com/page");
+    let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"image-bytes"));
+    // The plan sees an empty description, so it would fill the site one.
+    let (plan, _) = t.plan(&fetcher, "link-card");
+
     t.ws.apply_blocking(Mutation::UpdateEmbedDescription(
         UpdateEmbedDescriptionInput {
             id: "link-card".to_string(),
@@ -348,9 +395,64 @@ fn a_stale_apply_discards_staged_files_and_records_no_rows() {
     ))
     .unwrap();
 
+    let embed =
+        t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))
+            .unwrap()
+            .into_embed()
+            .unwrap();
+    assert_eq!(embed.metadata_status, "ready");
+    assert_eq!(embed.title, "Example Title");
+    assert_eq!(embed.description_plain_text, "edited");
+    assert_eq!(embed.description_origin.as_deref(), Some("user"));
+    assert_eq!(embed.revision, revision + 2);
+}
+
+#[test]
+fn metadata_fetched_for_a_replaced_url_is_dropped_without_error() {
+    let t = TestWorkspace::new("url-changed");
+    let revision = t.create_pending_embed("link-card", "https://example.com/page");
+    let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"image-bytes"));
+    let (plan, staged) = t.plan(&fetcher, "link-card");
+    assert!(staged.iter().all(|p| p.exists()));
+
+    t.raw_execute(
+        "UPDATE embed_cards SET source_url = 'https://other.example/' WHERE card_id = 'link-card'",
+    );
+
+    let embed =
+        t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))
+            .unwrap()
+            .into_embed()
+            .unwrap();
+    assert_eq!(embed.source_url, "https://other.example/");
+    assert_eq!(embed.metadata_status, "pending");
+    assert_eq!(
+        embed.revision, revision,
+        "an obsolete result writes nothing"
+    );
+    assert!(staged.iter().all(|p| !p.exists()), "staged files discarded");
+    assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 0);
+    assert_eq!(t.count("SELECT COUNT(*) FROM favicon_cache"), 0);
+}
+
+#[test]
+fn metadata_for_a_card_trashed_during_the_fetch_is_not_found() {
+    let t = TestWorkspace::new("trashed");
+    t.create_pending_embed("link-card", "https://example.com/page");
+    let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"image-bytes"));
+    let (plan, staged) = t.plan(&fetcher, "link-card");
+
+    t.ws.apply_blocking(Mutation::TrashSelection(TrashSelectionInput {
+        items: vec![TrashItem {
+            id: "link-card".to_string(),
+            kind: "embed".to_string(),
+        }],
+    }))
+    .unwrap();
+
     let result =
         t.ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)));
-    assert!(result.is_err(), "a stale plan must not apply");
+    assert!(matches!(result, Err(WorkspaceError::NotFound(_))));
     assert!(staged.iter().all(|p| !p.exists()), "staged files discarded");
     assert_eq!(t.count("SELECT COUNT(*) FROM assets"), 0);
     assert_eq!(t.count("SELECT COUNT(*) FROM favicon_cache"), 0);
@@ -383,8 +485,7 @@ fn enrich_preserves_a_user_authored_description() {
         None,
     );
 
-    // Enrichment runs against revision 2 (the description bump).
-    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card", revision + 1).unwrap();
+    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card").unwrap();
 
     assert_eq!(embed.metadata_status, "ready");
     assert_eq!(embed.title, "Site Title");
@@ -396,7 +497,7 @@ fn enrich_preserves_a_user_authored_description() {
 #[test]
 fn enrich_marks_a_fetched_description_as_site_origin() {
     let t = TestWorkspace::new("site-desc");
-    let revision = t.create_pending_embed("link-card", "https://example.com/page");
+    t.create_pending_embed("link-card", "https://example.com/page");
 
     // No user comment: enrichment fills the description from the site.
     let fetcher = StubFetcher::new(
@@ -411,7 +512,7 @@ fn enrich_marks_a_fetched_description_as_site_origin() {
         None,
     );
 
-    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card", revision).unwrap();
+    let embed = enrich_embed_blocking(&t.ws, &fetcher, "link-card").unwrap();
 
     assert_eq!(embed.description_plain_text, "Site Description");
     assert_eq!(embed.description_origin.as_deref(), Some("site"));
@@ -654,11 +755,11 @@ fn enrich_reuses_an_existing_asset_with_the_same_bytes() {
     // URL serving the same icon), the downloaded bytes are matched by hash and
     // the existing asset is reused; nothing new is staged or left on disk.
     let t = TestWorkspace::new("hash-dedup");
-    let first_rev = t.create_pending_embed("first", "https://example.com/page");
-    let second_rev = t.create_pending_embed("second", "https://example.com/page");
+    t.create_pending_embed("first", "https://example.com/page");
+    t.create_pending_embed("second", "https://example.com/page");
     let fetcher = StubFetcher::new(html_page(FULL_PAGE), png(b"same-bytes"));
 
-    let first = enrich_embed_blocking(&t.ws, &fetcher, "first", first_rev).unwrap();
+    let first = enrich_embed_blocking(&t.ws, &fetcher, "first").unwrap();
     let first_asset = first.preview_asset.expect("preview").id;
     assert_eq!(t.asset_files(), 1);
 
@@ -668,10 +769,8 @@ fn enrich_reuses_an_existing_asset_with_the_same_bytes() {
         .execute("DELETE FROM favicon_cache", [])
         .unwrap();
     let plan =
-        t.ws.read_blocking(|conn| {
-            plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "second", second_rev)
-        })
-        .unwrap();
+        t.ws.read_blocking(|conn| plan_embed_enrichment(conn, &t.asset_dir(), &fetcher, "second"))
+            .unwrap();
     assert!(plan.staged_assets.is_empty(), "hash hit stages nothing");
     assert_eq!(t.asset_files(), 1, "the fresh download was discarded");
 

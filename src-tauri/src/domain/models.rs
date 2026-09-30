@@ -708,14 +708,12 @@ pub struct UpdateEmbedDescriptionInput {
 #[serde(rename_all = "camelCase")]
 pub struct EnrichEmbedMetadataInput {
     pub id: String,
-    pub expected_revision: i64,
 }
 
 /// Minimal embed projection read before metadata network I/O.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbedForMetadata {
     pub id: String,
-    pub revision: i64,
     pub source_url: String,
     pub display_url: String,
     pub title: String,
@@ -727,16 +725,24 @@ pub struct EmbedForMetadata {
 }
 
 /// Transactional metadata update for an embed (Link) card.
+///
+/// Not guarded by the card revision: enrichment owns only the metadata
+/// fields, so a resize or a description edit during the fetch must not void
+/// it. The write is guarded by `source_url` instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApplyEmbedMetadataInput {
     pub id: String,
-    pub expected_revision: i64,
+    /// The URL the metadata was fetched for; if the card now holds another
+    /// URL, the metadata is obsolete and not written.
+    pub source_url: String,
     pub display_url: String,
     pub site_name: Option<String>,
     pub title: String,
     pub provider: Option<String>,
-    pub description_json: Value,
-    pub description_origin: Option<String>,
+    /// The fetched site description (empty if the page had none); `None` when
+    /// the fetch failed. It fills the card only while the card's description
+    /// is empty at write time: a user-authored comment always wins.
+    pub site_description: Option<String>,
     pub preview_asset_id: Option<String>,
     pub favicon_asset_id: Option<String>,
     pub metadata_status: String,

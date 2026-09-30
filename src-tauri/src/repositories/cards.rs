@@ -578,119 +578,65 @@ pub fn update_embed_description(
     })
 }
 
-/// Reads the minimal embed state needed before metadata fetching. Callers must
-/// drop the DB lock before doing network work, then apply the result with the
-/// same expected revision.
+/// Reads the embed state link enrichment works from: before the network
+/// fetch (on a reader) and again in the write transaction, where the row may
+/// have changed meanwhile. `NotFound` if the card is gone or is not a Link.
 pub fn load_embed_for_metadata(
     conn: &Connection,
     id: &str,
-    expected_revision: i64,
 ) -> Result<EmbedForMetadata, WorkspaceError> {
-    let row = conn
-        .query_row(
-            "SELECT c.id, c.revision, e.source_url, e.display_url, COALESCE(e.title, ''), e.preview_origin, COALESCE(e.description_plain_text, ''), e.description_origin
-             FROM cards c
-             JOIN embed_cards e ON e.card_id = c.id
-             WHERE c.id = ?1 AND c.kind = 'embed' AND c.deleted_at IS NULL",
-            [id],
-            |row| {
-                Ok(EmbedForMetadata {
-                    id: row.get(0)?,
-                    revision: row.get(1)?,
-                    source_url: row.get(2)?,
-                    display_url: row.get(3)?,
-                    title: row.get(4)?,
-                    preview_origin: row.get(5)?,
-                    description_plain_text: row.get(6)?,
-                    description_origin: row.get(7)?,
-                })
-            },
-        )
-        .optional()?;
-
-    let Some(embed) = row else {
-        return Err(WorkspaceError::NotFound(id.to_string()));
-    };
-
-    if embed.revision != expected_revision {
-        return Err(WorkspaceError::StaleRevision {
-            expected: expected_revision,
-            actual: embed.revision,
-        });
-    }
-
-    Ok(embed)
+    conn.query_row(
+        "SELECT c.id, e.source_url, e.display_url, COALESCE(e.title, ''), e.preview_origin, COALESCE(e.description_plain_text, ''), e.description_origin
+         FROM cards c
+         JOIN embed_cards e ON e.card_id = c.id
+         WHERE c.id = ?1 AND c.kind = 'embed' AND c.deleted_at IS NULL",
+        [id],
+        |row| {
+            Ok(EmbedForMetadata {
+                id: row.get(0)?,
+                source_url: row.get(1)?,
+                display_url: row.get(2)?,
+                title: row.get(3)?,
+                preview_origin: row.get(4)?,
+                description_plain_text: row.get(5)?,
+                description_origin: row.get(6)?,
+            })
+        },
+    )
+    .optional()?
+    .ok_or_else(|| WorkspaceError::NotFound(id.to_string()))
 }
 
-/// Applies fetched metadata in one transaction. A custom preview is never
-/// overwritten by a network refresh.
-pub fn apply_embed_metadata(
-    conn: &mut Connection,
-    input: &ApplyEmbedMetadataInput,
-) -> Result<EmbedCardDto, WorkspaceError> {
-    let tx = immediate_tx(conn)?;
-    apply_embed_metadata_in_tx(&tx, input)?;
-    tx.commit()?;
-    load_embed_card(conn, &input.id)
-}
-
-/// The body of [`apply_embed_metadata`] for callers that already hold the
-/// write transaction (link enrichment records its asset rows, favicon-cache
-/// rows and the card update atomically). Does not commit and does not reload.
+/// Writes fetched metadata onto an embed and bumps its revision. `current` is
+/// the row as read by [`load_embed_for_metadata`] in the same transaction;
+/// the caller has checked that it still holds `input.source_url`. Does not
+/// commit and does not reload.
+///
+/// A custom preview is never overwritten by a network refresh, and the site
+/// description only fills an empty description.
 pub fn apply_embed_metadata_in_tx(
     tx: &Connection,
     input: &ApplyEmbedMetadataInput,
+    current: &EmbedForMetadata,
 ) -> Result<(), WorkspaceError> {
     let now = db::migrations::now_millis();
-    let description_json = serde_json::to_string(&input.description_json)
-        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
-    let description_plain_text = document_to_plain_text(&input.description_json);
 
-    let current_preview_origin: Option<String> = tx
-        .query_row(
-            "SELECT e.preview_origin
-             FROM cards c
-             JOIN embed_cards e ON e.card_id = c.id
-             WHERE c.id = ?1 AND c.kind = 'embed' AND c.deleted_at IS NULL",
-            [input.id.as_str()],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or_else(|| WorkspaceError::NotFound(input.id.clone()))?;
-
-    let changed = tx.execute(
-        "UPDATE cards SET revision = revision + 1, updated_at = ?1
-         WHERE id = ?2 AND revision = ?3 AND kind = 'embed' AND deleted_at IS NULL",
-        params![now, input.id, input.expected_revision],
+    tx.execute(
+        "UPDATE cards SET revision = revision + 1, updated_at = ?1 WHERE id = ?2",
+        params![now, input.id],
     )?;
 
-    if changed == 0 {
-        let actual: i64 = tx.query_row(
-            "SELECT revision FROM cards WHERE id = ?1",
-            [input.id.clone()],
-            |r| r.get(0),
-        )?;
-        return Err(WorkspaceError::StaleRevision {
-            expected: input.expected_revision,
-            actual,
-        });
-    }
-
-    if current_preview_origin.as_deref() == Some("custom") {
+    if current.preview_origin.as_deref() == Some("custom") {
         tx.execute(
             "UPDATE embed_cards
              SET display_url = ?1, site_name = ?2, title = ?3, provider = ?4,
-                 description_json = ?5, description_plain_text = ?6, description_origin = ?7,
-                 favicon_asset_id = ?8, metadata_status = ?9, metadata_error = ?10
-             WHERE card_id = ?11",
+                 favicon_asset_id = ?5, metadata_status = ?6, metadata_error = ?7
+             WHERE card_id = ?8",
             params![
                 input.display_url,
                 input.site_name,
                 input.title,
                 input.provider,
-                description_json,
-                description_plain_text,
-                input.description_origin,
                 input.favicon_asset_id,
                 input.metadata_status,
                 input.metadata_error,
@@ -705,18 +651,14 @@ pub fn apply_embed_metadata_in_tx(
         tx.execute(
             "UPDATE embed_cards
              SET display_url = ?1, site_name = ?2, title = ?3, provider = ?4,
-                 description_json = ?5, description_plain_text = ?6, description_origin = ?7,
-                 asset_id = ?8, favicon_asset_id = ?9, preview_origin = ?10,
-                 metadata_status = ?11, metadata_error = ?12
-             WHERE card_id = ?13",
+                 asset_id = ?5, favicon_asset_id = ?6, preview_origin = ?7,
+                 metadata_status = ?8, metadata_error = ?9
+             WHERE card_id = ?10",
             params![
                 input.display_url,
                 input.site_name,
                 input.title,
                 input.provider,
-                description_json,
-                description_plain_text,
-                input.description_origin,
                 input.preview_asset_id,
                 input.favicon_asset_id,
                 next_preview_origin,
@@ -724,6 +666,35 @@ pub fn apply_embed_metadata_in_tx(
                 input.metadata_error,
                 input.id
             ],
+        )?;
+    }
+
+    let Some(site_description) = &input.site_description else {
+        return Ok(());
+    };
+    // Решаем по строке на момент записи, а не по снимку до fetch: пользователь
+    // мог написать комментарий, пока шёл запрос.
+    if current.description_plain_text.trim().is_empty() {
+        let document = plain_text_to_document(site_description);
+        let description_json = serde_json::to_string(&document)
+            .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+        let origin = (!site_description.is_empty()).then_some("site");
+        tx.execute(
+            "UPDATE embed_cards
+             SET description_json = ?1, description_plain_text = ?2, description_origin = ?3
+             WHERE card_id = ?4",
+            params![
+                description_json,
+                document_to_plain_text(&document),
+                origin,
+                input.id
+            ],
+        )?;
+    } else {
+        // Non-empty text is kept; legacy rows without an origin become user comments.
+        tx.execute(
+            "UPDATE embed_cards SET description_origin = 'user' WHERE card_id = ?1",
+            [input.id.as_str()],
         )?;
     }
 
