@@ -295,11 +295,31 @@ describe("useBoardLoading", () => {
       });
 
       const options = mocks.useBoardNavigation.mock.calls[0][0];
-      await options.drainPendingWrites();
+      await options.drainPendingWrites("switch");
 
       expect(order).toEqual(["drafts", "queue", "viewport"]);
       expect(test.queueFlush).toHaveBeenCalledTimes(1);
       expect(test.viewportFlush).toHaveBeenCalledTimes(1);
+    });
+
+    it("finalizes drafts and marks the switch pending when leaving the board", async () => {
+      const test = harness();
+      const options = mocks.useBoardNavigation.mock.calls[0][0];
+
+      await options.drainPendingWrites("switch");
+
+      expect(mocks.flushAllDrafts).toHaveBeenLastCalledWith("finalize");
+      expect(test.dispatch).toHaveBeenCalledWith({ type: "boardSwitchStarted" });
+    });
+
+    it("only saves drafts, and keeps editing, on a reload of the open board", async () => {
+      const test = harness();
+      const options = mocks.useBoardNavigation.mock.calls[0][0];
+
+      await options.drainPendingWrites("reload");
+
+      expect(mocks.flushAllDrafts).toHaveBeenLastCalledWith("save");
+      expect(test.dispatch).not.toHaveBeenCalledWith({ type: "boardSwitchStarted" });
     });
   });
 });

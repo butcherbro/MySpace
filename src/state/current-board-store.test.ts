@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   initialState,
   reducer,
+  type CurrentBoardAction,
   type CurrentBoardState,
   type SnapshotRequestChanges,
 } from "./current-board-store";
@@ -125,6 +126,15 @@ describe("current board reducer", () => {
   it("adds a card optimistically", () => {
     const state = reducer(initialState, { type: "cardAdded", card: note("a") });
     expect(state.cards.map((c) => c.id)).toEqual(["a"]);
+    expect(state.editingCardId).toBeNull();
+  });
+
+  it("adds a card already being edited in one step, so it never renders idle first", () => {
+    const editing = { ...initialState, cards: [note("a")], editingCardId: "a", selection: ["a"] };
+    const state = reducer(editing, { type: "cardAdded", card: note("b"), startEditing: true });
+    expect(state.cards.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(state.editingCardId).toBe("b");
+    expect(state.selection).toEqual(["b"]);
   });
 
   it("places an Unsorted card with the persisted frame and revision", () => {
@@ -354,6 +364,65 @@ describe("current board reducer", () => {
     expect(state.error).toBe("boom");
     state = reducer(state, { type: "clearError" });
     expect(state.error).toBeNull();
+  });
+
+  it("keeps an error raised during a board switch on the board it lands on, and only then", () => {
+    const other: BoardSummary = { ...home, id: "other", title: "Other" };
+    const open = (board: BoardSummary): CurrentBoardAction => ({
+      type: "snapshotLoaded",
+      board,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [],
+      unsortedCards: [],
+    });
+    const copied = { type: "failed", message: "saved as a copy", outlivesBoardSwitch: true } as const;
+    let state = reducer(initialState, open(home));
+
+    state = reducer(state, { type: "boardSwitchStarted" });
+    state = reducer(state, copied);
+    state = reducer(state, open(other));
+    expect(state.error).toBe("saved as a copy");
+    state = reducer(state, { type: "boardSwitchStarted" });
+    state = reducer(state, open(home));
+    expect(state.error).toBeNull();
+
+    // Raised with no switch pending: a later switch clears it.
+    state = reducer(state, copied);
+    state = reducer(state, { type: "boardSwitchStarted" });
+    state = reducer(state, open(other));
+    expect(state.error).toBeNull();
+
+    // The switch was abandoned: the next one does not keep it.
+    state = reducer(state, { type: "boardSwitchStarted" });
+    state = reducer(state, copied);
+    state = reducer(state, { type: "boardSwitchAbandoned" });
+    expect(state.error).toBe("saved as a copy");
+    state = reducer(state, { type: "boardSwitchStarted" });
+    state = reducer(state, open(home));
+    expect(state.error).toBeNull();
+
+    // `loading` and `clearError` drop the flag with the error.
+    state = reducer(state, { type: "boardSwitchStarted" });
+    state = reducer(state, copied);
+    state = reducer(state, { type: "clearError" });
+    expect(state.errorOutlivesBoardSwitch).toBe(false);
+    state = reducer(state, copied);
+    state = reducer(state, { type: "loading" });
+    expect(state.errorOutlivesBoardSwitch).toBe(false);
+  });
+
+  it("applies a stored card without ending its editing", () => {
+    const held = note("n1");
+    let state = reducer(initialState, { type: "cardAdded", card: held });
+    state = reducer(state, { type: "editingStarted", id: "n1" });
+    state = reducer(state, { type: "cardStored", id: "n1", card: { ...held, revision: 2, zIndex: 7 } });
+    expect(state.editingCardId).toBe("n1");
+    expect(state.cards[0]).toMatchObject({ revision: 2, zIndex: 7 });
+    // An older answer does not roll the card back.
+    state = reducer(state, { type: "cardStored", id: "n1", card: { ...held, revision: 1 } });
+    expect(state.cards[0].revision).toBe(2);
   });
 });
 

@@ -28,9 +28,12 @@ export interface BoardNavigationOptions {
   gateway: WorkspaceGateway;
   /**
    * Drains pending writes before the projection is replaced, so a debounced
-   * save cannot be abandoned by navigation.
+   * save cannot be abandoned by navigation. `reload`: the open board is
+   * re-read, and editing goes on through it.
    */
-  drainPendingWrites: () => Promise<void>;
+  drainPendingWrites: (reason: "switch" | "reload") => Promise<void>;
+  /** A navigation to another board ended without switching (it failed). */
+  onSwitchAbandoned?: () => void;
   /** Taken right before the snapshot is requested; handed back with it. */
   stampSnapshotRequest: () => number;
   /** Applies a loaded snapshot to the store. */
@@ -77,7 +80,7 @@ function tabFrom(snapshot: BoardSnapshot): BoardTab {
 }
 
 export function useBoardNavigation(options: BoardNavigationOptions): BoardNavigation {
-  const { gateway, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded } = options;
+  const { gateway, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded, onSwitchAbandoned } = options;
 
   const historyRef = useRef<BoardHistory | null>(null);
   // Browser-like open-board tabs (session-only). Initialized lazily once Home is
@@ -116,7 +119,7 @@ export function useBoardNavigation(options: BoardNavigationOptions): BoardNaviga
         try {
           // Flush any pending note/viewport writes before replacing the projection,
           // so a debounced save cannot be abandoned by navigation.
-          await drainPendingWrites();
+          await drainPendingWrites(opts?.reload ? "reload" : "switch");
           if (navigationTokenRef.current !== token) return; // a newer navigation started
           const requestStamp = stampSnapshotRequest();
           const snapshot = await gateway.loadBoardSnapshot(boardId);
@@ -139,6 +142,7 @@ export function useBoardNavigation(options: BoardNavigationOptions): BoardNaviga
         } finally {
           if (navigationTokenRef.current === token) {
             inFlightRef.current = null;
+            if (!switched && !opts?.reload) onSwitchAbandoned?.();
             const yielded = yieldedReloadRef.current;
             yieldedReloadRef.current = null;
             // Переход упал — открыта всё ещё прежняя доска, и её перезагрузка нужна.
@@ -148,7 +152,7 @@ export function useBoardNavigation(options: BoardNavigationOptions): BoardNaviga
       };
       return go(boardId, opts);
     },
-    [drainPendingWrites, gateway, stampSnapshotRequest, onSnapshotLoaded],
+    [drainPendingWrites, gateway, stampSnapshotRequest, onSnapshotLoaded, onSwitchAbandoned],
   );
 
   const initialize = useCallback((snapshot: BoardSnapshot) => {

@@ -597,6 +597,25 @@ P2 / platform:
       cursor every 500 ms (done 2026-09-30, ADR-0011).
 - [ ] Journal compaction (all peers' cursors past a row → it can be folded
       into a snapshot) and a policy for devices that stay offline for months.
+- [ ] Known limitation (note conflict copy, 2026-09-30): if the conflict copy
+      cannot be created (`createNote` fails) and the user leaves the board, the
+      typed text survives only in the saved error report ("Copy report"); the
+      board switch does not wait for the copy and the draft is gone with the
+      editor. The banner says so. A durable fix: keep the unsaved text in a
+      local-only pending table and retry the copy on the next start.
+- [ ] Known limitation (conflict copy): the copy-creation backoff
+      (`src/app/use-card-edits.ts`, `createConflictCopy`) is checked only after
+      the refused `updateNote` and `readCard`, so every autosave during the
+      backoff still pays those two IPC round trips before it is refused.
+- [ ] Known limitation (conflict copy hand-off): keystrokes held while editing
+      passes to the copy are plain `key` values: Cmd+V (paste) and dead-key /
+      composed input typed in that window are not replayed into the copy.
+- [ ] Known limitation (conflict copy): an autosave conflict always moves editing to the copy (`startEditing`), even if the user has already moved on to card B: B loses editing, and keys meant for B go into the hand-off and the copy (`src/app/use-card-edits.ts` ~375-396, `src/state/current-board-store.ts` ~265).
+- [ ] Known limitation (conflict copy): once the capture ends (the copy is not mounted or did not take focus within `HANDOFF_MS`), Backspace deletes the selection, and the selected card is the copy holding the user's text (undo brings it back).
+- [ ] Known limitation (conflict copy): the e2e "every character typed…" has only ~30 ms between the end of typing and the copy's creation, so which path it checks depends on CI load.
+- [ ] Known limitation (conflict copy): the `endDraftHandoff` cleanup in `src/cards/note/NoteCard.tsx`:161 breaks once StrictMode is enabled.
+- [ ] Known limitation (conflict copy): during the 2 s capture Backspace/Delete are swallowed even if the user has selected another card.
+- [ ] Known limitation (not only copies): clicking another card within ~30 ms after the blur of a note whose finalize is still in flight calls `onSaved` → the global `onDeactivate` and closes the editor just opened; part of the typed text is lost.
 
 ## Масштабирование — замеры 2026-09-30
 

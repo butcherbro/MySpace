@@ -25,20 +25,45 @@ function snapshot(boardId: string, title = boardId): BoardSnapshot {
 
 function harness(load: (boardId: string) => Promise<BoardSnapshot>) {
   const loadBoardSnapshot = vi.fn(load);
-  const drainPendingWrites = vi.fn(async () => {});
+  const drainPendingWrites = vi.fn<(reason: "switch" | "reload") => Promise<void>>(async () => {});
   const onSnapshotLoaded = vi.fn();
+  const onSwitchAbandoned = vi.fn();
   const stampSnapshotRequest = vi.fn(() => 42);
   const gateway = { loadBoardSnapshot } as unknown as WorkspaceGateway;
 
   const { result } = renderHook(() =>
-    useBoardNavigation({ gateway, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded }),
+    useBoardNavigation({ gateway, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded, onSwitchAbandoned }),
   );
 
   act(() => result.current.initialize(snapshot("home")));
-  return { result, loadBoardSnapshot, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded };
+  return { result, loadBoardSnapshot, drainPendingWrites, stampSnapshotRequest, onSnapshotLoaded, onSwitchAbandoned };
 }
 
 describe("useBoardNavigation", () => {
+  it("drains for a reload so editing goes on, and for a switch so it ends", async () => {
+    const test = harness(async (boardId) => snapshot(boardId));
+
+    await act(async () => {
+      await test.result.current.navigateTo("home", { reload: true });
+      await test.result.current.navigateTo("board-b");
+    });
+
+    expect(test.drainPendingWrites.mock.calls).toEqual([["reload"], ["switch"]]);
+    expect(test.onSwitchAbandoned).not.toHaveBeenCalled();
+  });
+
+  it("reports a switch that ended without loading the board", async () => {
+    const test = harness(async () => {
+      throw new Error("load failed");
+    });
+
+    await act(async () => {
+      await test.result.current.navigateTo("board-b").catch(() => undefined);
+    });
+
+    expect(test.onSwitchAbandoned).toHaveBeenCalledTimes(1);
+  });
+
   it("stamps the snapshot request after draining and before loading, and hands the stamp over with the snapshot", async () => {
     const order: string[] = [];
     const test = harness(async (boardId) => {

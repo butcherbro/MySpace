@@ -29,6 +29,10 @@ export interface CurrentBoardState {
   editingCardId: string | null;
   loading: boolean;
   error: string | null;
+  /** A navigation to another board is draining its writes and has not loaded yet. */
+  boardSwitchPending: boolean;
+  /** The error was raised during the pending board switch and is shown on the board it lands on. */
+  errorOutlivesBoardSwitch: boolean;
 }
 
 /** Card ids changed locally after a snapshot was requested. */
@@ -56,11 +60,14 @@ export type CurrentBoardAction =
        */
       sinceRequest?: SnapshotRequestChanges;
     }
-  | { type: "cardAdded"; card: CardDto }
+  /** `startEditing`: the card appears already being edited (one render, not two). */
+  | { type: "cardAdded"; card: CardDto; startEditing?: boolean }
   | { type: "cardContentUpdated"; id: string; revision: number; documentJson: unknown; plainText: string }
   | { type: "imageCaptionUpdated"; id: string; revision: number; captionJson: unknown; captionPlainText: string }
   | { type: "embedDescriptionUpdated"; id: string; revision: number; descriptionJson: unknown; descriptionPlainText: string }
   | { type: "cardReplaced"; id: string; card: CardDto }
+  /** The card as stored, read back after a refused write; unlike `cardReplaced` it keeps editing. */
+  | { type: "cardStored"; id: string; card: CardDto }
   /** A board's cover was set or removed; the backend bumps no revision for it. */
   | { type: "boardCoverChanged"; boardId: string; coverAsset: AssetDto | null }
   /** A shortcut's device-local state changed (ADR-0012: pointed at a local folder). */
@@ -77,8 +84,13 @@ export type CurrentBoardAction =
   | { type: "editingStopped" }
   | { type: "viewportChanged"; viewport: CanvasViewport }
   | { type: "viewportSaved"; revision: number }
-  | { type: "failed"; message: string }
-  | { type: "clearError" };
+  /** `outlivesBoardSwitch`: raised during a pending board switch, the message stays on the board it lands on. */
+  | { type: "failed"; message: string; outlivesBoardSwitch?: boolean }
+  | { type: "clearError" }
+  /** A navigation to another board started draining its writes. */
+  | { type: "boardSwitchStarted" }
+  /** That navigation ended without switching the board (failed or superseded). */
+  | { type: "boardSwitchAbandoned" };
 
 /**
  * Применяет ответ записи к карточке `id`, если своя копия не новее ответа.
@@ -112,6 +124,7 @@ export type CardChangeAction = Extract<
       | "imageCaptionUpdated"
       | "embedDescriptionUpdated"
       | "cardReplaced"
+      | "cardStored"
       | "cardMoved"
       | "portalMoved"
       | "cardMovedToUnsorted"
@@ -137,6 +150,8 @@ export const initialState: CurrentBoardState = {
   editingCardId: null,
   loading: false,
   error: null,
+  boardSwitchPending: false,
+  errorOutlivesBoardSwitch: false,
 };
 
 export function reducer(
@@ -145,7 +160,7 @@ export function reducer(
 ): CurrentBoardState {
   switch (action.type) {
     case "loading":
-      return { ...state, loading: true, error: null };
+      return { ...state, loading: true, error: null, errorOutlivesBoardSwitch: false };
 
     case "snapshotLoaded": {
       // A reload of the board that is already open (undo/redo, rename, the
@@ -214,6 +229,8 @@ export function reducer(
           // Перезагрузку той же доски часто и вызывает ошибка (stale_revision):
           // её баннер должен остаться, пока пользователь его не закроет.
           error: state.error,
+          boardSwitchPending: false,
+          errorOutlivesBoardSwitch: false,
         };
       }
 
@@ -238,12 +255,21 @@ export function reducer(
         selection: [],
         editingCardId: null,
         loading: false,
-        error: null,
+        error: state.errorOutlivesBoardSwitch ? state.error : null,
+        boardSwitchPending: false,
+        errorOutlivesBoardSwitch: false,
       };
     }
 
     case "cardAdded":
-      return { ...state, cards: [...state.cards, action.card] };
+      return action.startEditing
+        ? {
+            ...state,
+            cards: [...state.cards, action.card],
+            editingCardId: action.card.id,
+            selection: [action.card.id],
+          }
+        : { ...state, cards: [...state.cards, action.card] };
 
     case "cardContentUpdated":
       return {
@@ -295,6 +321,12 @@ export function reducer(
             : c,
         ),
       };
+
+    case "cardStored": {
+      const held = state.cards.find((c) => c.id === action.id);
+      if (held && held.revision > action.card.revision) return state;
+      return { ...state, cards: state.cards.map((c) => (c.id === action.id ? action.card : c)) };
+    }
 
     case "cardReplaced": {
       const held = state.cards.find((c) => c.id === action.id);
@@ -425,10 +457,21 @@ export function reducer(
       return { ...state, viewportRevision: action.revision };
 
     case "failed":
-      return { ...state, error: action.message, loading: false };
+      return {
+        ...state,
+        error: action.message,
+        errorOutlivesBoardSwitch: action.outlivesBoardSwitch === true && state.boardSwitchPending,
+        loading: false,
+      };
 
     case "clearError":
-      return { ...state, error: null };
+      return { ...state, error: null, errorOutlivesBoardSwitch: false };
+
+    case "boardSwitchStarted":
+      return { ...state, boardSwitchPending: true, errorOutlivesBoardSwitch: false };
+
+    case "boardSwitchAbandoned":
+      return { ...state, boardSwitchPending: false, errorOutlivesBoardSwitch: false };
 
     default:
       return state;

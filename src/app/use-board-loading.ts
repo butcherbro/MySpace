@@ -65,15 +65,23 @@ export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
   // barriers before the projection is replaced.
   const navigation = useBoardNavigation({
     gateway,
-    drainPendingWrites: useCallback(async () => {
-      // The editing card's own draft (still inside its 250ms debounce) must
-      // land in the mutation queue before the queue is flushed, or navigation
-      // would replace the projection while that write is still in flight —
-      // see draft-flush-registry.ts.
-      await flushAllDrafts();
-      await queueRef.current.flush();
-      await viewportController.flush();
-    }, [viewportController, queueRef]),
+    drainPendingWrites: useCallback(
+      async (reason: "switch" | "reload") => {
+        // Ошибка, поднятая при сбросе записей перед сменой доски, показывается
+        // уже на новой доске (см. `boardSwitchPending`).
+        if (reason === "switch") dispatch({ type: "boardSwitchStarted" });
+        // The editing card's own draft (still inside its 250ms debounce) must
+        // land in the mutation queue before the queue is flushed, or navigation
+        // would replace the projection while that write is still in flight —
+        // see draft-flush-registry.ts. A reload of the open board only saves
+        // it: the note stays open under the user's hands.
+        await flushAllDrafts(reason === "switch" ? "finalize" : "save");
+        await queueRef.current.flush();
+        await viewportController.flush();
+      },
+      [viewportController, queueRef, dispatch],
+    ),
+    onSwitchAbandoned: useCallback(() => dispatch({ type: "boardSwitchAbandoned" }), [dispatch]),
     stampSnapshotRequest: cardWrites.snapshotRequested,
     onSnapshotLoaded: applySnapshot,
   });

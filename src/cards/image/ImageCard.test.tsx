@@ -223,7 +223,7 @@ describe("ImageCard", () => {
       await lastEditorProps()?.onBlur?.();
     });
 
-    expect(onFinalize).toHaveBeenCalledWith("image-1", edited);
+    expect(onFinalize).toHaveBeenCalledWith("image-1", edited, expect.objectContaining({ base: expect.any(Function) }));
     expect(onUpdate).not.toHaveBeenCalled();
   });
 

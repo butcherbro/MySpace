@@ -173,7 +173,7 @@ function App() {
   const trashOpen = trash.open;
   const closeTrashDrawer = trash.closeDrawer;
   // Every newly shown error is saved as a local report (never synced).
-  const { copyReport } = useErrorReports({
+  const { copyReport, recordReport } = useErrorReports({
     gateway,
     canvasError: error,
     boardId: board?.id,
@@ -279,7 +279,16 @@ function App() {
     handleUpdateEmbedDescription,
     handleFinalizeEmbedDescription,
     handleResizeNote,
-  } = useCardEdits({ gateway, dispatch, cardWrites, queueRef, cardsRef, dispatcher, idGenerator });
+  } = useCardEdits({
+    gateway,
+    dispatch,
+    cardWrites,
+    queueRef,
+    cardsRef,
+    dispatcher,
+    idGenerator,
+    recordErrorReport: recordReport,
+  });
 
   // Build the canvas projection from all cards (notes + portals). Memoised on
   // `state.cards` (P1.8): the canvas diffs this array per card, and an App
