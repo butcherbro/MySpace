@@ -379,9 +379,9 @@ fn run_mutation(
 
     let mut attempt = 0u32;
     let result = loop {
-        // The pre-destructive backup runs once, outside the transaction.
+        // The pre-destructive backups run once, outside the transaction.
         if attempt == 0 {
-            if let Err(err) = mutation.prepare(paths) {
+            if let Err(err) = mutation.prepare(conn, paths) {
                 break Err(err);
             }
         }

@@ -6,6 +6,8 @@
 //! always served in HLC order and an origin's HLCs only grow, what a device
 //! holds from each origin is a prefix, so "everything above the cursor" is
 //! exactly what is missing, whoever serves it (star and mesh topologies).
+//! Compaction (`sync::compact`) takes superseded rows out of that prefix;
+//! whoever received the rows that superseded them does not need them.
 
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -117,7 +119,7 @@ const ROW_BY_SEQ_SQL: &str =
 
 /// Origin devices with rows in `changes`: one seek per origin on the
 /// `(origin_device_id, hlc)` index, whatever the journal's size.
-fn origins(conn: &Connection) -> Result<Vec<String>, WorkspaceError> {
+pub(crate) fn origins(conn: &Connection) -> Result<Vec<String>, WorkspaceError> {
     let mut stmt = conn.prepare_cached(ORIGINS_SQL)?;
     let rows = stmt.query_map([], |r| r.get(0))?;
     Ok(rows.collect::<Result<_, _>>()?)

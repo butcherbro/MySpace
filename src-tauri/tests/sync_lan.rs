@@ -10,7 +10,8 @@ use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::domain::asset_service;
 use myspace_lib::domain::errors::WorkspaceError;
 use myspace_lib::domain::models::{
-    CreateChildBoardInput, CreateImageCardInput, CreateNoteInput, Frame, UpdateViewportInput,
+    AssetDto, CreateChildBoardInput, CreateImageCardInput, CreateNoteInput, Frame,
+    UpdateViewportInput,
 };
 use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::domain::plain_text::plain_text_to_document;
@@ -44,6 +45,7 @@ impl Node {
                 bind: SocketAddr::from(([127, 0, 0, 1], 0)),
                 discovery: false,
                 run_loop,
+                compact: false,
             },
             events,
         )
@@ -433,6 +435,104 @@ async fn a_wrong_code_is_refused_and_five_failures_burn_it() {
     assert!(a.lan.pair_with(None, Some(&a.addr()), &code).await.is_err());
 }
 
+/// An asset row on `node` named `file_path`, with its file.
+async fn insert_raw_asset(node: &Node, file_path: &str, bytes: &[u8]) -> String {
+    let dir = node.ws.paths().assets_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(file_path), bytes).unwrap();
+    let sha = asset_service::sha256_hex(bytes);
+    node.ws
+        .apply(Mutation::InsertAsset(AssetDto {
+            id: new_id(),
+            file_name: file_path.into(),
+            mime_type: "application/octet-stream".into(),
+            width: None,
+            height: None,
+            size_bytes: bytes.len() as i64,
+            file_path: file_path.into(),
+            sha256: Some(sha.clone()),
+        }))
+        .await
+        .unwrap();
+    sha
+}
+
+/// Asset rows named like the temp files of earlier builds are ordinary
+/// assets: a transfer neither loops on them nor writes into their files
+/// (a published backup may hard-link them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn asset_names_that_look_like_temp_files_are_ordinary_assets() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    pair(&a, &b).await;
+
+    let looped = b"named like a download temp file".to_vec();
+    let looped_name = format!("sync-{}.part", asset_service::sha256_hex(&looped));
+    insert_raw_asset(&a, &looped_name, &looped).await;
+    let kept = b"a file a snapshot links".to_vec();
+    insert_raw_asset(&a, "pic.png.sync-part", &kept).await;
+    insert_raw_asset(&a, "pic.png", b"the picture").await;
+
+    // B already holds `pic.png.sync-part`, hard-linked by a backup.
+    let b_assets = b.ws.paths().assets_dir();
+    std::fs::create_dir_all(&b_assets).unwrap();
+    std::fs::write(b_assets.join("pic.png.sync-part"), &kept).unwrap();
+    let link = b.dir.join("snapshot-link");
+    std::fs::hard_link(b_assets.join("pic.png.sync-part"), &link).unwrap();
+
+    let report = b.lan.sync_now().await;
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert_eq!(report.blobs_fetched, 2, "{report:?}");
+    assert_eq!(std::fs::read(b_assets.join(&looped_name)).unwrap(), looped);
+    assert_eq!(
+        std::fs::read(b_assets.join("pic.png")).unwrap(),
+        b"the picture"
+    );
+    assert_eq!(
+        std::fs::read(b_assets.join("pic.png.sync-part")).unwrap(),
+        kept
+    );
+    assert_eq!(std::fs::read(&link).unwrap(), kept, "the linked file");
+
+    // Nothing is missing any more: no download repeats.
+    let report = b.lan.sync_now().await;
+    assert_eq!(report.blobs_fetched, 0, "{report:?}");
+    let dir = b_assets.clone();
+    let missing =
+        b.ws.read(move |c| myspace_lib::sync::journal::missing_blobs(c, &dir))
+            .await
+            .unwrap();
+    assert!(missing.is_empty(), "{missing:?}");
+    assert!(!b_assets
+        .join(myspace_lib::sync::lan::SYNC_TEMP_DIR)
+        .exists());
+}
+
+/// Files an interrupted transfer left in the temp dir are removed by the
+/// next pass and never block it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_transfer_files_are_cleaned_up() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    pair(&a, &b).await;
+    let (_, file, sha) = populate(&a).await;
+
+    let temp =
+        b.ws.paths()
+            .assets_dir()
+            .join(myspace_lib::sync::lan::SYNC_TEMP_DIR);
+    std::fs::create_dir_all(&temp).unwrap();
+    std::fs::write(temp.join(format!("blob-{sha}")), b"half a download").unwrap();
+    std::fs::write(temp.join(format!("file-{file}")), b"half a copy").unwrap();
+
+    let report = b.lan.sync_now().await;
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert_eq!(report.blobs_fetched, 1);
+    let blob = std::fs::read(b.ws.paths().assets_dir().join(&file)).unwrap();
+    assert_eq!(asset_service::sha256_hex(&blob), sha);
+    assert!(!temp.exists());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_transport_identity_is_stable_and_follows_the_device_id() {
     let a = Node::start("a").await;
@@ -645,6 +745,7 @@ async fn mdns_discovers_the_other_device_and_pairs_by_device_id() {
                 bind: SocketAddr::from(([0, 0, 0, 0], 0)),
                 discovery: true,
                 run_loop: false,
+                compact: false,
             },
             Arc::new(NoEvents),
         )

@@ -18,7 +18,7 @@ use myspace_lib::domain::models::{
 };
 use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::repositories::workspace_repository as repo;
-use myspace_lib::sync::journal;
+use myspace_lib::sync::{compact, journal};
 use rusqlite::{params, Connection};
 use serde_json::json;
 
@@ -738,6 +738,141 @@ fn d_journal_100k() {
         );
     }
     snapshot_db_phases("D snapshot phases", &a_paths.db_path());
+}
+
+/// Checkpoints the WAL into the file and returns (file bytes, pages, free
+/// pages) of the database at `path`.
+fn file_stats(path: &Path) -> (u64, i64, i64) {
+    let c = raw(path);
+    c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+    let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
+    let free: i64 = c
+        .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+        .unwrap();
+    (file_len(path), pages, free)
+}
+
+/// Replays everything `source` serves into a fresh workspace at `dir`, in
+/// 500-row pages as the LAN loop does. Returns the wall time and the
+/// replica's (cards, sum of note text lengths) as a cheap equality check.
+fn replay_fresh(source: &Path, dir: PathBuf) -> (Duration, (i64, i64)) {
+    let rc = db::open_readonly_checked(source).unwrap();
+    let b = Workspace::open(WorkspacePaths::new(dir)).unwrap();
+    let mut cursors = b.read_blocking(journal::our_cursors).unwrap();
+    let t = Instant::now();
+    loop {
+        let page = journal::changes_since(&rc, &cursors, 500).unwrap();
+        if !page.rows.is_empty() {
+            b.apply_blocking(Mutation::ApplySyncChanges(page.rows))
+                .unwrap();
+        }
+        match page.next {
+            Some(nx) => cursors = nx,
+            None => break,
+        }
+    }
+    let wall = t.elapsed();
+    let check = b
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT (SELECT COUNT(*) FROM cards), (SELECT SUM(length(plain_text)) FROM note_cards)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap();
+    (wall, check)
+}
+
+/// ADR-0011 amendment 2026-09-30: the 100 000-change journal before and
+/// after compaction (rows, file size, compaction time, writer stall per
+/// chunk, VACUUM) and a full replay into a fresh database from each.
+#[test]
+#[ignore]
+fn k_compaction_100k() {
+    let tmp = Tmp::new("compaction");
+    let a_paths = WorkspacePaths::new(tmp.path().join("a"));
+    let (ws, _) = journal_100k(&a_paths);
+    let count = |ws: &Workspace| -> i64 {
+        ws.read_blocking(|c| Ok(c.query_row("SELECT COUNT(*) FROM changes", [], |r| r.get(0))?))
+            .unwrap()
+    };
+    let mib = |b: u64| b as f64 / 1048576.0;
+    let rows_before = count(&ws);
+    let (bytes_before, pages, free) = file_stats(&a_paths.db_path());
+    println!(
+        "K before: changes={rows_before} db file={:.1} MiB ({pages} pages, {free} free)",
+        mib(bytes_before)
+    );
+    let (replay_before, check_before) = replay_fresh(&a_paths.db_path(), tmp.path().join("b1"));
+    println!(
+        "K full replay into a fresh DB from the full journal: {:.1}s",
+        replay_before.as_secs_f64()
+    );
+
+    let mut chunks = Vec::new();
+    let mut deleted = 0;
+    let t = Instant::now();
+    loop {
+        let t_chunk = Instant::now();
+        let chunk = ws
+            .apply_blocking(Mutation::CompactJournal)
+            .unwrap()
+            .into_compaction()
+            .unwrap();
+        chunks.push(t_chunk.elapsed());
+        deleted += chunk.deleted;
+        if chunk.done {
+            break;
+        }
+    }
+    let total = t.elapsed();
+    let rest = &chunks[1..];
+    println!(
+        "K compaction: {:.2}s in {} chunks, {deleted} rows deleted; first chunk (with the pre-compaction backup) {:.0}ms; other chunks max {:.0}ms mean {:.0}ms",
+        total.as_secs_f64(),
+        chunks.len(),
+        ms(chunks[0]),
+        rest.iter().map(|d| ms(*d)).fold(0.0, f64::max),
+        if rest.is_empty() { 0.0 } else { ms(rest.iter().sum::<Duration>()) / rest.len() as f64 }
+    );
+    let t = Instant::now();
+    let again = compact::run_blocking(&ws).unwrap();
+    println!(
+        "K second run: {} deleted, {} entities, {:.0}ms",
+        again.deleted,
+        again.entities,
+        ms(t.elapsed())
+    );
+
+    let rows_after = count(&ws);
+    let (bytes_after, pages, free) = file_stats(&a_paths.db_path());
+    println!(
+        "K after: changes={rows_after} db file={:.1} MiB ({pages} pages, {free} free = {:.0}%)",
+        mib(bytes_after),
+        100.0 * free as f64 / pages as f64
+    );
+    let t = Instant::now();
+    let ran = ws
+        .apply_blocking(Mutation::VacuumIfDue)
+        .unwrap()
+        .into_count()
+        .unwrap();
+    let vacuum = t.elapsed();
+    let (bytes_vacuumed, _, _) = file_stats(&a_paths.db_path());
+    println!(
+        "K VACUUM (due={}): {:.2}s, db file {:.1} MiB",
+        ran == 1,
+        vacuum.as_secs_f64(),
+        mib(bytes_vacuumed)
+    );
+
+    let (replay_after, check_after) = replay_fresh(&a_paths.db_path(), tmp.path().join("b2"));
+    println!(
+        "K full replay into a fresh DB from the compacted journal: {:.1}s",
+        replay_after.as_secs_f64()
+    );
+    assert_eq!(check_after, check_before, "same cards and texts");
 }
 
 /// Where replay time goes: the same exported journal replayed into fresh
