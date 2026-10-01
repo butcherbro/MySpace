@@ -25,6 +25,7 @@
 //! data). The originating command is kept as the row's `op`
 //! ([`crate::domain::mutation::Mutation::op_name`]).
 
+pub mod compact;
 pub mod discovery;
 pub mod funnel;
 pub mod hlc;
@@ -85,7 +86,8 @@ pub struct ApplyReport {
     /// Rows (including retried pending ones) that changed at least one
     /// register or purged an entity.
     pub applied: usize,
-    /// Rows already held in `changes` (re-delivery): ignored entirely.
+    /// Rows already held in `changes`, or held once and compacted away
+    /// (re-delivery): ignored entirely.
     pub duplicates: usize,
     /// Rows recorded but losing every register to a newer local value.
     pub superseded: usize,

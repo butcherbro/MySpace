@@ -11,7 +11,7 @@ import type {
   NoteCardDto,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 import { setCardClipboard, type CopiedCard } from "./card-clipboard";
 
 /**
@@ -31,7 +31,7 @@ export interface CopyActionsOptions {
   cards: CardDto[];
   board: BoardSummary | null;
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
   setPaneContextMenu: Dispatch<SetStateAction<{ x: number; y: number; flowX: number; flowY: number } | null>>;
 }
 

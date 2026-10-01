@@ -114,6 +114,7 @@ function Harness({
 
   const navigation = useBoardNavigation({
     gateway,
+    stampSnapshotRequest: () => 0,
     drainPendingWrites: async () => {
       await flushAllDrafts();
       await backend.queue.flush();

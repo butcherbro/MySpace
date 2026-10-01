@@ -160,6 +160,9 @@ expand the red step.
 | build, tauri-action (macOS) | `failed to bundle project` … `hdiutil` | Flaky DMG step on the runner; re-run the failed job. |
 | build, tauri-action | a Rust compile error on only one platform | Genuine platform bug (the CI `windows-cargo` job only checks debug builds on the host target). |
 | publish, "Verify latest.json" | `latest.json has no signed entry for …` | Two builds merged `latest.json` at the same moment. Re-run the workflow (Re-run all jobs): assets and `latest.json` are replaced. |
+| publish (2 s, no steps) | `The job was not started because recent account payments have failed…` | Account billing or Actions minutes. Fix billing, then **Re-run failed jobs**: the builds are reused. |
+
+A private repo gets 2000 Actions minutes a month on the free plan, and runner time is billed with multipliers (macOS x10, Windows x2, Linux x1), so one cold release run plus CI on every pull request can exhaust it.
 
 The release stays a **draft** after any failure, so users are never offered a
 broken update. Delete the draft in `MySpace-releases` if you abandon the version.

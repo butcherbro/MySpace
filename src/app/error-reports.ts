@@ -18,6 +18,14 @@ const REMEMBERED_MESSAGES = 20;
 
 export interface ErrorReportDetails {
   message: string;
+  /** Saved with the report but not shown in the banner (for example the text a failed save kept). */
+  detail?: string;
+  /**
+   * A newer report of a message already recorded, made on purpose (for example
+   * with newer text): saved even within the dedupe window, and "Copy report"
+   * copies it from then on.
+   */
+  supersede?: boolean;
   code?: string;
   boardId?: string;
   source?: string;
@@ -50,13 +58,19 @@ export function createErrorReportRecorder(
     record(details) {
       const at = now();
       const previous = recent.get(details.message);
-      if (previous && at - previous.at < ERROR_REPORT_DEDUPE_MS) return previous.report;
+      // Повтор того же сообщения — тот же отчёт, с какими бы подробностями он ни
+      // пришёл: частоту отчётов с подробностями задаёт тот, кто их пишет.
+      if (previous && !details.supersede && at - previous.at < ERROR_REPORT_DEDUPE_MS) return previous.report;
 
+      const { detail, code, boardId, source } = details;
       // `then` ловит и синхронный throw шлюза: запись отчёта не должна ронять UI.
       const report = Promise.resolve()
         .then(() =>
           gateway.recordErrorReport({
-            ...details,
+            code,
+            boardId,
+            source,
+            message: detail === undefined ? details.message : `${details.message}\n\n${detail}`,
             frontendVersion: APP_VERSION,
             userAgent: navigator.userAgent,
           }),
@@ -124,5 +138,12 @@ export function useErrorReports({
     [recorder],
   );
 
-  return { copyReport };
+  const recordReport = useCallback(
+    (details: ErrorReportDetails) => {
+      void recorder.record(details);
+    },
+    [recorder],
+  );
+
+  return { copyReport, recordReport };
 }

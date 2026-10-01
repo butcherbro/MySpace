@@ -5,7 +5,8 @@ import { flushAllDrafts } from "../editor/draft-flush-registry";
 import { useBoardNavigation, type BoardNavigation } from "../navigation/use-board-navigation";
 import type { MutationQueue } from "../persistence/entity-write-queue";
 import type { BoardSnapshot, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 import type { useViewportController } from "../state/use-viewport-controller";
 
 /**
@@ -19,38 +20,43 @@ import type { useViewportController } from "../state/use-viewport-controller";
 
 export interface BoardLoadingDeps {
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
+  /** Tells a same-board reload which cards were written after it was requested. */
+  cardWrites: CardWrites;
   queueRef: RefObject<MutationQueue>;
   viewportController: ReturnType<typeof useViewportController>;
 }
 
 export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
-  const { gateway, dispatch, queueRef, viewportController } = deps;
+  const { gateway, dispatch, cardWrites, queueRef, viewportController } = deps;
 
   // Applying a loaded snapshot is the store's concern, not navigation's: note
   // documents are normalized here, and both the startup load and every later
   // navigation go through this one place.
   const applySnapshot = useCallback(
-    (snapshot: BoardSnapshot) => {
-      dispatch({
-        type: "snapshotLoaded",
-        board: snapshot.board,
-        breadcrumbs: snapshot.breadcrumbs,
-        viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
-        viewportRevision: snapshot.viewport.revision,
-        cards: snapshot.cards.map((c) =>
-          c.kind === "note"
-            ? { ...c, documentJson: normalizeDocument(c.documentJson) }
-            : c,
-        ),
-        unsortedCards: snapshot.unsortedCards.map((c) =>
-          c.kind === "note"
-            ? { ...c, documentJson: normalizeDocument(c.documentJson) }
-            : c,
-        ),
-      });
+    (snapshot: BoardSnapshot, requestStamp: number) => {
+      // Через cardWrites: cardsRef получает слитые карточки в том же шаге, что и store.
+      cardWrites.applySnapshot(
+        {
+          board: snapshot.board,
+          breadcrumbs: snapshot.breadcrumbs,
+          viewport: { x: snapshot.viewport.x, y: snapshot.viewport.y, zoom: snapshot.viewport.zoom },
+          viewportRevision: snapshot.viewport.revision,
+          cards: snapshot.cards.map((c) =>
+            c.kind === "note"
+              ? { ...c, documentJson: normalizeDocument(c.documentJson) }
+              : c,
+          ),
+          unsortedCards: snapshot.unsortedCards.map((c) =>
+            c.kind === "note"
+              ? { ...c, documentJson: normalizeDocument(c.documentJson) }
+              : c,
+          ),
+        },
+        requestStamp,
+      );
     },
-    [dispatch],
+    [cardWrites],
   );
 
   // The navigation spine: snapshot loading, open-board tabs, back/forward
@@ -59,15 +65,24 @@ export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
   // barriers before the projection is replaced.
   const navigation = useBoardNavigation({
     gateway,
-    drainPendingWrites: useCallback(async () => {
-      // The editing card's own draft (still inside its 250ms debounce) must
-      // land in the mutation queue before the queue is flushed, or navigation
-      // would replace the projection while that write is still in flight —
-      // see draft-flush-registry.ts.
-      await flushAllDrafts();
-      await queueRef.current.flush();
-      await viewportController.flush();
-    }, [viewportController, queueRef]),
+    drainPendingWrites: useCallback(
+      async (reason: "switch" | "reload") => {
+        // Ошибка, поднятая при сбросе записей перед сменой доски, показывается
+        // уже на новой доске (см. `boardSwitchPending`).
+        if (reason === "switch") dispatch({ type: "boardSwitchStarted" });
+        // The editing card's own draft (still inside its 250ms debounce) must
+        // land in the mutation queue before the queue is flushed, or navigation
+        // would replace the projection while that write is still in flight —
+        // see draft-flush-registry.ts. A reload of the open board only saves
+        // it: the note stays open under the user's hands.
+        await flushAllDrafts(reason === "switch" ? "finalize" : "save");
+        await queueRef.current.flush();
+        await viewportController.flush();
+      },
+      [viewportController, queueRef, dispatch],
+    ),
+    onSwitchAbandoned: useCallback(() => dispatch({ type: "boardSwitchAbandoned" }), [dispatch]),
+    stampSnapshotRequest: cardWrites.snapshotRequested,
     onSnapshotLoaded: applySnapshot,
   });
   const initializeNavigation = navigation.initialize;
@@ -80,10 +95,11 @@ export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
       dispatch({ type: "loading" });
       try {
         const home = await gateway.getHomeBoard();
+        const requestStamp = cardWrites.snapshotRequested();
         const snapshot = await gateway.loadBoardSnapshot(home.id);
         if (cancelled) return;
         initializeNavigation(snapshot);
-        applySnapshot(snapshot);
+        applySnapshot(snapshot, requestStamp);
       } catch (e) {
         if (!cancelled) {
           dispatch({ type: "failed", message: errorMessage(e) });
@@ -94,7 +110,7 @@ export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
     return () => {
       cancelled = true;
     };
-  }, [applySnapshot, gateway, initializeNavigation, dispatch]);
+  }, [applySnapshot, gateway, initializeNavigation, dispatch, cardWrites]);
 
   return navigation;
 }

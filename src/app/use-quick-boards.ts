@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { errorMessage } from "../services/error-message";
 import type { QuickBoardDto, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
 
 /**
  * Quick Boards rail: persisted, ordered references to Boards. Loads once at
@@ -17,7 +17,7 @@ import type { CurrentBoardAction } from "../state/current-board-store";
 
 export interface QuickBoardsOptions {
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
 }
 
 export interface QuickBoardsController {

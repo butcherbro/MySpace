@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { moveSelectionOntoBoard } from "./move-selection-onto-board";
 import { CommandDispatcher } from "../commands/command-dispatcher";
+import { createStaleRevisionReload } from "../app/stale-revision-reload";
 import { UuidV7Generator } from "../services/id-generator";
 import type { CardDto, MoveSelectionToBoardInput, WorkspaceGateway } from "../services/workspace-gateway";
 
@@ -250,4 +251,53 @@ describe("moveSelectionOntoBoard", () => {
       expect(moveSelectionToBoard).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+describe("moveSelectionOntoBoard and the stale-revision reload", () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  function stagedGateway(failures: number) {
+    let attempt = 0;
+    const raw = {
+      readCard: vi.fn(async () => noteCard("note-1", 4)),
+      moveSelectionToBoard: vi.fn(async (input: MoveSelectionToBoardInput) => {
+        attempt += 1;
+        if (attempt <= failures) throw { code: "stale_revision", message: { expected: 3, actual: 4 } };
+        return { operationId: "op", targetBoardId: input.targetBoardId, cards: [], boards: [] };
+      }),
+    };
+    const reload = vi.fn(async () => undefined);
+    const { gateway, setReload } = createStaleRevisionReload(raw as unknown as WorkspaceGateway);
+    setReload(reload);
+    return { gateway, reload };
+  }
+
+  function move(gateway: WorkspaceGateway) {
+    return moveSelectionOntoBoard({
+      gateway,
+      dispatcher: new CommandDispatcher(gateway),
+      idGenerator: new UuidV7Generator(),
+      targetBoardId: "board-b",
+      leafCards: [noteCard("note-1", 3)],
+      portals: [],
+    });
+  }
+
+  it("does not reload the board for a stale answer its own retry handles", async () => {
+    const test = stagedGateway(1);
+
+    await move(test.gateway);
+    await settle();
+
+    expect(test.reload).not.toHaveBeenCalled();
+  });
+
+  it("still reloads when the retry is exhausted and the refusal reaches the user", async () => {
+    const test = stagedGateway(2);
+
+    await expect(move(test.gateway)).rejects.toMatchObject({ code: "stale_revision" });
+    await settle();
+
+    expect(test.reload).toHaveBeenCalledTimes(1);
+  });
 });

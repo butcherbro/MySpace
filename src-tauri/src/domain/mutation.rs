@@ -49,6 +49,7 @@ use crate::domain::models::{
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::devices;
 use crate::repositories::workspace_repository as repo;
+use crate::sync::compact::CompactReport;
 use crate::sync::peers::{PeerOutcome, PeerWrite};
 use crate::sync::{ApplyReport, ChangeRow};
 
@@ -164,6 +165,8 @@ pub const OP_NAMES: &[&str] = &[
     "maintenance.hash_assets",
     "sync.apply_changes",
     "sync.peers",
+    "sync.compact_journal",
+    "maintenance.vacuum",
 ];
 
 /// One write, as data. See the module docs.
@@ -292,6 +295,16 @@ pub enum Mutation {
     /// LAN transport bookkeeping (S3): this device's TLS identity and the
     /// paired peers. LOCAL-ONLY (`local_meta`, `sync_peers`, `known_devices`).
     SyncPeers(PeerWrite),
+    /// One bounded step of journal compaction (`sync::compact`, ADR-0011
+    /// amendment 2026-09-30); `sync::compact::run` queues steps until done.
+    /// Local-only: it deletes superseded `changes` rows and writes its
+    /// watermarks to `local_meta`, and is itself never journaled or replayed
+    /// (what this device serves changes, never the state it converges to).
+    /// The first step on a database is preceded by a backup (`prepare`).
+    CompactJournal,
+    /// `VACUUM` at startup when a compaction left the file mostly free
+    /// (`sync::compact::vacuum_if_due`). Local-only; outside a transaction.
+    VacuumIfDue,
 }
 
 /// Payload of [`Mutation::CommitFileCard`].
@@ -326,6 +339,7 @@ pub enum MutationOutcome {
     Device(DeviceIdentity),
     SyncReport(ApplyReport),
     SyncPeers(PeerOutcome),
+    Compaction(CompactReport),
 }
 
 fn unexpected(what: &str) -> WorkspaceError {
@@ -431,6 +445,12 @@ impl MutationOutcome {
             _ => Err(unexpected("sync peer outcome")),
         }
     }
+    pub fn into_compaction(self) -> Result<CompactReport, WorkspaceError> {
+        match self {
+            Self::Compaction(r) => Ok(r),
+            _ => Err(unexpected("compaction report")),
+        }
+    }
 }
 
 impl Mutation {
@@ -481,6 +501,8 @@ impl Mutation {
             Self::CollectOrphanedAssets => "maintenance.collect_orphaned_assets",
             Self::HashExistingAssets => "maintenance.hash_assets",
             Self::ApplySyncChanges(_) => "sync.apply_changes",
+            Self::CompactJournal => "sync.compact_journal",
+            Self::VacuumIfDue => "maintenance.vacuum",
         }
     }
 
@@ -537,7 +559,9 @@ impl Mutation {
             Self::CollapseFaviconDuplicates
             | Self::CollectOrphanedAssets
             | Self::HashExistingAssets
-            | Self::ApplySyncChanges(_) => (K::Workspace, ""),
+            | Self::ApplySyncChanges(_)
+            | Self::CompactJournal
+            | Self::VacuumIfDue => (K::Workspace, ""),
         }
     }
 
@@ -557,13 +581,23 @@ impl Mutation {
             Self::CollapseFaviconDuplicates
                 | Self::CollectOrphanedAssets
                 | Self::HashExistingAssets
+                | Self::VacuumIfDue
         )
     }
 
     /// Work that must happen before the mutation's transaction opens, once
-    /// (not on a busy retry): today only the mandatory pre-Empty-Trash backup,
-    /// which refuses the mutation unless a validated snapshot is on disk.
-    pub fn prepare(&self, paths: &WorkspacePaths) -> Result<(), WorkspaceError> {
+    /// (not on a busy retry): the mandatory backups before Empty Trash and
+    /// before the first journal compaction, which refuse the mutation unless
+    /// a validated snapshot is on disk.
+    pub fn prepare(&self, conn: &Connection, paths: &WorkspacePaths) -> Result<(), WorkspaceError> {
+        if matches!(self, Self::CompactJournal) && crate::sync::compact::never_compacted(conn)? {
+            crate::db::backup::snapshot_before_destructive_operation(
+                &paths.db_path(),
+                &paths.assets_dir(),
+                &paths.backups_dir(),
+            )
+            .map_err(WorkspaceError::Database)?;
+        }
         if let Self::EmptyTrash { confirmation } = self {
             if confirmation != "EMPTY" {
                 // `execute` reports the error; no backup for a refused call.
@@ -587,7 +621,9 @@ impl Mutation {
             Self::SaveViewport(_)
             | Self::SetFilesystemAliasLocalTarget { .. }
             | Self::RenameDevice { .. }
-            | Self::SyncPeers(_) => true,
+            | Self::SyncPeers(_)
+            | Self::CompactJournal
+            | Self::VacuumIfDue => true,
             Self::CreateNote(_)
             | Self::CreateImageCard(_)
             | Self::CreateBoardShortcut(_)
@@ -784,6 +820,14 @@ impl Mutation {
             Self::ApplySyncChanges(rows) => {
                 crate::sync::replay::apply_remote(conn, rows.clone()).map(Out::SyncReport)
             }
+            Self::CompactJournal => crate::sync::compact::compact_chunk(
+                conn,
+                crate::db::migrations::now_millis().max(0) as u64,
+            )
+            .map(Out::Compaction),
+            Self::VacuumIfDue => {
+                crate::sync::compact::vacuum_if_due(conn).map(|ran| Out::Count(i64::from(ran)))
+            }
         }
     }
 }
@@ -868,7 +912,9 @@ maintenance.collapse_favicons
 maintenance.collect_orphaned_assets
 maintenance.hash_assets
 sync.apply_changes
-sync.peers"
+sync.peers
+sync.compact_journal
+maintenance.vacuum"
         );
     }
 

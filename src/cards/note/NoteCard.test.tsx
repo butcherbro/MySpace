@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NoteCard } from "./NoteCard";
 import type { NoteCardDto } from "../../services/workspace-gateway";
 import { NoteEditor } from "../../editor/NoteEditor";
+import { isDraftHandoffActive, offerDraftHandoff } from "../../editor/draft-handoff";
 
 // NoteCard talks to Tiptap exclusively through the `NoteEditor` contract
 // (document/editable/onChange/onBlur). Mock it here so we test NoteCard's own
@@ -109,6 +110,27 @@ describe("NoteCard", () => {
     expect(lastEditorProps()?.editable).toBe(true);
   });
 
+  it("puts the caret at the end of a note that appears already being edited (a conflict copy)", () => {
+    render(
+      <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
+    );
+    expect((lastEditorProps() as { initialCaretPoint?: unknown }).initialCaretPoint).toBe("end");
+  });
+
+  it("ends a hand-off to it when it unmounts, so keys are no longer held and nothing typed is lost silently", () => {
+    const onUnclaimed = vi.fn();
+    const { unmount } = render(
+      <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn()} onContextMenu={vi.fn()} onResize={vi.fn()} />,
+    );
+    offerDraftHandoff("note-1", () => undefined, onUnclaimed);
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true }));
+
+    unmount();
+
+    expect(isDraftHandoffActive()).toBe(false);
+    expect(onUnclaimed).toHaveBeenCalledWith("a");
+  });
+
   it("flushes on blur and deactivates", async () => {
     vi.useFakeTimers();
     const onUpdate = vi.fn().mockResolvedValue(undefined);
@@ -120,7 +142,7 @@ describe("NoteCard", () => {
     act(() => lastEditorProps()?.onChange(changedDoc));
     await act(async () => lastEditorProps()?.onBlur?.());
 
-    expect(onUpdate).toHaveBeenCalledWith("note-1", changedDoc);
+    expect(onUpdate).toHaveBeenCalledWith("note-1", changedDoc, expect.objectContaining({ base: expect.any(Function) }));
     expect(onDeactivate).toHaveBeenCalled();
     vi.useRealTimers();
   });
@@ -136,7 +158,7 @@ describe("NoteCard", () => {
 
     expect(onUpdate).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(250));
-    expect(onUpdate).toHaveBeenCalledWith("note-1", changedDoc);
+    expect(onUpdate).toHaveBeenCalledWith("note-1", changedDoc, expect.objectContaining({ base: expect.any(Function) }));
     vi.useRealTimers();
   });
 

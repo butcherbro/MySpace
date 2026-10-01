@@ -23,7 +23,8 @@ import type {
   NoteCardDto,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 
 /**
  * Card creation: note/link/child board/image/file card/folder shortcut, plus
@@ -45,7 +46,9 @@ export interface CardCreationDeps {
   gateway: WorkspaceGateway;
   dispatcher: CommandDispatcher;
   idGenerator: IdGenerator;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
+  /** Applies every local card change to the refs and the store together. */
+  cardWrites: CardWrites;
 }
 
 export interface CardCreationController {
@@ -76,7 +79,7 @@ export interface CardCreationController {
 }
 
 export function useCardCreation(deps: CardCreationDeps): CardCreationController {
-  const { board, boardRef, notes, cards, cardsRef, screenToFlowRef, gateway, dispatcher, idGenerator, dispatch } =
+  const { board, boardRef, notes, cards, cardsRef, screenToFlowRef, gateway, dispatcher, idGenerator, dispatch, cardWrites } =
     deps;
 
   const handleCreateNote = useCallback(
@@ -113,7 +116,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
             documentJson: card.documentJson,
           }),
         );
-        dispatch({ type: "cardAdded", card });
+        cardWrites.apply({ type: "cardAdded", card });
         if (options?.startEditing) {
           dispatch({ type: "editingStarted", id });
         }
@@ -121,7 +124,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
-    [board, dispatcher, idGenerator, notes.length, dispatch],
+    [board, dispatcher, idGenerator, notes.length, dispatch, cardWrites],
   );
 
   const handleCreateLink = useCallback(
@@ -182,12 +185,12 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
             title: "New Board",
           }),
         );
-        dispatch({ type: "cardAdded", card: portal });
+        cardWrites.apply({ type: "cardAdded", card: portal });
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
-    [board, dispatcher, idGenerator, cards.length, dispatch, screenToFlowRef],
+    [board, dispatcher, idGenerator, cards.length, dispatch, screenToFlowRef, cardWrites],
   );
 
   // Creates an image card for an already-imported asset at board coordinates.
@@ -228,10 +231,10 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
             }),
           ),
         );
-        dispatch({ type: "cardAdded", card });
+        cardWrites.apply({ type: "cardAdded", card });
       }
     },
-    [dispatcher, boardRef, cardsRef, dispatch],
+    [dispatcher, boardRef, cardsRef, cardWrites],
   );
 
   // Imports an image and creates a card at the given board coordinates. Shared
@@ -289,12 +292,12 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
           }),
         );
         // unreachable null: первое исполнение всегда создаёт карточку
-        if (card) dispatch({ type: "cardAdded", card });
+        if (card) cardWrites.apply({ type: "cardAdded", card });
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
-    [dispatcher, idGenerator, boardRef, cardsRef, dispatch],
+    [dispatcher, idGenerator, boardRef, cardsRef, dispatch, cardWrites],
   );
 
   const createFileCard = useCallback(
@@ -321,12 +324,12 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
           }),
         );
         // unreachable null: первое исполнение всегда создаёт карточку
-        if (card) dispatch({ type: "cardAdded", card });
+        if (card) cardWrites.apply({ type: "cardAdded", card });
       } catch (e) {
         dispatch({ type: "failed", message: errorMessage(e) });
       }
     },
-    [dispatcher, idGenerator, boardRef, cardsRef, dispatch],
+    [dispatcher, idGenerator, boardRef, cardsRef, dispatch, cardWrites],
   );
 
   // "Add Folder Shortcut…" on the pane context menu (todo.md №23): the native

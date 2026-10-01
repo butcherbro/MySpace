@@ -425,8 +425,9 @@ P1 (до серьёзного роста), в порядке выполнени�
       (Tauri, MCP и стартовое обслуживание), `BEGIN IMMEDIATE` везде,
       check-then-act внутри транзакций, bounded retry на BUSY, `queue_ms`/`exec_ms`
       в логе. Тесты: `workspace_actor.rs`, `write_transactions.rs`.
-      Хвосты (не блокируют): enrichment держит одно pooled-соединение на время
-      сетевого запроса (TODO в `link_metadata.rs`); `import_asset` при повторном
+      Хвосты (не блокируют): enrichment больше не держит pooled-соединение на
+      время сетевого запроса (закрыто 2026-09-30, лимит 4 одновременных
+      enrichment, дедуп по sha256 внутри транзакции коммита); `import_asset` при повторном
       использовании одного UUID из двух процессов может удалить чужой файл
       (только при коллизии id — практически невозможно).
 - [x] P1.2 Бэкап 2.0: `assets.sha256` (миграция 0020), хэш при импорте, дедуп по
@@ -462,7 +463,7 @@ P1 (до серьёзного роста), в порядке выполнени�
       (`CanvasAdapter.render-cost.test.tsx`); e2e `dense-board.spec.ts`: первая
       отрисовка ≈ 0.6–0.75 с в контейнере (было ≈ 3.5 с), пан ≈ 10–25 мс.
       Проверить на Mac: бюджет 500 мс (`DENSE_BOARD_PAINT_BUDGET_MS=500`).
-- [ ] `cargo audit`/Dependabot в CI.
+- [x] `cargo audit`/Dependabot в CI (джоб `security-audit`, коммит e207757).
 
 P2 / platform:
 - [x] Windows: build + CI + path locator + opener + clipboard (done 2026-09-24);
@@ -476,7 +477,9 @@ P2 / platform:
       машину база получает новый device_id (отпечаток машины в `local_meta`).
 
 Известные флейки e2e (не регрессия, воспроизводится на `f819aee`):
-- [ ] `group-tab-drop.spec.ts:40` — на медленном кадре рамка выделения захватывает
+- [x] (закрыто 2026-09-30: тест ждёт `data-flow-ready` перед «New board»,
+      `selectNotesOnly` выделяет полосой по левым краям заметок)
+      `group-tab-drop.spec.ts:40` — на медленном кадре рамка выделения захватывает
       портал (3 узла вместо 2), ~25 % прогонов при `--workers 1`. Починить
       гест (`selectNotesOnly`: выделять по клику с Shift или ждать стабилизации).
 
@@ -491,7 +494,9 @@ P2 / platform:
 - [ ] Резервная копия: приватный git remote — по решению пользователя.
 - [ ] Опционально: подогнать frame старых image cards под пропорции; полноэкранный
       просмотр `.md`.
-- [ ] Узкая гонка ответов (найдено 2026-09-26 при починке метаданных ссылок):
+- [x] (закрыто 2026-09-30: `src/state/card-writes.ts`, защита в reducer,
+      слияние same-board снимка по меткам записей)
+      Узкая гонка ответов (найдено 2026-09-26 при починке метаданных ссылок):
       запись из очереди (drag/resize/описание) может прочитать `cardsRef` в те
       миллисекунды, когда бэкенд уже записал метаданные, а ответ ещё не обработан,
       и упасть с `stale_revision`. Общее свойство: ответы двух записей могут прийти
@@ -499,7 +504,9 @@ P2 / platform:
       `cardReplaced`/receipt-обновления в reducer не откатывали ревизию назад.
 - [ ] Показывать версию приложения в интерфейсе (About / будущий экран настроек):
       сейчас её видно только в Finder → Cmd+I (запрос пользователя 2026-09-26).
-- [ ] Проверить (найдено при разбиении App.tsx, 2026-09-26): групповой дроп в
+- [x] (закрыто 2026-09-30: портал не пропадал, но оставался на старом месте
+      со старой ревизией; теперь `portalMoved` из receipt)
+      Проверить (найдено при разбиении App.tsx, 2026-09-26): групповой дроп в
       `handleCardsDroppedOnBoard` (`src/app/use-card-drop.ts`) показывает листовые
       карточки, пришедшие в открытую доску, но для портала, который пришёл в открытую
       доску, ничего не диспатчит (есть только `cardsRemoved` для ушедших). Путь
@@ -511,7 +518,7 @@ P2 / platform:
 Порядок: отчёты об ошибках (решено 2026-09-26, делать первыми), затем связи
 (дешевле, почти всё есть в React Flow), потом группы.
 
-- [ ] **Отчёты об ошибках.** Каждый показанный баннер ошибки автоматически
+- [x] **Отчёты об ошибках** (сделано, коммит f385ba0). Каждый показанный баннер ошибки автоматически
       пишется файлом в `<data dir>/error-reports/` (время, версия, ОС, текст и код,
       открытая доска, последние ~30 записей лога). На Mac пользователь ничего не
       делает — Claude читает папку сам. На баннере кнопка «Copy report»; после
@@ -573,8 +580,9 @@ P2 / platform:
       the relay, or show a short fingerprint on both screens to compare.
 - [ ] Private key is stored in the workspace database (`local_meta`), hence
       in backups. Consider the OS keychain / DPAPI.
-- [ ] Blobs are served from memory (the whole file is read); stream from disk
-      for large file cards. The client streams to disk already.
+- [x] Blobs are streamed from disk in 64 KiB chunks with an exact
+      `Content-Length`; a write that makes no progress for 30 s drops the
+      connection (done 2026-09-30).
 - [ ] The mDNS advert shows the device name to the whole network; offer an
       option to hide it.
 - [ ] IPv6 link-local addresses are skipped (no scope id in the advert); a
@@ -584,7 +592,148 @@ P2 / platform:
       preferred port.
 - [ ] Render image/file cards whose blob is missing as "waiting for file"
       instead of a broken image (the board reloads when the blob arrives).
-- [ ] The MCP server does not signal `local_writes` (other process): its
-      writes reach peers on the next 5 s tick, not at once.
+- [x] Writes by the MCP server (other process) reach peers in about 0.5 s:
+      while a peer is paired, a pooled reader polls this device's journal
+      cursor every 500 ms (done 2026-09-30, ADR-0011).
 - [ ] Journal compaction (all peers' cursors past a row → it can be folded
       into a snapshot) and a policy for devices that stay offline for months.
+- [ ] Known limitation (note conflict copy, 2026-09-30): if the conflict copy
+      cannot be created (`createNote` fails) and the user leaves the board, the
+      typed text survives only in the saved error report ("Copy report"); the
+      board switch does not wait for the copy and the draft is gone with the
+      editor. The banner says so. A durable fix: keep the unsaved text in a
+      local-only pending table and retry the copy on the next start.
+- [ ] Known limitation (conflict copy): the copy-creation backoff
+      (`src/app/use-card-edits.ts`, `createConflictCopy`) is checked only after
+      the refused `updateNote` and `readCard`, so every autosave during the
+      backoff still pays those two IPC round trips before it is refused.
+- [ ] Known limitation (conflict copy hand-off): keystrokes held while editing
+      passes to the copy are plain `key` values: Cmd+V (paste) and dead-key /
+      composed input typed in that window are not replayed into the copy.
+- [ ] Known limitation (conflict copy): an autosave conflict always moves editing to the copy (`startEditing`), even if the user has already moved on to card B: B loses editing, and keys meant for B go into the hand-off and the copy (`src/app/use-card-edits.ts` ~375-396, `src/state/current-board-store.ts` ~265).
+- [ ] Known limitation (conflict copy): once the capture ends (the copy is not mounted or did not take focus within `HANDOFF_MS`), Backspace deletes the selection, and the selected card is the copy holding the user's text (undo brings it back).
+- [ ] Known limitation (conflict copy): the e2e "every character typed…" has only ~30 ms between the end of typing and the copy's creation, so which path it checks depends on CI load.
+- [ ] Known limitation (conflict copy): the `endDraftHandoff` cleanup in `src/cards/note/NoteCard.tsx`:161 breaks once StrictMode is enabled.
+- [ ] Known limitation (conflict copy): during the 2 s capture Backspace/Delete are swallowed even if the user has selected another card.
+- [ ] Known limitation (not only copies): clicking another card within ~30 ms after the blur of a note whose finalize is still in flight calls `onSaved` → the global `onDeactivate` and closes the editor just opened; part of the typed text is lost.
+
+## Масштабирование — замеры 2026-09-30
+
+M3 Max, release-сборка, код `main` (f443eb4). В норме: снапшот 2 GB ассетов
+(2 048 файлов) 0,6–0,9 с; FTS по 50 000 заметок 0,9–4,7 мс; доска на 5 000
+карточек 17,6 мс (48,8 мс в базе на 50 000 карточек); писатель p95 до 0,84 мс,
+около 5 100 мутаций/с; обычный старт 2,3 мс.
+
+Долги по масштабу (замер на журнале в 100 000 изменений), делать ДО связей и
+групп, в этом порядке:
+
+- [x] (закрыто 2026-09-30: поиск по индексу на каждый origin, пустой опрос
+      42 мс → 0,013 мс, обход 201 страницы 3,83 с → 0,12–0,19 с; `missing_blobs`
+      98 мс → 21,5 мс, остаётся линейной — нужен локальный маркер «блоб ждём»)
+      **Опрос журнала читает его целиком.** `changes_since`
+      (`src-tauri/src/sync/journal.rs:96`) из-за `NOT IN … OR` идёт как
+      `SCAN changes USING INDEX idx_changes_hlc`: 36 мс на пустой опрос, раз в
+      5 с на каждого пира; страницы 0,45 мс → 46 мс (квадратично).
+      `missing_blobs` (`journal.rs:213`) — 123 мс на 20 000 ассетов.
+- [x] (закрыто 2026-09-30: причина — online backup шагами по 100 страниц с
+      паузой 10 мс, не `integrity_check`; теперь один шаг и ссылки в 4 потока:
+      214 MiB 7,8–12,1 с → 0,85–1,8 с, 20 000 файлов 6,6 с → 4,1 с)
+      **Снапшот бэкапа зависит от размера базы.** База 214 MiB без ассетов —
+      7,9 с, блокирующе перед Empty Trash и перед миграцией. Предположительно
+      `PRAGMA integrity_check` + online backup (`db/backup.rs:248`), по
+      отдельности не замерено. 20 000 мелких файлов — 6,8 с (0,33 мс на файл).
+- [ ] **Компакция журнала.** Каждое автосохранение пишет полный образ сущности,
+      около 1,6 KiB на изменение; 100 000 изменений ≈ 160 MB, 75 % базы.
+      Нужна поправка к ADR-0011 до кода.
+- [ ] **Replay замедляется.** 2 030 строк/с, 100 000 строк — 49,5 с, страница
+      110 мс → 205 мс. Причина найдена 2026-09-30: не код replay, а рост числа
+      грязных страниц на строку (5 таблиц). Лечится компакцией журнала. Варианты
+      без неё: `temp_store=MEMORY` на писателе (−17 %), пересмотр обновления
+      поискового индекса построчно (−36 % в замере без триггеров).
+- [ ] Разовый backfill журнала держит все образы в памяти
+      (`tracking.rs:282–300`): 2,6 с и 330 MiB на 50 000 карточек.
+- [ ] Поиск по запросу ≤ 3 символов без префиксного совпадения — полный скан
+      (`search.rs:222`): 98 мс на 50 000 карточек.
+- [ ] Не измерено: миграции со старой схемы на большой базе, холодный кэш,
+      LAN-транспорт, рост undo-истории и таблицы receipts, очередь писателя
+      без предела (`workspace.rs:197`).
+
+Найдено на ревью 2026-09-30 и сознательно оставлено:
+
+- [ ] `set_note_color` и обложка доски не поднимают ревизию: два разных
+      состояния карточки могут иметь одну ревизию, устаревший DTO той же
+      ревизии молча перезаписывает цвет.
+- [ ] `cardReplaced` при равной ревизии (no-op ответ метаданных) завершает
+      редактирование описания, пока пользователь печатает.
+- [ ] Дедуп фавикона при коммите может выбрать строку ассета, чей файл ещё не
+      пришёл с другого устройства; свежая локальная копия удаляется как лишняя.
+- [ ] Preview-ассет для карточки с `preview_origin = custom` вставляется
+      строкой, но карточка на него не ссылается (сирота до GC).
+- [ ] Стартовый `CollectOrphanedAssets` может удалить staged-файлы enrichment,
+      который в этот момент ещё в работе.
+- [ ] «New board», нажатый до `onInit` React Flow, ставит портал на запасную
+      позицию `{x: 200, y: 120}`, а не в центр видимой области.
+- [ ] Бэкенд позволяет «перенести» доску в её текущего родителя: портал
+      прыгает на новое место с поднятыми ревизиями. Возможно, сделать no-op.
+- [ ] Внешняя запись запускает проход sync с `force = true` в обход backoff
+      (как и локальная запись): при пачке записей MCP недоступные пиры
+      опрашиваются каждые ~500 мс.
+- [ ] Перезагружать открытую доску при ответе `stale_revision`: сейчас после
+      него ничего не перечитывается, и разошедшаяся карточка остаётся такой до
+      следующей перезагрузки. Закрывает и остаточный случай слияния снимка
+      (локальная запись rev 8, затем sync replay понизил карточку до rev 3 в
+      окне одной перезагрузки — локальная копия побеждает).
+- [ ] Реестр записей (`src/state/card-writes.ts`) должен владеть `cardsRef`
+      целиком: `useLatestRef`-эффекты в `src/App.tsx` всё ещё пишут в ref на
+      каждом коммите и могут на кадр вернуть его назад; `noteColorChanged`,
+      `boardRenamed`, `boardCoverChanged`, `filesystemAliasUpdated` доходят до
+      ref только через этот эффект.
+- [ ] Поздний `cardAdded` для предыдущей доски (создал заметку и сразу ушёл на
+      другую доску) попадает на новую доску до следующей перезагрузки:
+      игнорировать, если `card.boardId` не совпадает с открытой доской.
+- [ ] Undo/redo создания и удаления не ставит метку в реестре записей и
+      полагается на следующую за ним перезагрузку; снимок фонового опроса,
+      пришедший во время `dispatcher.undo()`, может на мгновение вернуть карточку.
+- [ ] **Проверить первым: судьба правки пользователя после `stale_revision`.**
+      Перезагрузка доски после устаревшей записи (cc6da1a) заменяет карточку
+      сохранённой версией; e2e `tests/e2e/stale-revision.spec.ts` это и
+      утверждает. Для заметки, в которую печатают, это может быть тихая потеря
+      набранного. Выяснить, что остаётся в редакторе; если текст теряется —
+      сохранять отклонённый документ как черновик или «Conflict copy».
+- [ ] Баннер ошибки теперь переживает любую перезагрузку той же доски. Ошибка
+      самой загрузки («load failed») после успешной следующей перезагрузки
+      остаётся висеть до закрытия: помечать `failed` источником и снимать
+      ошибки загрузки при успешной загрузке.
+- [ ] Перезагрузка, отброшенная рядом с пользовательской навигацией на ТУ ЖЕ
+      доску (клик по крошке открытой доски), не запоминается: если эта
+      навигация не удалась, изменение из sync не показано до следующего события.
+
+Найдено 2026-09-30 при работе над бэкапом и релизом:
+
+- [ ] **Временные файлы sync лежат в `assets/` под именами, допустимыми для
+      рядов `assets`** (`sync-<sha>.part`, `<name>.sync-part`;
+      `src-tauri/src/sync/lan.rs:875`, `:925`, `peer_client.rs:204`, запись с
+      truncate). Подделанный ряд от сопряжённого пира может заставить блоб
+      качаться бесконечно или переписать копию внутри опубликованного снапшота.
+      Перенести временные файлы в подкаталог и открывать через `create_new`.
+- [ ] Реплей sync принимает ряд ассета с `file_path`, совпадающим с чужим
+      существующим ассетом (`src-tauri/src/sync/image.rs:546–565`); UNIQUE на
+      `assets.file_path` нет. Бэкап от этого больше не теряет данные, но сам
+      ряд стоит отклонять.
+- [x] **Release 0.2.3, джоба `publish` не стартовала** (раньше записано как
+      `BlobNotFound` на шаге «Verify latest.json»). Причина: GitHub заблокировал
+      запуск джоб аккаунта (аннотация: «The job was not started because recent
+      account payments have failed or your spending limit needs to be
+      increased»). Джобы длились 2-3 с и имели 0 шагов; `BlobNotFound` это ответ
+      API на запрос логов у джобы без логов, а не ошибка шага. Сам шаг
+      «Verify latest.json» рабочий, менять его не нужно. Лечение: биллинг, затем
+      «Re-run failed jobs» (сборки переиспользуются).
+- [ ] Объяснить и задокументировать экономику GitHub Actions для приватного
+      репо: 2000 минут в месяц, множители macOS ×10 и Windows ×2 (Linux ×1).
+      В сентябре ушло около 2170 минут, из них `gates` на macOS около 920
+      (27 запусков). В `ci.yml` уже убраны дубли (push в main, PR Dependabot,
+      правки одних доков); осталось записать бюджет и как его смотреть
+      (Settings -> Billing -> Usage).
+- [ ] `list_backups` запускает `integrity_check` на каждом снапшоте: около
+      10 × 0,4 с на базе 214 MiB при открытии диалога «Backups…».
+- [ ] Prune бэкапов: 0,9 с на снапшот при 20 000 файлов × 10 снапшотов.

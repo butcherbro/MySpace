@@ -7,6 +7,7 @@ import type { TextColorId } from "../editor/text-color";
 import type { IdGenerator } from "../services/id-generator";
 import type { NoteCardDto } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import { useNoteFormatting, type NoteFormattingOptions } from "./use-note-formatting";
 
 function note(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
@@ -45,7 +46,15 @@ function harness(overrides: { activeNote?: NoteCardDto; execute?: ReturnType<typ
 
   const { result, rerender } = renderHook(
     (props: NoteFormattingOptions) => useNoteFormatting(props),
-    { initialProps: { activeNote: overrides.activeNote, dispatcher, idGenerator, dispatch } },
+    {
+      initialProps: {
+        activeNote: overrides.activeNote,
+        dispatcher,
+        idGenerator,
+        dispatch,
+        cardWrites: createCardWrites({ current: overrides.activeNote ? [overrides.activeNote] : [] }, { current: [] }, dispatch),
+      },
+    },
   );
 
   return { result, rerender, execute, dispatch };

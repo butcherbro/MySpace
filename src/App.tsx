@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppShell } from "./app/AppShell";
 import { EmptyBoardHint } from "./app/EmptyBoardHint";
 import {
@@ -18,6 +18,7 @@ import { useContextActions } from "./app/use-context-actions";
 import { useCardDrop } from "./app/use-card-drop";
 import { useBoardLoading } from "./app/use-board-loading";
 import { useBoardRefresh } from "./app/use-board-refresh";
+import { createStaleRevisionReload } from "./app/stale-revision-reload";
 import { useCreationDrag } from "./app/use-creation-drag";
 import { useTrashController } from "./app/use-trash-controller";
 import { useErrorReports } from "./app/error-reports";
@@ -68,12 +69,21 @@ import {
   initialState,
   reducer,
 } from "./state/current-board-store";
+import { useCardWrites } from "./state/card-writes";
 
 function App() {
-  const gateway: WorkspaceGateway = useMemo(() => createGateway(), []);
+  // A `stale_revision` answer to any write re-reads the open board once, so a
+  // card whose local copy diverged from the database does not stay diverged.
+  // The reload is registered below, once navigation exists.
+  const [staleRevisionReload] = useState(() => createStaleRevisionReload(createGateway()));
+  const gateway: WorkspaceGateway = staleRevisionReload.gateway;
   const idGenerator: IdGenerator = useMemo(() => new UuidV7Generator(), []);
 
   const [state, dispatch] = useReducer(reducer, initialState);
+  // The one way to change the open board's cards or apply its snapshot. The
+  // ledger alone writes `cardsRef` (notes AND portals) and the Unsorted ref,
+  // so queued tasks always read the current revision.
+  const { cardsRef, cardWrites } = useCardWrites(dispatch);
   const [contextMenu, setContextMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
   const [highlightedPortalId, setHighlightedPortalId] = useState<string | null>(null);
   const { board, breadcrumbs, viewport, viewportRevision, boardOpenRevision, error } = state;
@@ -114,10 +124,8 @@ function App() {
   const dispatcher = useMemo(() => new CommandDispatcher(gateway), [gateway]);
 
   // Contextual note rail: the active note's editor command surface + bold state.
-  const noteFormatting = useNoteFormatting({ activeNote, dispatcher, idGenerator, dispatch });
+  const noteFormatting = useNoteFormatting({ activeNote, dispatcher, idGenerator, dispatch, cardWrites });
 
-  // Always reflects the latest cards (notes AND portals) so queued tasks read the current revision.
-  const cardsRef = useLatestRef(state.cards);
 
   // Last known pointer position over the canvas, in board-space (flow
   // coordinates); drives paste placement (todo.md №15). See
@@ -133,6 +141,7 @@ function App() {
     cardsRef,
     gateway,
     dispatch,
+    cardWrites,
   });
 
   // Screen->board coordinate converter, populated by CanvasAdapter on init.
@@ -164,7 +173,7 @@ function App() {
   const trashOpen = trash.open;
   const closeTrashDrawer = trash.closeDrawer;
   // Every newly shown error is saved as a local report (never synced).
-  const { copyReport } = useErrorReports({
+  const { copyReport, recordReport } = useErrorReports({
     gateway,
     canvasError: error,
     boardId: board?.id,
@@ -198,6 +207,7 @@ function App() {
     dispatcher,
     idGenerator,
     dispatch,
+    cardWrites,
   });
 
   // The two pointer-driven drags (Unsorted panel, tool rail) place cards that
@@ -209,6 +219,7 @@ function App() {
       board,
       gateway,
       dispatch,
+      cardWrites,
       screenToFlowRef,
       handleCreateNote,
       handleCreateLink,
@@ -238,6 +249,7 @@ function App() {
     notes,
     gateway,
     dispatch,
+    cardWrites,
     dispatcher,
     idGenerator,
     createFolderShortcut,
@@ -267,7 +279,16 @@ function App() {
     handleUpdateEmbedDescription,
     handleFinalizeEmbedDescription,
     handleResizeNote,
-  } = useCardEdits({ gateway, dispatch, queueRef, cardsRef, dispatcher, idGenerator });
+  } = useCardEdits({
+    gateway,
+    dispatch,
+    cardWrites,
+    queueRef,
+    cardsRef,
+    dispatcher,
+    idGenerator,
+    recordErrorReport: recordReport,
+  });
 
   // Build the canvas projection from all cards (notes + portals). Memoised on
   // `state.cards` (P1.8): the canvas diffs this array per card, and an App
@@ -311,6 +332,7 @@ function App() {
     dispatcher,
     idGenerator,
     dispatch,
+    cardWrites,
     refreshTrash,
   });
 
@@ -363,7 +385,7 @@ function App() {
   });
 
   // Board loading and the navigation spine (tabs, history, initial load).
-  const navigation = useBoardLoading({ gateway, dispatch, queueRef, viewportController });
+  const navigation = useBoardLoading({ gateway, dispatch, cardWrites, queueRef, viewportController });
   const navigateTo = navigation.navigateTo;
 
   const search = useSearchController({
@@ -392,6 +414,7 @@ function App() {
       dispatcher,
       idGenerator,
       dispatch,
+      cardWrites,
       queueRef,
       cardsRef,
       boardRef,
@@ -411,6 +434,9 @@ function App() {
     loadQuickBoards,
     reloadBoardRef,
   });
+  useEffect(() => {
+    staleRevisionReload.setReload(reloadCurrentBoard);
+  }, [staleRevisionReload, reloadCurrentBoard]);
 
 
   const handleBackToCreate = useCallback(() => {
@@ -425,6 +451,7 @@ function App() {
     gateway,
     idGenerator,
     dispatch,
+    cardWrites,
     setQuickBoards,
   });
 
@@ -835,6 +862,9 @@ function App() {
             highlightQuery={search.highlightQuery}
             onScreenToFlowReady={(fn) => {
               screenToFlowRef.current = fn;
+              // Метка для e2e: до этого момента новая доска встаёт на запасную
+              // позицию, и тест, кликнувший раньше, получает другую раскладку.
+              canvasRef.current?.setAttribute("data-flow-ready", "true");
             }}
             events={{
               onCardsMoved: handleCardsMoved,

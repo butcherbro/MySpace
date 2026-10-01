@@ -9,8 +9,9 @@
 //! Triggers of a pass: startup; every [`TICK`] while a paired peer has an
 //! address (discovered, or the last one that worked); [`DEBOUNCE`] after a
 //! local journaled write (`Workspace::local_writes`), which also POKEs the
-//! peers so they pull at once instead of on their next tick; a peer's poke;
-//! `sync_now`. One pass at a time.
+//! peers so they pull at once instead of on their next tick; within
+//! [`EXTERNAL_POLL`] of a journaled write by another process (the MCP server),
+//! which pokes too; a peer's poke; `sync_now`. One pass at a time.
 //!
 //! A pass, per peer: `/v1/info` (identity check) → `/v1/changes` with our
 //! cursors until `next` is empty, each page applied through the funnel →
@@ -33,6 +34,7 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::mutation::Mutation;
 use crate::repositories::devices;
 
+use super::compact;
 use super::discovery::{Discovered, DiscoveredMap, Discovery};
 use super::journal;
 use super::pairing::{self, PairingWindow};
@@ -44,6 +46,10 @@ use super::server::{self, ServerHandle, ServerHooks, ServerState};
 pub const TICK: Duration = Duration::from_secs(5);
 /// Delay after a local write, so a burst of writes is one pass.
 pub const DEBOUNCE: Duration = Duration::from_millis(500);
+/// How often the loop looks for journaled writes by another process, which
+/// `local_writes` never reports (only while a peer is paired). Also their
+/// debounce.
+pub const EXTERNAL_POLL: Duration = Duration::from_millis(500);
 /// Rows per `/v1/changes` page.
 pub const PAGE: usize = 500;
 /// Longest wait between automatic attempts at an unreachable peer.
@@ -59,6 +65,9 @@ pub struct LanConfig {
     pub discovery: bool,
     /// Run the background loop (tests drive passes by hand).
     pub run_loop: bool,
+    /// Compact the journal after a pass that received rows (tests compact
+    /// explicitly, never behind their back).
+    pub compact: bool,
 }
 
 impl Default for LanConfig {
@@ -67,6 +76,7 @@ impl Default for LanConfig {
             bind: SocketAddr::from(([0, 0, 0, 0], 0)),
             discovery: true,
             run_loop: true,
+            compact: true,
         }
     }
 }
@@ -173,6 +183,7 @@ pub struct LanSync {
     last_state: Mutex<Option<SyncState>>,
     stop: watch::Sender<bool>,
     runtime: tokio::runtime::Handle,
+    compact: bool,
 }
 
 struct Hooks {
@@ -266,6 +277,7 @@ impl LanSync {
             last_state: Mutex::new(None),
             stop,
             runtime: tokio::runtime::Handle::current(),
+            compact: config.compact,
         });
         if let Ok(mut weak) = hooks.lan.lock() {
             *weak = Arc::downgrade(&lan);
@@ -570,10 +582,13 @@ impl LanSync {
 
     async fn run_loop(self: Arc<Self>, mut stop: watch::Receiver<bool>) {
         let local_writes = self.ws.local_writes();
+        // Own journal cursor as of the last poke: rows up to it were announced.
+        let mut announced = self.own_cursor().await.ok().flatten();
         let mut first = true;
         loop {
             let (mut force, mut poke) = (first, false);
             if !first {
+                let paired = self.has_peers().await;
                 tokio::select! {
                     _ = stop.changed() => break,
                     _ = tokio::time::sleep(TICK) => {}
@@ -583,11 +598,28 @@ impl LanSync {
                         poke = true;
                     }
                     _ = self.wake.notified() => force = true,
+                    _ = self.unannounced_write(&announced), if paired => {
+                        // An own write that raced this poll left a pending
+                        // `local_writes` permit; this pass announces it too
+                        // (the cursor is read below), so drop the permit.
+                        tokio::select! {
+                            biased;
+                            _ = local_writes.notified() => {}
+                            _ = std::future::ready(()) => {}
+                        }
+                        force = true;
+                        poke = true;
+                    }
                 }
             }
             first = false;
             if *stop.borrow() {
                 break;
+            }
+            if poke {
+                if let Ok(cursor) = self.own_cursor().await {
+                    announced = cursor;
+                }
             }
             let report = self.pass(force, poke).await;
             if !report.errors.is_empty() {
@@ -595,6 +627,32 @@ impl LanSync {
                     errors = report.errors.len(),
                     "sync: pass finished with errors"
                 );
+            }
+        }
+    }
+
+    async fn has_peers(&self) -> bool {
+        self.ws
+            .read(peers::list_peers)
+            .await
+            .is_ok_and(|peers| !peers.is_empty())
+    }
+
+    /// This device's own journal cursor: it moves only on a journaled local
+    /// write, by this process or another one on the same database.
+    async fn own_cursor(&self) -> Result<Option<String>, WorkspaceError> {
+        let device_id = self.device_id().to_string();
+        self.ws.read(move |c| journal::cursor(c, &device_id)).await
+    }
+
+    /// Resolves once the own cursor is past `announced`. This process's writes
+    /// refresh `announced` before their poke (`local_writes`), so what is left
+    /// is another process's write (the MCP server), which nothing else reports.
+    async fn unannounced_write(&self, announced: &Option<String>) {
+        loop {
+            tokio::time::sleep(EXTERNAL_POLL).await;
+            if matches!(self.own_cursor().await, Ok(cursor) if cursor != *announced) {
+                return;
             }
         }
     }
@@ -728,6 +786,12 @@ impl LanSync {
         }
         self.syncing.store(false, Ordering::SeqCst);
         self.emit_state().await;
+        // Received rows may supersede held ones (ADR-0011 amendment, R4).
+        if self.compact && report.rows_received > 0 {
+            if let Err(error) = compact::run(&self.ws).await {
+                tracing::warn!(%error, error_code = "sync_compaction_failed", "sync: journal compaction failed");
+            }
+        }
         report
     }
 
@@ -812,8 +876,18 @@ impl LanSync {
         if missing.is_empty() {
             return (Vec::new(), None);
         }
-        if let Err(e) = tokio::fs::create_dir_all(&assets_dir).await {
-            return (Vec::new(), Some(format!("cannot create asset dir: {e}")));
+        let temp_dir = assets_dir.join(SYNC_TEMP_DIR);
+        let prepared = tokio::task::spawn_blocking({
+            let temp_dir = temp_dir.clone();
+            move || clear_temp_dir(&temp_dir)
+        })
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+        if let Err(e) = prepared {
+            return (
+                Vec::new(),
+                Some(format!("cannot prepare sync temp dir: {e}")),
+            );
         }
         let mut placed = Vec::new();
         let mut first_error = None;
@@ -821,7 +895,7 @@ impl LanSync {
             if !server::is_sha256(&sha) {
                 continue;
             }
-            let temp = assets_dir.join(format!("sync-{sha}.part"));
+            let temp = temp_dir.join(format!("blob-{sha}"));
             match client.fetch_blob(&sha, &temp).await {
                 Ok(true) => {}
                 Ok(false) => continue,
@@ -852,17 +926,48 @@ impl LanSync {
                 }
             }
         }
+        // Only when empty; what a failed removal left is cleared next pass.
+        let _ = tokio::fs::remove_dir(&temp_dir).await;
         (placed, first_error)
     }
 }
 
+/// Where a transfer stages its files, inside the asset directory (same
+/// volume, so the final rename is atomic). The `_` makes it a name no asset
+/// row can hold (`is_safe_asset_name`), so a forged row can neither alias a
+/// temp file nor get one of its files truncated by a transfer.
+pub const SYNC_TEMP_DIR: &str = "sync_tmp";
+
+/// Creates the temp dir, removing files an interrupted transfer left in it.
+/// One pass at a time, so nothing in it is in use. Best effort per file.
+fn clear_temp_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    // Одна неудаляемая запись не должна обрывать загрузку всех блобов на
+    // каждом проходе: пропускаем её, в худшем случае не встанет один блоб.
+    for entry in std::fs::read_dir(dir)? {
+        let path = match entry {
+            Ok(entry) if entry.file_type().is_ok_and(|t| t.is_file()) => entry.path(),
+            Ok(_) => continue,
+            Err(error) => {
+                tracing::warn!(%error, "sync: cannot read a sync temp dir entry");
+                continue;
+            }
+        };
+        if let Err(error) = std::fs::remove_file(&path) {
+            tracing::warn!(%error, path = %path.display(), "sync: cannot remove a leftover temp file");
+        }
+    }
+    Ok(())
+}
+
 /// Copies a verified blob to every missing asset file name (atomic per file:
-/// copy to a temp name, then rename).
+/// copy to a new file in the temp dir, then rename over the missing name).
 fn place_blob(
     assets_dir: &std::path::Path,
     temp: &std::path::Path,
     files: &[String],
 ) -> Result<(), String> {
+    let err = |e: std::io::Error| format!("cannot place blob: {e}");
     for name in files {
         if !crate::is_safe_asset_name(name) {
             continue;
@@ -871,12 +976,19 @@ fn place_blob(
         if dest.is_file() {
             continue;
         }
-        let staging = assets_dir.join(format!("{name}.sync-part"));
-        std::fs::copy(temp, &staging).map_err(|e| format!("cannot place blob: {e}"))?;
-        std::fs::rename(&staging, &dest).map_err(|e| {
+        let staging = assets_dir.join(SYNC_TEMP_DIR).join(format!("file-{name}"));
+        let copied = std::fs::File::open(temp).and_then(|mut input| {
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&staging)?;
+            std::io::copy(&mut input, &mut output)?;
+            output.sync_all()
+        });
+        if let Err(e) = copied.and_then(|()| std::fs::rename(&staging, &dest)) {
             let _ = std::fs::remove_file(&staging);
-            format!("cannot place blob: {e}")
-        })?;
+            return Err(err(e));
+        }
     }
     Ok(())
 }

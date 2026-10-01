@@ -14,7 +14,14 @@
 // dirty draft synchronously, so its write lands in the queue in time for the
 // queue flush that follows.
 
-type DraftFlusher = () => Promise<void>;
+/**
+ * `finalize` ends editing (leaving the board, closing the window); `save`
+ * writes a dirty draft as an ordinary save and editing goes on (a reload of
+ * the open board).
+ */
+export type DraftFlushMode = "finalize" | "save";
+
+type DraftFlusher = (mode: DraftFlushMode) => Promise<void>;
 
 const flushers = new Set<DraftFlusher>();
 
@@ -27,15 +34,15 @@ export function registerDraftFlusher(flush: DraftFlusher): () => void {
 }
 
 /**
- * Finalizes every currently-registered draft. Best-effort per draft: a
+ * Flushes every currently-registered draft in `mode`. Best-effort per draft: a
  * failure is left for the owning hook's own error state to surface, and never
  * blocks the others or the caller.
  */
-export async function flushAllDrafts(): Promise<void> {
+export async function flushAllDrafts(mode: DraftFlushMode = "finalize"): Promise<void> {
   const snapshot = Array.from(flushers);
   await Promise.all(
     snapshot.map((flush) =>
-      flush().catch(() => {
+      flush(mode).catch(() => {
         // Best-effort; the owning `useDocumentDraft` surfaces its own error.
       }),
     ),

@@ -3,7 +3,13 @@ import type { SetStateAction } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IdGenerator } from "../services/id-generator";
 import type { AssetDto, BoardPortalDto, QuickBoardDto, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import {
+  initialState,
+  reducer,
+  type CurrentBoardAction,
+  type CurrentBoardState,
+} from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import { useBoardCover, type BoardCoverOptions } from "./use-board-cover";
 
 const mocks = vi.hoisted(() => ({
@@ -87,8 +93,10 @@ function harness(
   const cards = overrides.cards ?? [portal()];
   const contextMenu = overrides.contextMenu === undefined ? { cardId: "portal-1" } : overrides.contextMenu;
 
+  const cardWrites = createCardWrites({ current: cards }, { current: [] }, dispatch);
+
   const { result } = renderHook(() =>
-    useBoardCover({ contextMenu, cards, gateway, idGenerator, dispatch, setQuickBoards }),
+    useBoardCover({ contextMenu, cards, gateway, idGenerator, dispatch, cardWrites, setQuickBoards }),
   );
 
   return {
@@ -128,9 +136,9 @@ describe("useBoardCover", () => {
 
       expect(test.setBoardCover).toHaveBeenCalledWith({ boardId: "child-board-1", assetId: "asset-clipboard" });
       expect(test.dispatch).toHaveBeenCalledWith({
-        type: "cardReplaced",
-        id: "portal-1",
-        card: expect.objectContaining({ target: expect.objectContaining({ coverAsset: clipboardAsset }) }),
+        type: "boardCoverChanged",
+        boardId: "child-board-1",
+        coverAsset: clipboardAsset,
       });
       const boards = appliedQuickBoards(test.setQuickBoards, [quickBoard()]);
       expect(boards).toEqual([quickBoard({ coverAsset: clipboardAsset })]);
@@ -154,6 +162,29 @@ describe("useBoardCover", () => {
   });
 
   describe("handleChooseCover", () => {
+    it("shows the cover even when the portal was moved (new revision) while the file was being imported", async () => {
+      mocks.pickImageFile.mockResolvedValue({
+        path: "/tmp/picked.png",
+        fileName: "picked.png",
+        mimeType: "image/png",
+      });
+      const pickedAsset = asset({ id: "asset-picked" });
+      const captured = portal();
+      // Пока шёл импорт, перемещение из очереди подняло портал до ревизии 2.
+      const moved = { ...captured, revision: 2, frame: { x: 300, y: 40, width: 200, height: 200 } };
+      const test = harness({ cards: [captured], importAsset: vi.fn(async () => pickedAsset) });
+
+      await act(async () => {
+        await test.result.current.handleChooseCover();
+      });
+
+      const state = test.dispatch.mock.calls.reduce<CurrentBoardState>(
+        (s, [action]) => reducer(s, action),
+        { ...initialState, cards: [moved] },
+      );
+      expect(state.cards).toEqual([{ ...moved, target: { ...moved.target, coverAsset: pickedAsset } }]);
+    });
+
     it("imports the picked file, sets the board cover, and updates the portal + quick board", async () => {
       mocks.pickImageFile.mockResolvedValue({
         path: "/tmp/picked.png",
@@ -175,9 +206,9 @@ describe("useBoardCover", () => {
       });
       expect(test.setBoardCover).toHaveBeenCalledWith({ boardId: "child-board-1", assetId: "asset-picked" });
       expect(test.dispatch).toHaveBeenCalledWith({
-        type: "cardReplaced",
-        id: "portal-1",
-        card: expect.objectContaining({ target: expect.objectContaining({ coverAsset: pickedAsset }) }),
+        type: "boardCoverChanged",
+        boardId: "child-board-1",
+        coverAsset: pickedAsset,
       });
       const boards = appliedQuickBoards(test.setQuickBoards, [quickBoard()]);
       expect(boards).toEqual([quickBoard({ coverAsset: pickedAsset })]);
@@ -210,9 +241,9 @@ describe("useBoardCover", () => {
 
       expect(test.removeBoardCover).toHaveBeenCalledWith("child-board-1");
       expect(test.dispatch).toHaveBeenCalledWith({
-        type: "cardReplaced",
-        id: "portal-1",
-        card: expect.objectContaining({ target: expect.objectContaining({ coverAsset: null }) }),
+        type: "boardCoverChanged",
+        boardId: "child-board-1",
+        coverAsset: null,
       });
       const boards = appliedQuickBoards(test.setQuickBoards, [quickBoard({ coverAsset: asset() })]);
       expect(boards).toEqual([quickBoard({ coverAsset: null })]);

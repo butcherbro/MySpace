@@ -10,11 +10,13 @@ use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::domain::asset_service;
 use myspace_lib::domain::errors::WorkspaceError;
 use myspace_lib::domain::models::{
-    CreateChildBoardInput, CreateImageCardInput, CreateNoteInput, Frame,
+    AssetDto, CreateChildBoardInput, CreateImageCardInput, CreateNoteInput, Frame,
+    UpdateViewportInput,
 };
 use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::domain::plain_text::plain_text_to_document;
-use myspace_lib::sync::lan::{LanConfig, LanSync, NoEvents};
+use myspace_lib::repositories::workspace_repository;
+use myspace_lib::sync::lan::{LanConfig, LanSync, NoEvents, SyncEvents, SyncState};
 use myspace_lib::sync::peer_client::PeerClient;
 use myspace_lib::sync::peers::{self, PeerOutcome, PeerWrite, TransportIdentity};
 use myspace_lib::sync::tls;
@@ -31,6 +33,10 @@ impl Node {
     }
 
     async fn start_with(tag: &str, run_loop: bool) -> Self {
+        Self::start_with_events(tag, run_loop, Arc::new(NoEvents)).await
+    }
+
+    async fn start_with_events(tag: &str, run_loop: bool, events: Arc<dyn SyncEvents>) -> Self {
         let dir = std::env::temp_dir().join(format!("myspace-lan-{tag}-{}", uuid::Uuid::now_v7()));
         let ws = Workspace::open(WorkspacePaths::new(&dir)).unwrap();
         let lan = LanSync::start(
@@ -39,8 +45,9 @@ impl Node {
                 bind: SocketAddr::from(([127, 0, 0, 1], 0)),
                 discovery: false,
                 run_loop,
+                compact: false,
             },
-            Arc::new(NoEvents),
+            events,
         )
         .await
         .unwrap();
@@ -254,6 +261,34 @@ async fn pairing_then_one_pass_moves_rows_and_blobs() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_large_blob_transfers_and_verifies() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    pair(&a, &b).await;
+
+    let bytes: Vec<u8> = (0..40usize << 20).map(|i| (i % 253) as u8).collect();
+    let staged = asset_service::stage_asset_bytes(
+        &a.ws.paths().assets_dir(),
+        "video.bin",
+        "application/octet-stream",
+        &bytes,
+    )
+    .unwrap();
+    let sha = staged.asset.sha256.clone().unwrap();
+    a.ws.apply(Mutation::InsertAsset(staged.asset))
+        .await
+        .unwrap();
+    drop(bytes);
+
+    let client = PeerClient::pinned(&b.identity().await, a.lan.fingerprint(), a.socket()).unwrap();
+    let dest = b.dir.join("big.part");
+    assert!(client.fetch_blob(&sha, &dest).await.unwrap());
+    let got = std::fs::read(&dest).unwrap();
+    assert_eq!(got.len(), 40 << 20);
+    assert_eq!(asset_service::sha256_hex(&got), sha);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unpaired_and_impostor_clients_are_refused() {
     let a = Node::start("a").await;
     let b = Node::start("b").await;
@@ -400,6 +435,104 @@ async fn a_wrong_code_is_refused_and_five_failures_burn_it() {
     assert!(a.lan.pair_with(None, Some(&a.addr()), &code).await.is_err());
 }
 
+/// An asset row on `node` named `file_path`, with its file.
+async fn insert_raw_asset(node: &Node, file_path: &str, bytes: &[u8]) -> String {
+    let dir = node.ws.paths().assets_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(file_path), bytes).unwrap();
+    let sha = asset_service::sha256_hex(bytes);
+    node.ws
+        .apply(Mutation::InsertAsset(AssetDto {
+            id: new_id(),
+            file_name: file_path.into(),
+            mime_type: "application/octet-stream".into(),
+            width: None,
+            height: None,
+            size_bytes: bytes.len() as i64,
+            file_path: file_path.into(),
+            sha256: Some(sha.clone()),
+        }))
+        .await
+        .unwrap();
+    sha
+}
+
+/// Asset rows named like the temp files of earlier builds are ordinary
+/// assets: a transfer neither loops on them nor writes into their files
+/// (a published backup may hard-link them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn asset_names_that_look_like_temp_files_are_ordinary_assets() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    pair(&a, &b).await;
+
+    let looped = b"named like a download temp file".to_vec();
+    let looped_name = format!("sync-{}.part", asset_service::sha256_hex(&looped));
+    insert_raw_asset(&a, &looped_name, &looped).await;
+    let kept = b"a file a snapshot links".to_vec();
+    insert_raw_asset(&a, "pic.png.sync-part", &kept).await;
+    insert_raw_asset(&a, "pic.png", b"the picture").await;
+
+    // B already holds `pic.png.sync-part`, hard-linked by a backup.
+    let b_assets = b.ws.paths().assets_dir();
+    std::fs::create_dir_all(&b_assets).unwrap();
+    std::fs::write(b_assets.join("pic.png.sync-part"), &kept).unwrap();
+    let link = b.dir.join("snapshot-link");
+    std::fs::hard_link(b_assets.join("pic.png.sync-part"), &link).unwrap();
+
+    let report = b.lan.sync_now().await;
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert_eq!(report.blobs_fetched, 2, "{report:?}");
+    assert_eq!(std::fs::read(b_assets.join(&looped_name)).unwrap(), looped);
+    assert_eq!(
+        std::fs::read(b_assets.join("pic.png")).unwrap(),
+        b"the picture"
+    );
+    assert_eq!(
+        std::fs::read(b_assets.join("pic.png.sync-part")).unwrap(),
+        kept
+    );
+    assert_eq!(std::fs::read(&link).unwrap(), kept, "the linked file");
+
+    // Nothing is missing any more: no download repeats.
+    let report = b.lan.sync_now().await;
+    assert_eq!(report.blobs_fetched, 0, "{report:?}");
+    let dir = b_assets.clone();
+    let missing =
+        b.ws.read(move |c| myspace_lib::sync::journal::missing_blobs(c, &dir))
+            .await
+            .unwrap();
+    assert!(missing.is_empty(), "{missing:?}");
+    assert!(!b_assets
+        .join(myspace_lib::sync::lan::SYNC_TEMP_DIR)
+        .exists());
+}
+
+/// Files an interrupted transfer left in the temp dir are removed by the
+/// next pass and never block it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_transfer_files_are_cleaned_up() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    pair(&a, &b).await;
+    let (_, file, sha) = populate(&a).await;
+
+    let temp =
+        b.ws.paths()
+            .assets_dir()
+            .join(myspace_lib::sync::lan::SYNC_TEMP_DIR);
+    std::fs::create_dir_all(&temp).unwrap();
+    std::fs::write(temp.join(format!("blob-{sha}")), b"half a download").unwrap();
+    std::fs::write(temp.join(format!("file-{file}")), b"half a copy").unwrap();
+
+    let report = b.lan.sync_now().await;
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert_eq!(report.blobs_fetched, 1);
+    let blob = std::fs::read(b.ws.paths().assets_dir().join(&file)).unwrap();
+    assert_eq!(asset_service::sha256_hex(&blob), sha);
+    assert!(!temp.exists());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_transport_identity_is_stable_and_follows_the_device_id() {
     let a = Node::start("a").await;
@@ -439,6 +572,165 @@ async fn with_the_loop_running_a_local_write_reaches_the_peer_by_itself() {
     }
 }
 
+/// Creates a child board titled `title` under `home` through `ws`.
+async fn create_board(ws: &Workspace, home: String, title: &str) -> String {
+    let board = new_id();
+    ws.apply(Mutation::CreateChildBoard(CreateChildBoardInput {
+        parent_board_id: home,
+        board_id: board.clone(),
+        portal_card_id: new_id(),
+        frame: frame(10.0),
+        title: title.into(),
+    }))
+    .await
+    .unwrap();
+    board
+}
+
+/// Waits until `node` holds `board`; `None` once `within` has passed.
+async fn arrival(
+    node: &Node,
+    board: &str,
+    within: std::time::Duration,
+) -> Option<std::time::Duration> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < within {
+        if node
+            .scalar("SELECT title FROM boards WHERE id = ?1", board)
+            .await
+            .is_some()
+        {
+            return Some(start.elapsed());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    None
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_the_loop_running_another_process_write_reaches_the_peer_by_itself() {
+    let a = Node::start_with("a", true).await;
+    let b = Node::start_with("b", true).await;
+    pair(&a, &b).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // A write on B makes B's loop pass and poke A: once A holds it, B's loop
+    // has just restarted its TICK wait, so B will not pull by itself for ~5 s.
+    let marker = create_board(&b.ws, b.home().await, "From B").await;
+    arrival(&a, &marker, std::time::Duration::from_secs(4))
+        .await
+        .expect("A never pulled B's write");
+
+    // The MCP server: a second workspace on A's database, with its own writer
+    // connection and its own `local_writes` that A's loop never hears.
+    let mcp = Workspace::open_existing(WorkspacePaths::new(&a.dir)).unwrap();
+    let board = create_board(&mcp, a.home().await, "From MCP").await;
+    arrival(&b, &board, std::time::Duration::from_secs(4))
+        .await
+        .expect("B did not pull the other process's write well under the 5 s tick");
+}
+
+/// Counts user-visible passes: the rising edges of `syncing`. Only a forced
+/// pass (a local or foreign write, a wake) shows as syncing; a tick does not.
+#[derive(Default)]
+struct PassCounter {
+    syncing: std::sync::Mutex<bool>,
+    passes: std::sync::atomic::AtomicUsize,
+}
+
+impl PassCounter {
+    fn get(&self) -> usize {
+        self.passes.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl SyncEvents for PassCounter {
+    fn state(&self, state: &SyncState) {
+        let mut syncing = self.syncing.lock().unwrap();
+        if state.syncing && !*syncing {
+            self.passes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        *syncing = state.syncing;
+    }
+
+    fn applied(&self, _: &[String]) {}
+}
+
+/// A with its loop and a pass counter, paired with B (no loop), settled.
+async fn counted_pair() -> (Node, Node, Arc<PassCounter>) {
+    let counter = Arc::new(PassCounter::default());
+    let a = Node::start_with_events("a", true, counter.clone()).await;
+    let b = Node::start("b").await;
+    pair(&a, &b).await;
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    (a, b, counter)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_by_this_process_is_announced_once() {
+    let (a, _b, counter) = counted_pair().await;
+    let before = counter.get();
+    create_board(&a.ws, a.home().await, "Own").await;
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    // The local-write pass only; the foreign-write poll does not fire too.
+    assert_eq!(counter.get() - before, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_non_journaled_write_by_another_process_triggers_no_pass() {
+    let (a, _b, counter) = counted_pair().await;
+    let mcp = Workspace::open_existing(WorkspacePaths::new(&a.dir)).unwrap();
+    let home = a.home().await;
+    let revision = {
+        let home = home.clone();
+        a.ws.read(move |c| {
+            workspace_repository::load_board_snapshot(c, &home).map(|s| s.viewport.revision)
+        })
+        .await
+        .unwrap()
+    };
+    let before = counter.get();
+    mcp.apply(Mutation::SaveViewport(UpdateViewportInput {
+        board_id: home,
+        expected_revision: revision,
+        x: 10.0,
+        y: 20.0,
+        zoom: 1.5,
+    }))
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert_eq!(counter.get() - before, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_journaled_write_by_another_process_triggers_a_pass() {
+    // Writes land at different phases of the poll; each must be seen by the
+    // next poll or the one after, whatever else committed around it.
+    let (a, _b, counter) = counted_pair().await;
+    let mcp = Workspace::open_existing(WorkspacePaths::new(&a.dir)).unwrap();
+    for step in 0..5u64 {
+        tokio::time::sleep(std::time::Duration::from_millis(step * 110)).await;
+        let before = counter.get();
+        create_board(&mcp, a.home().await, "From MCP").await;
+        if step % 2 == 1 {
+            // An own write right behind it: its pass may announce both.
+            create_board(&a.ws, a.home().await, "Own").await;
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        while counter.get() == before {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "write {step} by another process triggered no pass"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // Let the triggered pass (and any own-write pass) finish.
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    }
+}
+
 /// Needs multicast on the host (not available in every CI container): run
 /// with `cargo test --test sync_lan -- --ignored`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -453,6 +745,7 @@ async fn mdns_discovers_the_other_device_and_pairs_by_device_id() {
                 bind: SocketAddr::from(([0, 0, 0, 0], 0)),
                 discovery: true,
                 run_loop: false,
+                compact: false,
             },
             Arc::new(NoEvents),
         )

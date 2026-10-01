@@ -14,6 +14,42 @@ describe("NoteEditor", () => {
     expect(screen.getByText("hello")).toBeInTheDocument();
   });
 
+  it("shows a document replaced from outside without reporting it as the user's change", () => {
+    const onChange = vi.fn();
+    const stored = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "stored" }] }] };
+    const { rerender } = render(<NoteEditor document={doc} editable={true} onChange={onChange} />);
+
+    // Mounting may report the initial document once; only the replacement matters here.
+    onChange.mockClear();
+    rerender(<NoteEditor document={stored} editable={true} onChange={onChange} />);
+
+    expect(screen.getByText("stored")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("types the keystrokes handed to it at the end, Enter as a new paragraph and markup as text", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <NoteEditor
+        document={doc}
+        editable={true}
+        onChange={onChange}
+        initialCaretPoint="end"
+        takeHandedInput={() => " ab\n<b>c"}
+      />,
+    );
+    // jsdom не фокусирует contenteditable сам: событие фокуса шлём явно.
+    fireEvent.focus(container.querySelector('[contenteditable="true"]')!);
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "hello ab" }] },
+        { type: "paragraph", content: [{ type: "text", text: "<b>c" }] },
+      ],
+    });
+  });
+
   it("reflects the editable flag after mount", () => {
     const { rerender } = render(
       <NoteEditor document={doc} editable={false} onChange={vi.fn()} />,

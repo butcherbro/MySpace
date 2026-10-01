@@ -35,9 +35,12 @@ interface NoteEditorProps {
    * Screen point (client coordinates) of the click that started editing. Idle
    * notes render static HTML (P1.8), so the editor mounts *after* that click
    * and cannot have seen it; placing the caret at this point keeps "the caret
-   * lands where the user clicked". Read once, when editing begins.
+   * lands where the user clicked". Read once, when editing begins. `"end"`
+   * puts the caret after the last character.
    */
-  initialCaretPoint?: { x: number; y: number } | null;
+  initialCaretPoint?: { x: number; y: number } | "end" | null;
+  /** Keystrokes typed while editing was passing to this editor; typed in when it takes focus. */
+  takeHandedInput?: () => string;
 }
 
 /**
@@ -58,7 +61,12 @@ export function NoteEditor({
   onStrikeStateChange,
   onTextColorChange,
   initialCaretPoint = null,
+  takeHandedInput,
 }: NoteEditorProps) {
+  const takeHandedInputRef = useRef(takeHandedInput);
+  useLayoutEffect(() => {
+    takeHandedInputRef.current = takeHandedInput;
+  }, [takeHandedInput]);
   const initialCaretPointRef = useRef(initialCaretPoint);
   // Layout effect: synced before the passive focus effect below reads it.
   useLayoutEffect(() => {
@@ -74,6 +82,15 @@ export function NoteEditor({
     onBlur: () => {
       onBlur?.();
     },
+    onFocus: ({ editor }) => {
+      const typed = takeHandedInputRef.current?.();
+      if (!typed) return;
+      // Текстом, а не строкой-HTML: «<» остаётся символом, а Enter — новым абзацем.
+      typed.split("\n").forEach((line, i) => {
+        if (i > 0) editor.commands.splitBlock();
+        if (line) editor.commands.insertContent({ type: "text", text: line });
+      });
+    },
   });
 
   // Reflect external document changes (e.g. a snapshot reload) into the editor.
@@ -84,7 +101,9 @@ export function NoteEditor({
       const current = JSON.stringify(editor.getJSON());
       const incoming = JSON.stringify(document);
       if (current !== incoming) {
-        editor.commands.setContent(document as JSONContent);
+        // Не пользовательская правка: без onUpdate черновик не становится грязным
+        // и не пишет чужой документ обратно.
+        editor.commands.setContent(document as JSONContent, { emitUpdate: false });
       }
     }
   }, [document, editor]);
@@ -109,6 +128,10 @@ export function NoteEditor({
     // user clicked rather than always at the end.
     if (editable && editor) {
       const point = initialCaretPointRef.current;
+      if (point === "end") {
+        editor.commands.focus("end");
+        return;
+      }
       let pos: number | null = null;
       if (point) {
         try {

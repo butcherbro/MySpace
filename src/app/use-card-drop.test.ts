@@ -16,7 +16,13 @@ import type {
   NoteCardDto,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import {
+  initialState,
+  reducer,
+  type CurrentBoardAction,
+  type CurrentBoardState,
+} from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import type { CrossBoardCardSnapshot, CrossBoardDragState } from "../canvas/cross-board-drag";
 import type { CrossBoardDragEnd } from "../canvas/use-cross-board-drag";
 import type { moveSelectionOntoBoard } from "../canvas/move-selection-onto-board";
@@ -199,6 +205,7 @@ function harness(
     dispatcher,
     idGenerator,
     dispatch,
+    cardWrites: createCardWrites(cardsRef, { current: [] }, dispatch),
     queueRef,
     cardsRef,
     boardRef,
@@ -535,6 +542,110 @@ describe("useCardDrop", () => {
       await waitFor(() =>
         expect(test.dispatch).toHaveBeenCalledWith({ type: "cardsRemoved", ids: ["portal-1"] }),
       );
+    });
+
+    it("shows a portal dropped onto the open board's own breadcrumb at its receipt position and revisions", async () => {
+      const p = portal({ id: "portal-1", revision: 1, target: { ...portal().target, id: "board-A", boardRevision: 1 } });
+      const destination = { x: 40, y: 300, width: 120, height: 112 };
+      const test = harness({
+        cards: [p],
+        board: board({ id: "home" }),
+        moveSelectionOntoBoard: async () => ({
+          operationId: "op",
+          targetBoardId: "home",
+          cards: [],
+          boards: [
+            movedBoardReceipt({
+              portalCardId: "portal-1",
+              previousParentBoardId: "home",
+              destinationPortalFrame: destination,
+              afterBoardRevision: 2,
+              afterPortalRevision: 2,
+            }),
+          ],
+        }),
+      });
+
+      act(() => {
+        test.result.current.handleCardsDroppedOnBoard(["portal-1"], "home");
+      });
+      await waitFor(() => expect(mocks.moveSelectionOntoBoard).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Прогоняем все диспатчи через настоящий reducer: важно, что увидит пользователь.
+      const state = test.dispatch.mock.calls.reduce<CurrentBoardState>(
+        (s, [action]) => reducer(s, action),
+        { ...initialState, board: board({ id: "home" }), cards: [p] },
+      );
+      expect(state.cards).toHaveLength(1);
+      expect(state.cards[0]).toMatchObject({
+        id: "portal-1",
+        revision: 2,
+        frame: destination,
+        target: { id: "board-A", boardRevision: 2 },
+      });
+    });
+
+    it("moves leaves into Unsorted and refreshes the portal when a mixed selection is dropped on the open board", async () => {
+      const n = note({ id: "n1", revision: 1 });
+      const p = portal({ id: "portal-1", revision: 1, target: { ...portal().target, id: "board-A", boardRevision: 1 } });
+      const destination = { x: 40, y: 300, width: 120, height: 112 };
+      const test = harness({
+        cards: [n, p],
+        board: board({ id: "home" }),
+        moveSelectionOntoBoard: async () => ({
+          operationId: "op",
+          targetBoardId: "home",
+          cards: [movedCardReceipt({ id: "n1", afterRevision: 2 })],
+          boards: [
+            movedBoardReceipt({
+              portalCardId: "portal-1",
+              previousParentBoardId: "home",
+              destinationPortalFrame: destination,
+              afterBoardRevision: 2,
+              afterPortalRevision: 2,
+            }),
+          ],
+        }),
+      });
+
+      act(() => {
+        test.result.current.handleCardsDroppedOnBoard(["n1", "portal-1"], "home");
+      });
+      await waitFor(() => expect(test.dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "portalMoved" })));
+
+      const state = test.dispatch.mock.calls.reduce<CurrentBoardState>(
+        (s, [action]) => reducer(s, action),
+        { ...initialState, board: board({ id: "home" }), cards: [n, p] },
+      );
+      expect(state.cards).toEqual([
+        { ...p, revision: 2, frame: destination, target: { ...p.target, boardRevision: 2 } },
+      ]);
+      expect(state.unsortedCards).toEqual([{ ...n, revision: 2 }]);
+    });
+
+    it("does not dispatch portalMoved when the selection lands on another board", async () => {
+      const p = portal({ id: "portal-1" });
+      const test = harness({
+        cards: [p],
+        board: board({ id: "home" }),
+        moveSelectionOntoBoard: async () => ({
+          operationId: "op",
+          targetBoardId: "board-Z",
+          cards: [],
+          boards: [movedBoardReceipt({ portalCardId: "portal-1", previousParentBoardId: "home" })],
+        }),
+      });
+
+      act(() => {
+        test.result.current.handleCardsDroppedOnBoard(["portal-1"], "board-Z");
+      });
+      await waitFor(() =>
+        expect(test.dispatch).toHaveBeenCalledWith({ type: "cardsRemoved", ids: ["portal-1"] }),
+      );
+      expect(test.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "portalMoved" }));
     });
 
     it("does nothing for an empty selection", () => {
