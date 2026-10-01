@@ -123,29 +123,31 @@ export function NoteEditor({
   useEffect(() => {
     editor?.setEditable(editable);
     // Focus the editor the moment editing begins, mirroring the old textarea
-    // autofocus, so that a subsequent click-outside fires a clean blur. We do
-    // not force a caret position (`focus("end")`) so the caret lands where the
-    // user clicked rather than always at the end.
+    // autofocus, so that a subsequent click-outside fires a clean blur. The
+    // caret lands where the user clicked; otherwise it goes to the end.
     if (editable && editor) {
       const point = initialCaretPointRef.current;
-      if (point === "end") {
-        editor.commands.focus("end");
-        return;
-      }
       let pos: number | null = null;
-      if (point) {
+      if (point && point !== "end") {
         try {
           pos = editor.view.posAtCoords({ left: point.x, top: point.y })?.pos ?? null;
         } catch {
-          // No layout (jsdom) or a point outside the view: plain focus below.
+          // No layout (jsdom) or a point outside the view: caret at the end below.
           pos = null;
         }
       }
       if (pos !== null) {
         editor.chain().focus().setTextSelection(pos).run();
       } else {
-        editor.commands.focus();
+        // Клик мимо текста (поле карточки под ним) или вход без клика: каретка
+        // в конец явно. Голый focus() оставил бы её в начале документа, а в конец
+        // её раньше уводил только побочный setContent при монтировании.
+        editor.commands.focus("end");
       }
+      // Tiptap переводит DOM-фокус в requestAnimationFrame, и клавиши, нажатые
+      // до этого кадра, уходят мимо редактора (End теряется, первые буквы
+      // пропадают). Фокус сразу — редактор владеет вводом с первого нажатия.
+      editor.view.focus();
     }
   }, [editor, editable]);
 
