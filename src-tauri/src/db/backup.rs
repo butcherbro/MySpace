@@ -23,6 +23,7 @@
 //! restarts; [`apply_pending_restore`] runs at the next startup, before the
 //! database is opened.
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -39,6 +40,10 @@ pub const BACKUP_RETENTION: usize = 10;
 /// could not free it. Oldest snapshots are pruned first until under the limit;
 /// the newest validated snapshot is never pruned.
 pub const BACKUP_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Threads placing asset files into a snapshot (see [`link_referenced_assets`]).
+/// Measured on APFS: 4 threads 1.8x faster than one, 8 no faster than 4.
+const LINK_THREADS: usize = 4;
 
 /// Name of the restore marker file under the data dir.
 pub const RESTORE_MARKER: &str = "restore-pending.json";
@@ -142,7 +147,11 @@ fn backup_database(src: &Connection, dest: &Path) -> Result<(), rusqlite::Error>
     let mut dst = Connection::open(dest)?;
     {
         let backup = rusqlite::backup::Backup::new(src, &mut dst)?;
-        backup.run_to_completion(100, Duration::from_millis(10), None)?;
+        // All pages in one step. The workspace DB is in WAL mode, so the
+        // step's read lock does not hold writers back. Steps of 100 pages
+        // with a 10 ms pause spent most of a large snapshot asleep (5.5 s of
+        // pauses for 214 MiB), and a write between two steps restarted it.
+        backup.run_to_completion(i32::MAX, Duration::from_millis(10), None)?;
     }
     dst.execute_batch("PRAGMA journal_mode = DELETE; PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
@@ -152,6 +161,9 @@ fn backup_database(src: &Connection, dest: &Path) -> Result<(), rusqlite::Error>
 /// allows it (same volume), otherwise a copy. Returns whether it was linked.
 /// A `NotFound` source is returned as an error so the caller can record a
 /// missing asset; anything else is a real I/O error.
+///
+/// Never opens an existing destination for writing: it may be a hard link to
+/// the live asset, and truncating it would empty the live file.
 fn link_or_copy_file(src: &Path, dst: &Path) -> std::io::Result<bool> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
@@ -159,12 +171,95 @@ fn link_or_copy_file(src: &Path, dst: &Path) -> std::io::Result<bool> {
     match fs::hard_link(src, dst) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(e),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => already_placed(src, dst),
         // Different volume, unsupported filesystem, link limit, ...: copy.
-        Err(_) => {
-            fs::copy(src, dst)?;
-            Ok(false)
+        Err(_) => copy_new(src, dst),
+    }
+}
+
+/// Copies `src` to a destination that must not exist yet (`create_new`).
+fn copy_new(src: &Path, dst: &Path) -> std::io::Result<bool> {
+    let mut input = fs::File::open(src)?;
+    let mut output = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dst)
+    {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return already_placed(src, dst),
+        Err(e) => return Err(e),
+    };
+    std::io::copy(&mut input, &mut output)?;
+    output.set_permissions(input.metadata()?.permissions())?;
+    Ok(false)
+}
+
+/// `dst` already exists: accepted when it is `src` itself (another name for
+/// the same file, e.g. on a case-insensitive volume; returns `true`, linked)
+/// or a file of the same length (a copy placed earlier; `false`). Anything
+/// else is an error that fails the snapshot, never an overwrite.
+fn already_placed(src: &Path, dst: &Path) -> std::io::Result<bool> {
+    let source = fs::metadata(src)?;
+    let placed = fs::symlink_metadata(dst)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (source.dev(), source.ino()) == (placed.dev(), placed.ino()) {
+            return Ok(true);
         }
     }
+    if placed.is_file() && placed.len() == source.len() {
+        return Ok(false);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!(
+            "{} is already in the snapshot with different content",
+            dst.display()
+        ),
+    ))
+}
+
+/// Places every name in `rels` from `assets_dir` into `dest_assets` on up to
+/// [`LINK_THREADS`] threads; one result per name, in order. A chunk whose
+/// thread cannot be spawned is placed on the calling thread. A worker that
+/// panics fails the snapshot instead of the caller (the writer thread).
+fn place_files(
+    assets_dir: &Path,
+    dest_assets: &Path,
+    rels: &[&str],
+) -> Result<Vec<std::io::Result<bool>>, String> {
+    let place = |part: &[&str]| -> Vec<std::io::Result<bool>> {
+        part.iter()
+            .map(|rel| link_or_copy_file(&assets_dir.join(rel), &dest_assets.join(rel)))
+            .collect()
+    };
+    let chunk = rels.len().div_ceil(LINK_THREADS).max(1);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = rels
+            .chunks(chunk)
+            .map(|part| {
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || place(part))
+                    .map_err(|_| part)
+            })
+            .collect();
+        let mut results = Vec::with_capacity(rels.len());
+        let mut panicked = false;
+        for worker in workers {
+            match worker {
+                Ok(handle) => match handle.join() {
+                    Ok(part) => results.extend(part),
+                    Err(_) => panicked = true,
+                },
+                Err(part) => results.extend(place(part)),
+            }
+        }
+        if panicked {
+            return Err("an asset link thread panicked".to_string());
+        }
+        Ok(results)
+    })
 }
 
 /// One asset as recorded in the snapshot manifest.
@@ -215,18 +310,29 @@ fn link_referenced_assets(
             .map_err(|e| e.to_string())?
     };
 
+    // Each file once: rows may share a `file_path` (sync replay takes it from
+    // the peer). A hard link costs about 0.3 ms on APFS, so 20 000 assets took
+    // 6 s one after another; a few threads cut that.
+    let mut seen = HashSet::new();
+    let distinct: Vec<&str> = rows
+        .iter()
+        .map(|(rel, _)| rel.as_str())
+        .filter(|rel| seen.insert(*rel))
+        .collect();
+    let results = place_files(assets_dir, &dest.join("assets"), &distinct)?;
+    let by_path: HashMap<&str, std::io::Result<bool>> = distinct.into_iter().zip(results).collect();
+
     let mut placed = Vec::with_capacity(rows.len());
     let mut missing: Vec<String> = Vec::new();
-    for (rel, sha256) in rows {
-        let src = assets_dir.join(&rel);
-        match link_or_copy_file(&src, &dest.join("assets").join(&rel)) {
+    for (rel, sha256) in &rows {
+        match &by_path[rel.as_str()] {
             Ok(linked) => placed.push(ManifestAsset {
-                file_path: rel,
-                sha256,
-                linked,
+                file_path: rel.clone(),
+                sha256: sha256.clone(),
+                linked: *linked,
             }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                missing.push(rel);
+                missing.push(rel.clone());
             }
             Err(e) => return Err(e.to_string()),
         }
@@ -722,4 +828,66 @@ pub fn apply_pending_restore(data_dir: &Path) -> Result<Option<PathBuf>, String>
         &paths.backups_dir(),
     )
     .map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "myspace-backup-unit-{tag}-{}",
+            uuid::Uuid::now_v7()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_destination_with_different_content_fails_and_nothing_is_modified() {
+        let root = temp_dir("occupied");
+        let assets = root.join("assets");
+        let dest = root.join("staging");
+        fs::create_dir_all(&assets).unwrap();
+        fs::create_dir_all(dest.join("assets")).unwrap();
+        fs::write(assets.join("a.png"), b"live bytes").unwrap();
+        fs::write(dest.join("assets").join("a.png"), b"other").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE assets (id TEXT PRIMARY KEY, file_path TEXT NOT NULL);
+             INSERT INTO assets VALUES ('a', 'a.png');",
+        )
+        .unwrap();
+
+        assert!(link_referenced_assets(&conn, &assets, &dest).is_err());
+        assert_eq!(fs::read(assets.join("a.png")).unwrap(), b"live bytes");
+        assert_eq!(
+            fs::read(dest.join("assets").join("a.png")).unwrap(),
+            b"other"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_copy_fallback_never_opens_an_existing_destination() {
+        let root = temp_dir("copy");
+        let (src, dst) = (root.join("src.png"), root.join("dst.png"));
+        fs::write(&src, b"live bytes").unwrap();
+
+        assert!(!copy_new(&src, &dst).unwrap());
+        assert_eq!(fs::read(&dst).unwrap(), b"live bytes");
+        // Placed already (same length): accepted, not rewritten.
+        assert!(!copy_new(&src, &dst).unwrap());
+        // A hard link to the source: the same file, never truncated.
+        let linked = root.join("linked.png");
+        fs::hard_link(&src, &linked).unwrap();
+        copy_new(&src, &linked).unwrap();
+        assert_eq!(fs::read(&src).unwrap(), b"live bytes");
+        // Something else under that name: refused, left as it was.
+        fs::write(&dst, b"other").unwrap();
+        assert!(copy_new(&src, &dst).is_err());
+        assert_eq!(fs::read(&dst).unwrap(), b"other");
+        assert_eq!(fs::read(&src).unwrap(), b"live bytes");
+        fs::remove_dir_all(&root).ok();
+    }
 }

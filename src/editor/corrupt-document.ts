@@ -12,10 +12,42 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 export interface DocumentSaveOptions {
   /** Overwrite a stored document that is corrupt (P1.7). */
   acknowledgeCorrupt?: boolean;
+  /**
+   * The stored document the draft is edited from, read when the save runs:
+   * any other stored text was written by someone else.
+   */
+  base?: () => unknown;
+  /** Called with the document the moment it is stored, before later saves in the queue run. */
+  confirmed?: (document: unknown) => void;
+  /** The draft this save belongs to; every save of one draft carries the same object. */
+  draft?: DraftLineage;
+}
+
+/** One draft's saves share this object; `latest` is its newest document. */
+export interface DraftLineage {
+  latest: unknown;
+}
+
+/**
+ * What a save resolves with when someone else changed the stored text since
+ * `base` (see `useCardEdits`): the draft must show `stored` and never save
+ * itself over it. The user's text went to the conflict copy `copyId` (`null`:
+ * it already equalled `stored`), later saves of the same draft go there too;
+ * `editingMovedTo` is the copy now being edited, or `null` (the editor ends as
+ * after a save).
+ */
+export interface DocumentSaveConflict {
+  stored: unknown;
+  copyId: string | null;
+  editingMovedTo: string | null;
 }
 
 /** A text-card persist callback that accepts {@link DocumentSaveOptions}. */
-export type DocumentSave = (id: string, document: unknown, options?: DocumentSaveOptions) => Promise<void>;
+export type DocumentSave = (
+  id: string,
+  document: unknown,
+  options?: DocumentSaveOptions,
+) => Promise<void | DocumentSaveConflict>;
 
 /** A fresh document holding the recovered plain text, one paragraph per line. */
 export function recoveredDocument(plainText: string): unknown {
@@ -51,15 +83,18 @@ export function useCorruptRepair(opts: {
     acknowledgeRef.current = acknowledge;
   }, [acknowledge]);
 
-  // Healthy cards call through unchanged (no third argument).
-  const save = (fn: DocumentSave, id: string, document: unknown) =>
-    acknowledgeRef.current ? fn(id, document, { acknowledgeCorrupt: true }) : fn(id, document);
+  // Healthy cards pass the draft's options through unchanged.
+  const save = (fn: DocumentSave, id: string, document: unknown, options?: DocumentSaveOptions) =>
+    acknowledgeRef.current ? fn(id, document, { ...options, acknowledgeCorrupt: true }) : fn(id, document, options);
   const update = useCallback(
-    (id: string, document: unknown) => save(onUpdate, id, document),
+    (id: string, document: unknown, options?: DocumentSaveOptions) => save(onUpdate, id, document, options),
     [onUpdate],
   );
   const finalize = useMemo(
-    () => (onFinalize ? (id: string, document: unknown) => save(onFinalize, id, document) : undefined),
+    () =>
+      onFinalize
+        ? (id: string, document: unknown, options?: DocumentSaveOptions) => save(onFinalize, id, document, options)
+        : undefined,
     [onFinalize],
   );
   const beginRepair = useCallback(() => {

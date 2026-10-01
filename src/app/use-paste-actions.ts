@@ -15,7 +15,8 @@ import type {
   PathClassificationDto,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 import { buildPasteSpecs, readCardClipboard, type CopiedCard } from "./card-clipboard";
 
 /**
@@ -31,7 +32,9 @@ export interface PasteActionsOptions {
   board: BoardSummary | null;
   notes: NoteCardDto[];
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
+  /** Applies every local card change to the refs and the store together. */
+  cardWrites: CardWrites;
   dispatcher: CommandDispatcher;
   idGenerator: IdGenerator;
   createFolderShortcut: (sourcePath: string, boardX: number, boardY: number) => Promise<void>;
@@ -65,6 +68,7 @@ export function usePasteActions(options: PasteActionsOptions): PasteActionsContr
     notes,
     gateway,
     dispatch,
+    cardWrites,
     dispatcher,
     idGenerator,
     createFolderShortcut,
@@ -181,7 +185,7 @@ export function usePasteActions(options: PasteActionsOptions): PasteActionsContr
               plainText: spec.plainText,
               colorToken: spec.colorToken,
             };
-            dispatch({ type: "cardAdded", card });
+            cardWrites.apply({ type: "cardAdded", card });
           } else if (spec.kind === "image") {
             const asset = assetById.get(spec.assetId);
             if (!asset) continue; // unreachable: built from the same copied list
@@ -196,17 +200,17 @@ export function usePasteActions(options: PasteActionsOptions): PasteActionsContr
               captionJson: spec.captionJson,
               captionPlainText: spec.captionPlainText,
             };
-            dispatch({ type: "cardAdded", card });
+            cardWrites.apply({ type: "cardAdded", card });
           } else if (spec.kind === "shortcut") {
             const card = shortcutById.get(spec.id);
             if (!card) continue; // unreachable: one receipt per shortcut spec
-            dispatch({ type: "cardAdded", card });
+            cardWrites.apply({ type: "cardAdded", card });
           } else {
             // Duplicate-board's title/counts are backend-assigned (ADR-0009):
             // pasted here, not predicted, unlike note/image above.
             const card = portalById.get(spec.id);
             if (!card) continue; // unreachable: one receipt per board spec
-            dispatch({ type: "cardAdded", card });
+            cardWrites.apply({ type: "cardAdded", card });
           }
         }
       } catch (e) {
@@ -216,7 +220,7 @@ export function usePasteActions(options: PasteActionsOptions): PasteActionsContr
     return true;
     // dispatch стабилен (useReducer), cardsRef/lastCanvasPointRef — те же
     // stable refs, что и выше; вне App линтер этого не видит — указываем явно.
-  }, [board, dispatcher, idGenerator, fallbackPastePosition, dispatch, cardsRef, lastCanvasPointRef]);
+  }, [board, dispatcher, idGenerator, fallbackPastePosition, dispatch, cardsRef, lastCanvasPointRef, cardWrites]);
 
   // Ctrl/Cmd+V of a bitmap or a copied image file onto the canvas. The backend
   // reads the OS clipboard directly (NSPasteboard on macOS, arboard elsewhere),

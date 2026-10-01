@@ -2,6 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { useWorkspaceShortcuts, type WorkspaceShortcutsDeps } from "./use-workspace-shortcuts";
+import { endDraftHandoff, offerDraftHandoff } from "../editor/draft-handoff";
 
 function makeDeps(overrides: Partial<WorkspaceShortcutsDeps> = {}): WorkspaceShortcutsDeps {
   return {
@@ -124,6 +125,68 @@ describe("useWorkspaceShortcuts", () => {
     });
 
     expect(deps.handleDeleteSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes the selection when no editor is focused (a selected damaged note)", () => {
+    const deps = makeDeps();
+    renderHook(() => useWorkspaceShortcuts(deps));
+    const canvas = document.createElement("div");
+    canvas.tabIndex = 0;
+    document.body.appendChild(canvas);
+    canvas.focus();
+
+    try {
+      act(() => {
+        dispatchKeyDown({ key: "Backspace" }, canvas);
+      });
+    } finally {
+      canvas.remove();
+    }
+
+    expect(deps.handleDeleteSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not delete the selection or undo while an editor has focus, whatever the event target", () => {
+    const deps = makeDeps();
+    renderHook(() => useWorkspaceShortcuts(deps));
+    const editor = document.createElement("div");
+    editor.tabIndex = 0;
+    Object.defineProperty(editor, "isContentEditable", { value: true });
+    document.body.appendChild(editor);
+    editor.focus();
+
+    try {
+      act(() => {
+        // Straight to the window, as a key re-dispatched past the editor would arrive.
+        dispatchKeyDown({ key: "Backspace" });
+        dispatchKeyDown({ key: "Delete" });
+        dispatchKeyDown({ key: "z", metaKey: true });
+      });
+    } finally {
+      editor.remove();
+    }
+
+    expect(deps.handleDeleteSelection).not.toHaveBeenCalled();
+    expect(deps.handleWorkspaceUndo).not.toHaveBeenCalled();
+  });
+
+  it("does not delete the selection or undo while editing passes to a conflict copy", () => {
+    const deps = makeDeps();
+    renderHook(() => useWorkspaceShortcuts(deps));
+    offerDraftHandoff("copy", () => null);
+
+    try {
+      act(() => {
+        // Straight to the window: past the hand-off's own document listener.
+        dispatchKeyDown({ key: "Backspace" });
+        dispatchKeyDown({ key: "z", metaKey: true });
+      });
+    } finally {
+      endDraftHandoff("copy");
+    }
+
+    expect(deps.handleDeleteSelection).not.toHaveBeenCalled();
+    expect(deps.handleWorkspaceUndo).not.toHaveBeenCalled();
   });
 
   it("Escape closes the trash drawer when it is open", () => {

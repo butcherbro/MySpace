@@ -7,10 +7,12 @@ import type {
   BoardPortalDto,
   BoardSnapshot,
   BoardSummary,
+  CardDto,
   NoteCardDto,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import type { useViewportController } from "../state/use-viewport-controller";
 import { useBoardLoading, type BoardLoadingDeps } from "./use-board-loading";
 
@@ -127,13 +129,17 @@ function harness(
   const navigation = navigationStub();
   mocks.useBoardNavigation.mockReturnValue(navigation);
 
-  const deps: BoardLoadingDeps = { gateway, dispatch, queueRef, viewportController };
+  const cardsRef: RefObject<CardDto[]> = { current: [note()] };
+  const cardWrites = createCardWrites(cardsRef, { current: [] }, dispatch);
+  const deps: BoardLoadingDeps = { gateway, dispatch, cardWrites, queueRef, viewportController };
   const { result, unmount } = renderHook(() => useBoardLoading(deps));
 
   return {
     result,
     unmount,
     dispatch,
+    cardWrites,
+    cardsRef,
     getHomeBoard,
     loadBoardSnapshot,
     navigation,
@@ -226,7 +232,7 @@ describe("useBoardLoading", () => {
       });
 
       test.dispatch.mockClear();
-      act(() => options.onSnapshotLoaded(snap));
+      act(() => options.onSnapshotLoaded(snap, test.cardWrites.snapshotRequested()));
 
       expect(test.dispatch).toHaveBeenCalledWith({
         type: "snapshotLoaded",
@@ -239,7 +245,37 @@ describe("useBoardLoading", () => {
           okPortal,
         ],
         unsortedCards: [{ ...unsortedNote, documentJson: { type: "doc", content: [] } }],
+        sinceRequest: { written: [], added: [], removed: [] },
       });
+    });
+
+    it("names the cards whose write answer was applied after the snapshot was requested", () => {
+      const test = harness();
+      const options = mocks.useBoardNavigation.mock.calls[0][0];
+      act(() => options.onSnapshotLoaded(snapshot({ cards: [note()] }), options.stampSnapshotRequest()));
+      const stamp = options.stampSnapshotRequest();
+      test.cardWrites.apply({ type: "cardMoved", id: "note-1", revision: 2, frame: note().frame });
+
+      test.dispatch.mockClear();
+      act(() => options.onSnapshotLoaded(snapshot({ cards: [note()] }), stamp));
+
+      expect(test.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "snapshotLoaded",
+          sinceRequest: { written: ["note-1"], added: [], removed: [] },
+        }),
+      );
+    });
+
+    it("brings cardsRef to the snapshot before React re-renders", () => {
+      const test = harness();
+      const options = mocks.useBoardNavigation.mock.calls[0][0];
+      const external = note({ id: "note-1", revision: 9, plainText: "from MCP" });
+
+      act(() => options.onSnapshotLoaded(snapshot({ cards: [external] }), options.stampSnapshotRequest()));
+
+      // cardsRef здесь — простой объект: его меняет только сам applySnapshot.
+      expect(test.cardsRef.current).toEqual([{ ...external, documentJson: { type: "doc", content: [] } }]);
     });
   });
 
@@ -259,11 +295,31 @@ describe("useBoardLoading", () => {
       });
 
       const options = mocks.useBoardNavigation.mock.calls[0][0];
-      await options.drainPendingWrites();
+      await options.drainPendingWrites("switch");
 
       expect(order).toEqual(["drafts", "queue", "viewport"]);
       expect(test.queueFlush).toHaveBeenCalledTimes(1);
       expect(test.viewportFlush).toHaveBeenCalledTimes(1);
+    });
+
+    it("finalizes drafts and marks the switch pending when leaving the board", async () => {
+      const test = harness();
+      const options = mocks.useBoardNavigation.mock.calls[0][0];
+
+      await options.drainPendingWrites("switch");
+
+      expect(mocks.flushAllDrafts).toHaveBeenLastCalledWith("finalize");
+      expect(test.dispatch).toHaveBeenCalledWith({ type: "boardSwitchStarted" });
+    });
+
+    it("only saves drafts, and keeps editing, on a reload of the open board", async () => {
+      const test = harness();
+      const options = mocks.useBoardNavigation.mock.calls[0][0];
+
+      await options.drainPendingWrites("reload");
+
+      expect(mocks.flushAllDrafts).toHaveBeenLastCalledWith("save");
+      expect(test.dispatch).not.toHaveBeenCalledWith({ type: "boardSwitchStarted" });
     });
   });
 });

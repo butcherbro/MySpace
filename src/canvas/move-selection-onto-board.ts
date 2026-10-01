@@ -2,6 +2,7 @@ import { MoveSelectionCommand } from "../commands/board-commands";
 import type { CommandDispatcher } from "../commands/command-dispatcher";
 import type { IdGenerator } from "../services/id-generator";
 import type { MoveSelectionToBoardReceipt, WorkspaceGateway } from "../services/workspace-gateway";
+import { isStaleRevisionError, markStaleRevisionHandled } from "../app/stale-revision-reload";
 
 /** The minimal leaf-card shape both call sites have on hand: a live `CardDto`
  * (on-canvas portal drop) or a drag-start snapshot (breadcrumb/tab drop). */
@@ -15,17 +16,6 @@ interface PortalRef {
   boardId: string;
   boardRevision: number;
   portalRevision: number;
-}
-
-/** True for the `{ code: "stale_revision", message: {...} }` shape the Rust
- * `WorkspaceError::StaleRevision` variant serialises as (see
- * `src-tauri/src/domain/errors.rs`, serde tag/content). */
-function isStaleRevisionError(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as { code?: unknown }).code === "stale_revision"
-  );
 }
 
 /**
@@ -92,6 +82,8 @@ export async function moveSelectionOntoBoard(params: {
       if (!isStaleRevisionError(err) || attempt >= maxAttempts) {
         throw err;
       }
+      // Этот отказ разбираем сами повтором — перезагрузка доски из-за него не нужна.
+      markStaleRevisionHandled(err);
       // Одна безопасная повторная попытка: перечитываем ревизии заново — к
       // этому моменту гонка с draft-flush уже разрешилась (запись либо
       // закоммитилась, либо нет), так что второе чтение видит фактическое

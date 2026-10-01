@@ -93,7 +93,7 @@ describe("NoteCard corrupt state (P1.7)", () => {
 
     act(() => lastEditorProps().onChange(typedDoc));
     act(() => vi.advanceTimersByTime(250));
-    expect(onUpdate).toHaveBeenCalledWith("note-1", typedDoc, { acknowledgeCorrupt: true });
+    expect(onUpdate).toHaveBeenCalledWith("note-1", typedDoc, expect.objectContaining({ acknowledgeCorrupt: true }));
     await act(async () => {});
 
     // The receipt-driven store update clears `corrupt`; the card is normal and
@@ -103,7 +103,7 @@ describe("NoteCard corrupt state (P1.7)", () => {
     onUpdate.mockClear();
     act(() => lastEditorProps().onChange(typedDoc));
     act(() => vi.advanceTimersByTime(250));
-    expect(onUpdate).toHaveBeenCalledWith("note-1", typedDoc);
+    expect(onUpdate).toHaveBeenCalledWith("note-1", typedDoc, expect.not.objectContaining({ acknowledgeCorrupt: true }));
     vi.useRealTimers();
   });
 

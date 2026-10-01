@@ -176,9 +176,10 @@ impl PeerClient {
         }
     }
 
-    /// Downloads blob `sha256` into `dest` (created/truncated), verifying the
-    /// hash while streaming. `Ok(false)`: the peer does not hold it (404).
-    /// On any failure `dest` is removed.
+    /// Downloads blob `sha256` into `dest`, which must not exist yet (never
+    /// truncates a file another name may share, such as a backup hard link),
+    /// verifying the hash while streaming. `Ok(false)`: the peer does not
+    /// hold it (404). On any failure `dest` is removed.
     pub async fn fetch_blob(&self, sha256: &str, dest: &Path) -> Result<bool, WorkspaceError> {
         let result = self.fetch_blob_inner(sha256, dest).await;
         if !matches!(result, Ok(true)) {
@@ -201,7 +202,12 @@ impl PeerClient {
             return Err(sync_err(format!("blob answered {}", resp.status())));
         }
         let io = |e: std::io::Error| sync_err(format!("cannot write blob: {e}"));
-        let mut file = tokio::fs::File::create(dest).await.map_err(io)?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dest)
+            .await
+            .map_err(io)?;
         let mut hasher = Sha256::new();
         while let Some(chunk) = resp.chunk().await.map_err(transport_err)? {
             hasher.update(&chunk);

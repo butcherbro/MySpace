@@ -4,8 +4,9 @@
 //! service runs later, in two halves (single-writer model, P1.1):
 //!
 //! 1. [`plan_embed_enrichment`] — off the writer thread: reads the card and the
-//!    favicon cache on a pooled reader, fetches bounded web metadata, stages
-//!    preview/favicon images as files. Produces an [`EmbedEnrichmentPlan`].
+//!    favicon cache in short pooled reads, fetches bounded web metadata with no
+//!    connection checked out, stages preview/favicon images as files. Produces
+//!    an [`EmbedEnrichmentPlan`].
 //! 2. `Mutation::ApplyEmbedMetadata(Box::new(plan))` — on the writer thread, no network:
 //!    [`commit_embed_enrichment`] records the asset and favicon-cache rows and
 //!    applies the card update, unless the card's URL changed meanwhile.
@@ -13,6 +14,7 @@
 //! [`enrich_embed`] (async, Tauri) and [`enrich_embed_blocking`] (MCP, tests)
 //! compose the two halves through a [`Workspace`].
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::Path;
@@ -411,20 +413,21 @@ impl EmbedEnrichmentPlan {
     }
 }
 
-/// Network half of link enrichment. Reads the card and the favicon cache from
-/// `conn` (a pooled reader: this function never writes to the database),
-/// fetches the page metadata and images, and stages downloaded images as files.
+/// Network half of link enrichment. Reads the card and the favicon cache in
+/// short pooled reads (this function never writes to the database, and holds
+/// no connection while a request is in flight), fetches the page metadata and
+/// images, and stages downloaded images as files.
 ///
 /// A failed page fetch is not an error: it yields a `"failed"` update with no
 /// staged assets, exactly as before the single-writer split. On an `Err`
 /// return nothing is left staged on disk.
 pub fn plan_embed_enrichment(
-    conn: &Connection,
-    asset_dir: &Path,
+    ws: &Workspace,
     fetcher: &dyn MetadataFetcher,
     id: &str,
 ) -> Result<EmbedEnrichmentPlan, WorkspaceError> {
-    let embed = workspace_repository::load_embed_for_metadata(conn, id)?;
+    let embed = ws.read_blocking(|conn| workspace_repository::load_embed_for_metadata(conn, id))?;
+    let asset_dir = ws.paths().assets_dir();
     let source_url = embed.source_url.clone();
 
     let mut plan = EmbedEnrichmentPlan {
@@ -454,8 +457,8 @@ pub fn plan_embed_enrichment(
     };
 
     let images = stage_optional_image(
-        conn,
-        asset_dir,
+        ws,
+        &asset_dir,
         fetcher,
         metadata.preview_url.as_deref(),
         "preview",
@@ -464,8 +467,8 @@ pub fn plan_embed_enrichment(
     )
     .and_then(|preview| {
         let favicon = stage_optional_image(
-            conn,
-            asset_dir,
+            ws,
+            &asset_dir,
             fetcher,
             metadata.favicon_url.as_deref(),
             "favicon",
@@ -515,6 +518,11 @@ pub fn insert_favicon_cache_entry(
 /// transaction: asset rows for the staged files, favicon-cache rows, then the
 /// card update. No network I/O.
 ///
+/// Plans made concurrently all miss the favicon cache and the hash lookup, so
+/// both are checked again here: a staged image whose bytes are already stored,
+/// or a favicon whose URL is now cached, reuses the stored asset, and its
+/// staged file is removed once the transaction commits.
+///
 /// The update is not guarded by the revision the plan was read at: a resize
 /// or a description edit during the fetch does not void the metadata. If the
 /// card now holds another URL, the metadata is obsolete: nothing is written,
@@ -530,55 +538,121 @@ pub fn commit_embed_enrichment(
     conn: &mut Connection,
     plan: &EmbedEnrichmentPlan,
 ) -> Result<EmbedCardDto, WorkspaceError> {
-    let outcome = commit_embed_enrichment_rows(conn, plan);
-    if let Err(err) = &outcome {
+    if let Err(err) = commit_embed_enrichment_rows(conn, plan) {
         if !err.is_busy() {
             plan.discard();
         }
+        return Err(err);
     }
-    outcome
+    // Read after the commit, outside the discard above: its rows now own the files.
+    workspace_repository::load_embed_card(conn, &plan.update.id)
 }
 
 fn commit_embed_enrichment_rows(
     conn: &mut Connection,
     plan: &EmbedEnrichmentPlan,
-) -> Result<EmbedCardDto, WorkspaceError> {
+) -> Result<(), WorkspaceError> {
     let tx = crate::repositories::immediate_tx(conn)?;
     let current = workspace_repository::load_embed_for_metadata(&tx, &plan.update.id)?;
     if current.source_url != plan.update.source_url {
         drop(tx);
         plan.discard();
-        return workspace_repository::load_embed_card(conn, &plan.update.id);
+        return Ok(());
     }
+    // `reused`: staged id → another stored asset with the same bytes.
+    // `committed`: rows an earlier attempt of this plan already stored (a busy
+    // retry after the commit); they keep their files and are not re-inserted.
+    let mut reused: HashMap<&str, String> = HashMap::new();
+    let mut committed: Vec<&str> = Vec::new();
     for staged in &plan.staged_assets {
-        asset_service::insert_asset_row(&tx, &staged.asset)?;
+        let own_id = staged.asset.id.as_str();
+        if let Some(sha256) = staged.asset.sha256.as_deref() {
+            match asset_service::find_asset_by_sha256(&tx, sha256)? {
+                Some(existing) if existing.id == own_id => committed.push(own_id),
+                Some(existing) => {
+                    reused.insert(own_id, existing.id);
+                }
+                None => {}
+            }
+        }
     }
+    let resolve = |id: &str| reused.get(id).cloned().unwrap_or_else(|| id.to_string());
+    let mut update = plan.update.clone();
+    update.preview_asset_id = plan.update.preview_asset_id.as_deref().map(resolve);
+    update.favicon_asset_id = plan.update.favicon_asset_id.as_deref().map(resolve);
+    let mut cache_entries = Vec::new();
     for entry in &plan.favicon_cache_entries {
+        match cached_favicon(&tx, &entry.source_url)? {
+            Some(cached) => update.favicon_asset_id = Some(cached),
+            None => cache_entries.push(FaviconCacheEntry {
+                source_url: entry.source_url.clone(),
+                asset_id: resolve(&entry.asset_id),
+            }),
+        }
+    }
+    let mut redundant = Vec::new();
+    for staged in &plan.staged_assets {
+        let id = staged.asset.id.as_str();
+        if committed.contains(&id) {
+            continue;
+        }
+        let referenced = [&update.preview_asset_id, &update.favicon_asset_id]
+            .into_iter()
+            .any(|used| used.as_deref() == Some(id));
+        if referenced && !reused.contains_key(id) {
+            asset_service::insert_asset_row(&tx, &staged.asset)?;
+        } else {
+            redundant.push(staged);
+        }
+    }
+    for entry in &cache_entries {
         insert_favicon_cache_entry(&tx, entry)?;
     }
-    workspace_repository::apply_embed_metadata_in_tx(&tx, &plan.update, &current)?;
+    workspace_repository::apply_embed_metadata_in_tx(&tx, &update, &current)?;
     tx.commit()?;
-    workspace_repository::load_embed_card(conn, &plan.update.id)
+    // Only after the commit: a busy retry re-runs this with the same files.
+    for staged in redundant {
+        asset_service::discard_staged(staged);
+    }
+    Ok(())
 }
 
-/// Async entry point for the Tauri command: plans on a pooled reader off the
-/// async runtime, then applies the plan on the writer thread.
+/// The stored favicon for `url`, if its asset row still exists.
+fn cached_favicon(conn: &Connection, url: &str) -> Result<Option<String>, WorkspaceError> {
+    Ok(conn
+        .query_row(
+            "SELECT c.asset_id FROM favicon_cache c
+             JOIN assets a ON a.id = c.asset_id
+             WHERE c.source_url = ?1",
+            [url],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// Enrichments fetching at once (the frontend asks for every pending card at
+/// the same time).
+const MAX_CONCURRENT_ENRICHMENTS: usize = 4;
+static ENRICHMENT_SLOTS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_CONCURRENT_ENRICHMENTS);
+
+/// Async entry point for the Tauri command: plans off the async runtime (at
+/// most [`MAX_CONCURRENT_ENRICHMENTS`] at a time), then applies the plan on
+/// the writer thread.
 pub async fn enrich_embed(
     ws: &Workspace,
     fetcher: Arc<dyn MetadataFetcher + Send + Sync>,
     id: String,
 ) -> Result<EmbedCardDto, WorkspaceError> {
-    let reader = ws.clone();
-    // TODO(P1.x): the network phase holds one of the READ_POOL_SIZE (2) pooled
-    // connections for the whole fetch (up to ~10 s per request). Split the
-    // favicon-cache lookup into its own short read so the fetch runs with no
-    // connection checked out.
-    let plan = tokio::task::spawn_blocking(move || {
-        let asset_dir = reader.paths().assets_dir();
-        reader.read_blocking(|conn| plan_embed_enrichment(conn, &asset_dir, fetcher.as_ref(), &id))
-    })
-    .await
-    .map_err(|e| WorkspaceError::Database(format!("metadata task failed: {e}")))??;
+    let _slot = ENRICHMENT_SLOTS
+        .acquire()
+        .await
+        .map_err(|e| WorkspaceError::Database(format!("metadata slots closed: {e}")))?;
+    let planner = ws.clone();
+    let plan =
+        tokio::task::spawn_blocking(move || plan_embed_enrichment(&planner, fetcher.as_ref(), &id))
+            .await
+            .map_err(|e| WorkspaceError::Database(format!("metadata task failed: {e}")))??;
     ws.apply(Mutation::ApplyEmbedMetadata(Box::new(plan)))
         .await?
         .into_embed()
@@ -591,8 +665,7 @@ pub fn enrich_embed_blocking(
     fetcher: &dyn MetadataFetcher,
     id: &str,
 ) -> Result<EmbedCardDto, WorkspaceError> {
-    let asset_dir = ws.paths().assets_dir();
-    let plan = ws.read_blocking(|conn| plan_embed_enrichment(conn, &asset_dir, fetcher, id))?;
+    let plan = plan_embed_enrichment(ws, fetcher, id)?;
     ws.apply_blocking(Mutation::ApplyEmbedMetadata(Box::new(plan)))?
         .into_embed()
 }
@@ -662,7 +735,7 @@ fn parse_oembed(source_url: &str, response: &FetchResponse) -> Result<LinkMetada
 /// row (and, for a favicon, the cache row) is added to the plan for the writer.
 /// A failed image fetch is not an error: the card simply has no image.
 fn stage_optional_image(
-    conn: &Connection,
+    ws: &Workspace,
     asset_dir: &Path,
     fetcher: &dyn MetadataFetcher,
     url: Option<&str>,
@@ -678,15 +751,7 @@ fn stage_optional_image(
 
     // Favicon dedup: reuse one stored asset per favicon URL.
     if use_cache {
-        let existing: Option<String> = conn
-            .query_row(
-                "SELECT c.asset_id FROM favicon_cache c
-                 JOIN assets a ON a.id = c.asset_id
-                 WHERE c.source_url = ?1",
-                [url],
-                |r| r.get(0),
-            )
-            .optional()?;
+        let existing = ws.read_blocking(|conn| cached_favicon(conn, url))?;
         if let Some(asset_id) = existing {
             return Ok(Some(asset_id));
         }
@@ -716,7 +781,8 @@ fn stage_optional_image(
             .find(|other| other.asset.sha256.as_deref() == Some(sha256))
         {
             Some(other) => Some(other.asset.id.clone()),
-            None => asset_service::find_asset_by_sha256(conn, sha256)
+            None => ws
+                .read_blocking(|conn| asset_service::find_asset_by_sha256(conn, sha256))
                 .inspect_err(|_| asset_service::discard_staged(&staged))?
                 .map(|existing| existing.id),
         },

@@ -216,6 +216,11 @@ pub fn run() {
                     // Fill `assets.sha256` for rows imported before migration
                     // 0020 (no-op once every readable file is hashed).
                     workspace.apply_detached(domain::mutation::Mutation::HashExistingAssets);
+                    // Journal compaction (ADR-0011 amendment, R4): first the
+                    // VACUUM a previous compaction asked for, then the chunks
+                    // new rows need. Failures are logged by the writer.
+                    workspace.apply_detached(domain::mutation::Mutation::VacuumIfDue);
+                    let _ = sync::compact::run_blocking(&workspace);
                 })
                 .expect("failed to spawn startup maintenance thread");
             Ok(())

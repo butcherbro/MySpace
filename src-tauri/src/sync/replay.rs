@@ -3,7 +3,9 @@
 //! [`apply_remote`] runs inside the writer's transaction (it is the body of
 //! `Mutation::ApplySyncChanges`). For each row, in HLC order:
 //!
-//! 1. `(origin, hlc)` already in `changes` → duplicate, ignored (idempotent).
+//! 1. `(origin, hlc)` already in `changes`, or at or below the highest HLC
+//!    of that origin that compaction deleted here → duplicate, ignored
+//!    (idempotent; a compacted row must not come back).
 //! 2. Otherwise the row is stored in `changes` with its ORIGINAL origin and
 //!    HLC (so this device serves it onward), the origin's cursor advances and
 //!    the local clock moves past it (`Hlc::receive`).
@@ -16,7 +18,9 @@
 //!    not exist yet is created from the full image.
 //! 6. A missing dependency (the card's board, a referenced asset, a parent
 //!    board) parks the row in `pending_changes`; parked rows are retried after
-//!    the batch, in HLC order, until a pass makes no progress.
+//!    the batch, in HLC order, until a pass resolves none of them (a
+//!    compacted journal no longer delivers rows in creation order, so there
+//!    is no fixed number of passes).
 //!
 //! Conflict policy as implemented:
 //! - frames, board/card placement, titles, colors, covers, trash state:
@@ -56,9 +60,6 @@ use crate::domain::card_kind::{handler, registry, CardKind};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::plain_text::{document_to_plain_text, plain_text_to_document};
 use crate::repositories::immediate_tx;
-
-/// Retry passes over `pending_changes` after a batch.
-pub const MAX_RETRY_PASSES: usize = 8;
 
 /// Heading of a conflict-copy note.
 pub const CONFLICT_COPY_TITLE: &str = "Conflict copy";
@@ -113,6 +114,7 @@ fn apply_in_tx(
         ..ApplyReport::default()
     };
 
+    let floor = super::compact::floor(conn)?;
     batch.sort_by(|a, b| {
         a.hlc
             .cmp(&b.hlc)
@@ -127,7 +129,7 @@ fn apply_in_tx(
                 continue;
             }
         };
-        if !journal::insert_change(conn, &row, ctx.now)? {
+        if compacted_away(&floor, &row) || !journal::insert_change(conn, &row, ctx.now)? {
             report.duplicates += 1;
             continue;
         }
@@ -142,7 +144,9 @@ fn apply_in_tx(
         }
     }
 
-    for _ in 0..MAX_RETRY_PASSES {
+    // Each pass either resolves a parked row or ends the loop, so it stops
+    // after at most as many passes as there are parked rows.
+    loop {
         let pending = journal::pending(conn)?;
         if pending.is_empty() {
             break;
@@ -172,6 +176,14 @@ fn apply_in_tx(
         .collect();
     tracking::clear(conn)?;
     Ok(report)
+}
+
+/// True when compaction deleted rows of this origin up to or past this
+/// row's HLC here: the row was held once and is superseded by what is kept.
+fn compacted_away(floor: &BTreeMap<String, String>, row: &ChangeRow) -> bool {
+    floor
+        .get(&row.origin_device_id)
+        .is_some_and(|max| row.hlc <= *max)
 }
 
 fn count(report: &mut ApplyReport, outcome: Outcome) {
@@ -475,6 +487,41 @@ fn prev_of(
         .and_then(|e| e.prev.get(register).cloned()))
 }
 
+/// Шагов по цепочке `prev.body` в [`body_lineage_reaches`].
+const BODY_LINEAGE_DEPTH: usize = 32;
+
+/// True when the body lineage starting at `prev` reaches `ancestor`.
+///
+/// Запаркованная строка (её доска или родитель ещё не пришли) повторяется
+/// после правок, уже применённых поверх неё, так что между ней и локальным
+/// телом бывает несколько шагов. Шаги ищутся в `changes`, но цепочка может
+/// оборваться: `pending_changes` хранит собственную копию payload, а
+/// компакция на неё не смотрит, так что промежуточную строку могла удалить
+/// компакция, пока запаркованная ещё лежит; строка также может быть ещё не
+/// доставлена, за пределом грейса R2 или храниться только в `pending_changes`.
+/// Тогда правка считается конкурентной и появляется лишняя conflict copy,
+/// зато текст не теряется. Ревизии в цепочке строго убывают, поэтому обход
+/// останавливается, пройдя ниже `ancestor`; предел глубины ограничивает
+/// стоимость на длинной истории автосохранений одной заметки — отставание
+/// запаркованной строки на десятки правок на практике не встречается.
+fn body_lineage_reaches(
+    conn: &Connection,
+    id: &str,
+    mut prev: Option<String>,
+    ancestor: &str,
+) -> Result<bool, WorkspaceError> {
+    for _ in 0..BODY_LINEAGE_DEPTH {
+        match prev {
+            Some(p) if p == ancestor => return Ok(true),
+            Some(p) if p.as_str() > ancestor => {
+                prev = prev_of(conn, ENTITY_CARD, id, &p, REG_BODY)?;
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(false)
+}
+
 fn conflict_copy_plan(
     conn: &Connection,
     id: &str,
@@ -503,9 +550,13 @@ fn conflict_copy_plan(
         return Ok(None);
     }
     // Sequential, not concurrent: one edit was made on top of the other.
-    if env.prev.get(REG_BODY) == Some(local_clock)
-        || prev_of(conn, ENTITY_CARD, id, local_clock, REG_BODY)?.as_deref()
-            == Some(remote_clock.as_str())
+    if body_lineage_reaches(conn, id, env.prev.get(REG_BODY).cloned(), local_clock)?
+        || body_lineage_reaches(
+            conn,
+            id,
+            prev_of(conn, ENTITY_CARD, id, local_clock, REG_BODY)?,
+            remote_clock,
+        )?
     {
         return Ok(None);
     }

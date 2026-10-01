@@ -6,12 +6,14 @@
 //! always served in HLC order and an origin's HLCs only grow, what a device
 //! holds from each origin is a prefix, so "everything above the cursor" is
 //! exactly what is missing, whoever serves it (star and mesh topologies).
+//! Compaction (`sync::compact`) takes superseded rows out of that prefix;
+//! whoever received the rows that superseded them does not need them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
-use rusqlite::types::Value as SqlValue;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use super::ChangeRow;
@@ -83,6 +85,14 @@ pub fn advance_cursor(conn: &Connection, origin: &str, hlc: &str) -> Result<(), 
     Ok(())
 }
 
+/// The highest HLC held from `origin`, if any.
+pub fn cursor(conn: &Connection, origin: &str) -> Result<Option<String>, WorkspaceError> {
+    Ok(conn
+        .prepare_cached("SELECT last_hlc FROM sync_cursors WHERE peer_device_id = ?1")?
+        .query_row([origin], |r| r.get(0))
+        .optional()?)
+}
+
 /// This device's vector clock: per origin device, the highest HLC held.
 pub fn our_cursors(conn: &Connection) -> Result<BTreeMap<String, String>, WorkspaceError> {
     let mut stmt = conn.prepare("SELECT peer_device_id, last_hlc FROM sync_cursors")?;
@@ -90,47 +100,93 @@ pub fn our_cursors(conn: &Connection) -> Result<BTreeMap<String, String>, Worksp
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The statements [`changes_since`] runs. Each must be an index search: a
+/// test checks their plans.
+const ORIGINS_SQL: &str = "WITH RECURSIVE origins(id) AS (
+        SELECT MIN(origin_device_id) FROM changes
+        UNION ALL
+        SELECT (SELECT MIN(origin_device_id) FROM changes WHERE origin_device_id > origins.id)
+        FROM origins WHERE origins.id IS NOT NULL
+     )
+     SELECT id FROM origins WHERE id IS NOT NULL";
+const KEYS_ABOVE_SQL: &str = "SELECT hlc, seq FROM changes WHERE origin_device_id = ?1 AND hlc > ?2
+     ORDER BY hlc LIMIT ?3";
+const KEYS_ALL_SQL: &str =
+    "SELECT hlc, seq FROM changes WHERE origin_device_id = ?1 ORDER BY hlc LIMIT ?2";
+const ROW_BY_SEQ_SQL: &str =
+    "SELECT origin_device_id, hlc, entity_kind, entity_id, op, payload_json
+     FROM changes WHERE seq = ?1";
+
+/// Origin devices with rows in `changes`: one seek per origin on the
+/// `(origin_device_id, hlc)` index, whatever the journal's size.
+pub(crate) fn origins(conn: &Connection) -> Result<Vec<String>, WorkspaceError> {
+    let mut stmt = conn.prepare_cached(ORIGINS_SQL)?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Every row this device holds that the holder of `cursors` lacks: rows from
 /// an origin absent from `cursors`, or above its value. HLC order, at most
 /// `limit` rows (clamped to [`MAX_PAGE`]); `next` continues the export.
+///
+/// Per origin held here, the first `limit + 1` keys above its cursor come
+/// from one index seek; the page is the smallest of them in `(hlc, seq)`
+/// order, and only its rows are read. (One query with an `OR` per origin
+/// cannot use that index: it walked the journal from its start.)
 pub fn changes_since(
     conn: &Connection,
     cursors: &BTreeMap<String, String>,
     limit: usize,
 ) -> Result<ChangePage, WorkspaceError> {
+    // One read snapshot across the statements below, as the single query had.
+    // The guard rolls back on drop (an error or a panic), so a pooled reader
+    // never goes back to the pool inside an open read transaction.
+    let tx = conn.unchecked_transaction()?;
+    let page = read_page(&tx, cursors, limit)?;
+    tx.commit()?;
+    Ok(page)
+}
+
+fn read_page(
+    conn: &Connection,
+    cursors: &BTreeMap<String, String>,
+    limit: usize,
+) -> Result<ChangePage, WorkspaceError> {
     let limit = limit.clamp(1, MAX_PAGE);
-    let mut clauses = Vec::with_capacity(cursors.len() + 1);
-    let mut values: Vec<SqlValue> = Vec::with_capacity(cursors.len() * 3);
-    if cursors.is_empty() {
-        clauses.push("1".to_string());
-    } else {
-        let known = vec!["?"; cursors.len()].join(", ");
-        clauses.push(format!("origin_device_id NOT IN ({known})"));
-        values.extend(cursors.keys().map(|k| SqlValue::Text(k.clone())));
-        for (origin, hlc) in cursors {
-            clauses.push("(origin_device_id = ? AND hlc > ?)".to_string());
-            values.push(SqlValue::Text(origin.clone()));
-            values.push(SqlValue::Text(hlc.clone()));
+    let take = limit as i64 + 1;
+    let mut keys: Vec<(String, i64)> = Vec::new();
+    {
+        let mut above = conn.prepare_cached(KEYS_ABOVE_SQL)?;
+        let mut all = conn.prepare_cached(KEYS_ALL_SQL)?;
+        for origin in origins(conn)? {
+            let found: Vec<(String, i64)> = match cursors.get(&origin) {
+                Some(hlc) => above
+                    .query_map(params![origin, hlc, take], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<Result<_, _>>()?,
+                None => all
+                    .query_map(params![origin, take], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<Result<_, _>>()?,
+            };
+            keys.extend(found);
         }
     }
-    values.push(SqlValue::Integer(limit as i64 + 1));
-    let sql = format!(
-        "SELECT origin_device_id, hlc, entity_kind, entity_id, op, payload_json
-         FROM changes WHERE {} ORDER BY hlc, seq LIMIT ?",
-        clauses.join(" OR ")
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows: Vec<ChangeRow> = stmt
-        .query_map(params_from_iter(values.iter()), |r| {
-            Ok(ChangeRow {
-                origin_device_id: r.get(0)?,
-                hlc: r.get(1)?,
-                entity_kind: r.get(2)?,
-                entity_id: r.get(3)?,
-                op: r.get(4)?,
-                payload_json: r.get(5)?,
+    keys.sort();
+    keys.truncate(limit + 1);
+    let mut by_seq = conn.prepare_cached(ROW_BY_SEQ_SQL)?;
+    let mut rows: Vec<ChangeRow> = keys
+        .iter()
+        .map(|(_, seq)| {
+            by_seq.query_row([seq], |r| {
+                Ok(ChangeRow {
+                    origin_device_id: r.get(0)?,
+                    hlc: r.get(1)?,
+                    entity_kind: r.get(2)?,
+                    entity_id: r.get(3)?,
+                    op: r.get(4)?,
+                    payload_json: r.get(5)?,
+                })
             })
-        })?
+        })
         .collect::<Result<_, _>>()?;
     let next = if rows.len() > limit {
         rows.truncate(limit);
@@ -217,10 +273,23 @@ pub fn missing_blobs(conn: &Connection, assets_dir: &Path) -> Result<Vec<String>
     let rows: Vec<(String, String)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
+    // One listing of the directory instead of one `stat` per asset. A name the
+    // listing does not show as a regular file is still checked with `is_file`
+    // (a symlink, a case-insensitive match), so the answer is the same.
+    let listed: HashSet<OsString> = std::fs::read_dir(assets_dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                .map(|e| e.file_name())
+                .collect()
+        })
+        .unwrap_or_default();
     let mut missing: Vec<String> = rows
         .into_iter()
         .filter(|(_, file_path)| {
-            !crate::is_safe_asset_name(file_path) || !assets_dir.join(file_path).is_file()
+            !crate::is_safe_asset_name(file_path)
+                || !(listed.contains(OsStr::new(file_path)) || assets_dir.join(file_path).is_file())
         })
         .map(|(sha, _)| sha)
         .collect();
@@ -236,4 +305,38 @@ pub fn status(conn: &Connection, assets_dir: &Path) -> Result<SyncStatus, Worksp
         pending_count: pending_count(conn)?,
         missing_blobs: missing_blobs(conn, assets_dir)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The export stays an index seek however large the journal grows: no
+    /// statement of `changes_since` may scan `changes`.
+    #[test]
+    fn changes_since_statements_search_an_index() {
+        let conn = crate::db::open_in_memory().unwrap();
+        for sql in [ORIGINS_SQL, KEYS_ABOVE_SQL, KEYS_ALL_SQL, ROW_BY_SEQ_SQL] {
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            // Unbound parameters are NULL: the plan does not depend on them.
+            let mut rows = stmt.raw_query();
+            let mut plan: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().unwrap() {
+                plan.push(row.get(3).unwrap());
+            }
+            // The table is the second word of a step; a bare `SCAN changes`
+            // has nothing after it, so match the word, not a padded substring.
+            let on_changes: Vec<&String> = plan
+                .iter()
+                .filter(|d| d.split_whitespace().nth(1) == Some("changes"))
+                .collect();
+            assert!(!on_changes.is_empty(), "{sql}: {plan:?}");
+            assert!(
+                on_changes
+                    .iter()
+                    .all(|d| d.starts_with("SEARCH changes USING")),
+                "{sql}: {plan:?}"
+            );
+        }
+    }
 }

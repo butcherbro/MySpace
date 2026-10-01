@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { CanvasViewport } from "../canvas/canvas-types";
 import type { WorkspaceGateway } from "../services/workspace-gateway";
+import { errorMessage } from "../services/error-message";
 import { useViewportPersistence } from "./use-viewport-persistence";
 
 /**
@@ -57,7 +58,7 @@ export function useViewportController(options: ViewportControllerOptions): Viewp
       // A rejection belongs to the board that scheduled it; surfacing it on the
       // board the user has since opened is the stale-revision banner bug.
       if (boardId !== save.boardId) return;
-      onError(error instanceof Error ? error.message : String(error));
+      onError(errorMessage(error));
     },
   });
 

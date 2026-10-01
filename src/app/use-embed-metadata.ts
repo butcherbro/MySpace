@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
 import { errorMessage } from "../services/error-message";
 import type { CardDto, EmbedCardDto, WorkspaceGateway } from "../services/workspace-gateway";
-import type { CurrentBoardAction } from "../state/current-board-store";
+import type { BoardViewAction } from "../state/current-board-store";
+import type { CardWrites } from "../state/card-writes";
 
 /**
  * Link Card metadata enrichment: fetches title/preview/favicon for embeds
@@ -15,7 +16,8 @@ export interface EmbedMetadataOptions {
   cards: CardDto[];
   cardsRef: RefObject<CardDto[]>;
   gateway: WorkspaceGateway;
-  dispatch: Dispatch<CurrentBoardAction>;
+  dispatch: Dispatch<BoardViewAction>;
+  cardWrites: CardWrites;
 }
 
 export interface EmbedMetadataController {
@@ -24,7 +26,7 @@ export interface EmbedMetadataController {
 }
 
 export function useEmbedMetadata(options: EmbedMetadataOptions): EmbedMetadataController {
-  const { cards, cardsRef, gateway, dispatch } = options;
+  const { cards, cardsRef, gateway, dispatch, cardWrites } = options;
 
   const metadataInFlightRef = useRef(new Set<string>());
   const metadataAttemptedRef = useRef(new Set<string>());
@@ -39,15 +41,18 @@ export function useEmbedMetadata(options: EmbedMetadataOptions): EmbedMetadataCo
       metadataAttemptedRef.current.add(attemptKey);
       void gateway
         .enrichEmbedMetadata({ id: embed.id })
-        .then((enriched) => {
+        .then(async (enriched) => {
           // The backend returns the current row (any write made during the
-          // fetch included), so it replaces the local card as is. Keep the
-          // mutation ref authoritative before the enriched card mounts: Link
-          // Card may immediately persist a larger content-driven height.
-          cardsRef.current = cardsRef.current.map((card) =>
-            card.id === embed.id ? enriched : card,
-          );
-          dispatch({ type: "cardReplaced", id: embed.id, card: enriched });
+          // fetch included), so it replaces the local card as is. `cardWrites`
+          // keeps the mutation ref authoritative before the enriched card
+          // mounts: Link Card may immediately persist a larger content-driven height.
+          const held = cardsRef.current.find((card) => card.id === embed.id);
+          // Ответ старше своей копии будет отброшен вместе с метаданными:
+          // перечитываем строку, чтобы title/preview/metadataStatus не застряли
+          // старыми при актуальной ревизии.
+          const card =
+            held && held.revision > enriched.revision ? await gateway.readCard(embed.id) : enriched;
+          cardWrites.apply({ type: "cardReplaced", id: embed.id, card });
         })
         .catch((cause) => {
           // Карточку удалили, пока шёл fetch: метаданные просто устарели.
@@ -61,7 +66,7 @@ export function useEmbedMetadata(options: EmbedMetadataOptions): EmbedMetadataCo
       // stable setState/dispatch: identity не меняется, но вне App линтер
       // этого не видит для параметра хука — указываем оба явно.
     },
-    [gateway, dispatch, cardsRef],
+    [gateway, dispatch, cardWrites, cardsRef],
   );
 
   useEffect(() => {

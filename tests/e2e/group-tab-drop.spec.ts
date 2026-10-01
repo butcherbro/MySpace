@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { selectNotesOnly } from "./gestures";
+import { selectNotesOnly, waitForCanvasReady } from "./gestures";
 import { expect, test } from "./fixtures";
 
 // Mixed group moves onto a board tab. ADR-0007 makes the backend refuse a
@@ -8,6 +8,7 @@ import { expect, test } from "./fixtures";
 
 async function openNewBoardTab(page: Page) {
   await page.goto("/");
+  await waitForCanvasReady(page);
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await page.locator(".board-portal-card__tile").dblclick({ force: true });
   await page.getByTestId("breadcrumbs").getByRole("button", { name: "Home" }).click();

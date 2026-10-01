@@ -1,9 +1,10 @@
-import { memo, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NoteEditor } from "../../editor/NoteEditor";
 import { StaticDocument } from "../../editor/StaticDocument";
 import { DamagedDocument } from "../../editor/DamagedDocument";
 import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
+import { endDraftHandoff, takeDraftHandoffInput } from "../../editor/draft-handoff";
 import type { NoteEditorCommands } from "../../editor/editor-commands";
 import type { TextColorId } from "../../editor/text-color";
 import type { NoteCardDto } from "../../services/workspace-gateway";
@@ -79,6 +80,7 @@ export const NoteCard = memo(function NoteCard({
     onFinalize: repair.onFinalize,
     onSaved: onDeactivate,
     corrupt: repair.damaged,
+    editing,
   });
   // The Repair click also reaches the canvas as a card click, which starts
   // editing, so the editor mounts on the recovered document.
@@ -90,7 +92,9 @@ export const NoteCard = memo(function NoteCard({
   // The static view is swapped for an editor on the click that starts editing,
   // so remember where that click landed (see NoteEditor `initialCaretPoint`).
   const lastPointerDownRef = useRef<{ x: number; y: number; t: number } | null>(null);
-  const [caretPoint, setCaretPoint] = useState<{ x: number; y: number } | null>(null);
+  // Заметка, появившаяся сразу в режиме правки (новая или копия конфликта, куда
+  // перешёл набор), получает каретку в конце текста.
+  const [caretPoint, setCaretPoint] = useState<{ x: number; y: number } | "end" | null>(editing ? "end" : null);
   const [wasEditing, setWasEditing] = useState(editing);
   if (editing !== wasEditing) {
     setWasEditing(editing);
@@ -153,6 +157,10 @@ export const NoteCard = memo(function NoteCard({
     }, 250);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, draft, note.documentJson, appliedWidth]);
+
+  // Карточка ушла (смена доски) раньше, чем её редактор взял переданный набор:
+  // клавиши больше не перехватываются, а набранное не теряется молча.
+  useEffect(() => () => endDraftHandoff(note.id), [note.id]);
 
   // На unmount/при переключении заметки — не терять последний измеренный рост.
   useLayoutEffect(() => {
@@ -247,6 +255,7 @@ export const NoteCard = memo(function NoteCard({
           }}
           highlightQuery={highlightQuery}
           initialCaretPoint={caretPoint}
+          takeHandedInput={() => takeDraftHandoffInput(note.id)}
           onCommandsReady={onCommandsReady}
           onBoldStateChange={onBoldStateChange}
           onItalicStateChange={onItalicStateChange}

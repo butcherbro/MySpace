@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { CardDto, EmbedCardDto, WorkspaceGateway } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
+import { createCardWrites } from "../state/card-writes";
 import { useEmbedMetadata } from "./use-embed-metadata";
 
 function embed(overrides: Partial<EmbedCardDto> = {}): EmbedCardDto {
@@ -34,6 +35,7 @@ function harness(
   overrides: {
     cards?: CardDto[];
     enrichEmbedMetadata?: ReturnType<typeof vi.fn>;
+    readCard?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   const enrichEmbedMetadata =
@@ -41,14 +43,16 @@ function harness(
     vi.fn(async (input: { id: string }) =>
       embed({ id: input.id, revision: 2, metadataStatus: "ready", title: "Example" }),
     );
-  const gateway = { enrichEmbedMetadata } as unknown as WorkspaceGateway;
+  const readCard = overrides.readCard ?? vi.fn(async () => embed());
+  const gateway = { enrichEmbedMetadata, readCard } as unknown as WorkspaceGateway;
   const dispatch = vi.fn<(action: CurrentBoardAction) => void>();
   const cards = overrides.cards ?? [];
   const cardsRef: RefObject<CardDto[]> = { current: cards };
+  const cardWrites = createCardWrites(cardsRef, { current: [] }, dispatch);
 
-  const { result } = renderHook(() => useEmbedMetadata({ cards, cardsRef, gateway, dispatch }));
+  const { result } = renderHook(() => useEmbedMetadata({ cards, cardsRef, gateway, dispatch, cardWrites }));
 
-  return { result, dispatch, enrichEmbedMetadata, cardsRef };
+  return { result, dispatch, enrichEmbedMetadata, readCard, cardsRef };
 }
 
 describe("useEmbedMetadata", () => {
@@ -64,6 +68,28 @@ describe("useEmbedMetadata", () => {
     );
     expect(test.enrichEmbedMetadata).toHaveBeenCalledWith({ id: "embed-1" });
     expect(test.cardsRef.current).toEqual([enriched]);
+  });
+
+  it("re-reads the card when its metadata answer is older than the held copy, so the metadata is not lost", async () => {
+    const held = embed({ revision: 7, frame: { x: 50, y: 60, width: 320, height: 180 } });
+    const current = { ...held, revision: 7, metadataStatus: "ready" as const, title: "Example" };
+    const readCard = vi.fn(async () => current);
+    const test = harness({
+      cards: [embed()],
+      readCard,
+      enrichEmbedMetadata: vi.fn(async () => {
+        await Promise.resolve();
+        // Держим копию новее ответа метаданных: сам ответ устарел и будет отброшен.
+        test.cardsRef.current = [held];
+        return embed({ revision: 6, metadataStatus: "ready", title: "Example" });
+      }),
+    });
+
+    await waitFor(() => expect(readCard).toHaveBeenCalledWith("embed-1"));
+    await waitFor(() =>
+      expect(test.dispatch).toHaveBeenCalledWith({ type: "cardReplaced", id: "embed-1", card: current }),
+    );
+    expect(test.cardsRef.current).toEqual([current]);
   });
 
   it("dispatches a failure instead of throwing when the gateway call rejects", async () => {

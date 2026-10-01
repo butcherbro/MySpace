@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { isDraftHandoffActive } from "../editor/draft-handoff";
 
 /**
  * Global keyboard shortcuts for the workspace: Cmd+[ / Cmd+] navigate
@@ -53,7 +54,17 @@ export function useWorkspaceShortcuts(deps: WorkspaceShortcutsDeps): void {
         }
         return;
       }
+      // Клавиши, адресованные тексту, не действуют на холст, пока фокус в поле
+      // ввода (событие могло прийти не из него) или правка переходит в копию
+      // конфликта и фокус ни на каком редакторе: выделена правимая карточка.
+      // Сам факт правки не в счёт: у правимой карточки может не быть
+      // редактора (копия за краем экрана не смонтирована, повреждённая заметка).
+      const active = document.activeElement;
+      const editingText =
+        (active instanceof HTMLElement && (active.isContentEditable || active.matches("input, textarea"))) ||
+        isDraftHandoffActive();
       if (e.key === "Backspace" || e.key === "Delete") {
+        if (editingText) return;
         e.preventDefault();
         void handleDeleteSelection();
         return;
@@ -66,6 +77,7 @@ export function useWorkspaceShortcuts(deps: WorkspaceShortcutsDeps): void {
         e.preventDefault();
         handleNavigateForward();
       } else if (e.key.toLowerCase() === "z") {
+        if (editingText) return;
         e.preventDefault();
         if (e.shiftKey) {
           void handleWorkspaceRedo();

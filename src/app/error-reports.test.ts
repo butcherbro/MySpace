@@ -46,6 +46,42 @@ describe("createErrorReportRecorder", () => {
     });
   });
 
+  it("saves a detail with the report, and the banner's own record of the message reuses it", async () => {
+    const recordErrorReport = vi.fn(async () => saved("report with the text"));
+    const recorder = createErrorReportRecorder(gatewayWith(recordErrorReport), () => 1_000);
+
+    await recorder.record({ message: "not saved", detail: "Your text:\nmine", source: "canvas" });
+    await recorder.record({ message: "not saved", source: "canvas" });
+
+    expect(recordErrorReport).toHaveBeenCalledTimes(1);
+    expect(recordErrorReport).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "not saved\n\nYour text:\nmine" }),
+    );
+    expect(recordErrorReport.mock.calls[0]).not.toHaveProperty("0.detail");
+    await expect(recorder.reportText("not saved")).resolves.toBe("report with the text");
+
+    // Another text under the same banner is still the same report: the writer sets the pace.
+    await recorder.record({ message: "not saved", detail: "Your text:\nother", source: "canvas" });
+    expect(recordErrorReport).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a report that supersedes the last one of its message even within the dedupe window", async () => {
+    let text = "first report";
+    const recordErrorReport = vi.fn(async () => saved(text));
+    const recorder = createErrorReportRecorder(gatewayWith(recordErrorReport), () => 1_000);
+
+    await recorder.record({ message: "not saved", detail: "Your text:\nmine", source: "canvas" });
+    text = "newer report";
+    await recorder.record({ message: "not saved", detail: "Your text:\nmine and more", supersede: true, source: "canvas" });
+
+    expect(recordErrorReport).toHaveBeenCalledTimes(2);
+    expect(recordErrorReport).toHaveBeenLastCalledWith(
+      expect.objectContaining({ message: "not saved\n\nYour text:\nmine and more" }),
+    );
+    expect(recordErrorReport.mock.calls[1]).not.toHaveProperty("0.supersede");
+    await expect(recorder.reportText("not saved")).resolves.toBe("newer report");
+  });
+
   it("records the same message once within the dedupe window", async () => {
     let now = 1_000;
     const recordErrorReport = vi.fn(async () => saved("report"));

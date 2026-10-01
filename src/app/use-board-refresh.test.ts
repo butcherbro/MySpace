@@ -109,7 +109,7 @@ describe("useBoardRefresh", () => {
         await test.result.current.reloadCurrentBoard();
       });
 
-      expect(test.navigateTo).toHaveBeenCalledWith("b1");
+      expect(test.navigateTo).toHaveBeenCalledWith("b1", { reload: true });
     });
 
     it("does nothing when no board is open", async () => {
@@ -137,7 +137,7 @@ describe("useBoardRefresh", () => {
         await test.result.current.handleWorkspaceUndo();
       });
 
-      expect(test.navigateTo).toHaveBeenCalledWith("b1");
+      expect(test.navigateTo).toHaveBeenCalledWith("b1", { reload: true });
     });
 
     it("does not reload when undo() resolves false", async () => {
@@ -174,7 +174,7 @@ describe("useBoardRefresh", () => {
         await test.result.current.handleWorkspaceRedo();
       });
 
-      expect(test.navigateTo).toHaveBeenCalledWith("b1");
+      expect(test.navigateTo).toHaveBeenCalledWith("b1", { reload: true });
     });
 
     it("does not reload when redo() resolves false", async () => {
@@ -237,7 +237,7 @@ describe("useBoardRefresh", () => {
       expect(test.refreshTrash).not.toHaveBeenCalled();
 
       await tick(3000); // dataVersion AND changeSeq moved
-      expect(test.navigateTo).toHaveBeenCalledWith("b1");
+      expect(test.navigateTo).toHaveBeenCalledWith("b1", { reload: true });
       expect(test.refreshTrash).toHaveBeenCalledTimes(1);
     });
 
@@ -311,7 +311,7 @@ describe("useBoardRefresh", () => {
       expect(openBoardId).toBe("b1");
 
       reloadBoard("board-X");
-      expect(test.navigateTo).toHaveBeenCalledWith("board-X");
+      expect(test.navigateTo).toHaveBeenCalledWith("board-X", { reload: true });
 
       onApplied();
       expect(test.refreshTrash).toHaveBeenCalledTimes(1);
