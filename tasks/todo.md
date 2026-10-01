@@ -476,6 +476,23 @@ P2 / platform:
       команды `get_device_identity` / `rename_device`). Скопированная на другую
       машину база получает новый device_id (отпечаток машины в `local_meta`).
 
+### Deferred dependency majors (2026-10-01)
+
+- [ ] TypeScript 5.8 → 7: Dependabot #10 closed (`ignore this major version`).
+      `npm ci` fails with ERESOLVE: @typescript-eslint/eslint-plugin 8.71 does not
+      accept typescript@7 as a peer. Needs a coordinated bump of typescript-eslint
+      (and whatever else breaks), then typecheck/lint on TS 7's native compiler.
+- [ ] sha2 0.10 → 0.11 and hmac 0.12 → 0.13 (Dependabot #7, #8): must go together
+      (shared digest 0.11). cargo cannot fetch crates from the Claude sandbox, so the
+      bump runs in the user's terminal: `cd src-tauri && cargo update -p sha2 -p hmac`
+      after editing Cargo.toml, then the Rust gates. Close the two Dependabot PRs after.
+- [ ] tauri-apps/tauri-action 0 → 1 (Dependabot #4): changes the release pipeline
+      that was just proven working on v0.2.4. Do it as its own change before the next
+      release, reading the v1 migration notes; verify with a full release run.
+- [ ] dtolnay/rust-toolchain 1.98 → 1.120 (Dependabot #5 closed, `ignore this minor
+      version`): the install step itself failed in CI. The toolchain is pinned to match
+      local rustc 1.98.0; bump deliberately, together with rust-version and local toolchain.
+
 Известные флейки e2e (не регрессия, воспроизводится на `f819aee`):
 - [x] (закрыто 2026-09-30: тест ждёт `data-flow-ready` перед «New board»,
       `selectNotesOnly` выделяет полосой по левым краям заметок)
