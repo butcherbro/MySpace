@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { NoteEditor } from "./NoteEditor";
 import type { NoteEditorCommands } from "./editor-commands";
 
+// Как буфер draft-handoff: набранное отдаётся один раз.
+function handOnce(text: string): () => string {
+  let left = text;
+  return () => {
+    const taken = left;
+    left = "";
+    return taken;
+  };
+}
+
 const doc = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "hello" }] }],
@@ -29,24 +39,50 @@ describe("NoteEditor", () => {
 
   it("types the keystrokes handed to it at the end, Enter as a new paragraph and markup as text", () => {
     const onChange = vi.fn();
-    const { container } = render(
+    const take = vi.fn(handOnce(" ab\n<b>c"));
+    render(
       <NoteEditor
         document={doc}
         editable={true}
         onChange={onChange}
         initialCaretPoint="end"
-        takeHandedInput={() => " ab\n<b>c"}
+        takeHandedInput={take}
       />,
     );
-    // jsdom не фокусирует contenteditable сам: событие фокуса шлём явно.
-    fireEvent.focus(container.querySelector('[contenteditable="true"]')!);
 
+    // Однократность доказываем счётчиком вызовов, а не семантикой буфера.
+    expect(take).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenLastCalledWith({
       type: "doc",
       content: [
         { type: "paragraph", content: [{ type: "text", text: "hello ab" }] },
         { type: "paragraph", content: [{ type: "text", text: "<b>c" }] },
       ],
+    });
+  });
+
+  it.each([
+    ["without a click point", null],
+    // В jsdom нет layout: posAtCoords бросает, поэтому проверяется ветка catch, а не null.
+    ["when posAtCoords throws", { x: 5, y: 5 }],
+  ])("opens a stored note with the caret at the end %s", (_, point) => {
+    const onChange = vi.fn();
+    // Документ в том же виде, что отдаёт getJSON(): setContent при монтировании
+    // не срабатывает, и каретку в конец ставит только сам редактор.
+    // Фокус синхронный (не в кадре Tiptap): набранное входит уже при монтировании.
+    render(
+      <NoteEditor
+        document={doc}
+        editable={true}
+        onChange={onChange}
+        initialCaretPoint={point}
+        takeHandedInput={handOnce("!")}
+      />,
+    );
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "hello!" }] }],
     });
   });
 
