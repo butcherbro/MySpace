@@ -482,10 +482,9 @@ P2 / platform:
       `npm ci` fails with ERESOLVE: @typescript-eslint/eslint-plugin 8.71 does not
       accept typescript@7 as a peer. Needs a coordinated bump of typescript-eslint
       (and whatever else breaks), then typecheck/lint on TS 7's native compiler.
-- [ ] sha2 0.10 → 0.11 and hmac 0.12 → 0.13 (Dependabot #7, #8): must go together
-      (shared digest 0.11). cargo cannot fetch crates from the Claude sandbox, so the
-      bump runs in the user's terminal: `cd src-tauri && cargo update -p sha2 -p hmac`
-      after editing Cargo.toml, then the Rust gates. Close the two Dependabot PRs after.
+- [x] sha2 0.10 → 0.11 and hmac 0.12 → 0.13 (Dependabot #7, #8): landed together in #22
+      (2026-10-02). digest 0.11 dropped LowerHex, so hashes go through `hex_lower` in
+      `sync/pairing.rs`; output is byte-identical to the old `{:x}` (known-vector test).
 - [ ] tauri-apps/tauri-action 0 → 1 (Dependabot #4): changes the release pipeline
       that was just proven working on v0.2.4. Do it as its own change before the next
       release, reading the v1 migration notes; verify with a full release run.
