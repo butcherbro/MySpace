@@ -216,7 +216,7 @@ impl PeerClient {
         file.flush().await.map_err(io)?;
         file.sync_all().await.map_err(io)?;
         drop(file);
-        let got = format!("{:x}", hasher.finalize());
+        let got = pairing::hex_lower(&hasher.finalize());
         if got != sha256 {
             return Err(sync_err(format!(
                 "blob {sha256} failed verification (got {got})"

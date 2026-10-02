@@ -738,7 +738,7 @@ mod tests {
             largest = largest.max(data.len());
             hasher.update(&data);
         }
-        (total, largest, format!("{:x}", hasher.finalize()))
+        (total, largest, pairing::hex_lower(&hasher.finalize()))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

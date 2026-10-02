@@ -16,7 +16,7 @@
 
 use std::time::{Duration, Instant};
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -43,11 +43,7 @@ pub fn proof(code: &str, own_fp: &str, other_fp: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(code.as_bytes()).expect("HMAC takes any key length");
     mac.update(own_fp.as_bytes());
     mac.update(other_fp.as_bytes());
-    mac.finalize()
-        .into_bytes()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex_lower(&mac.finalize().into_bytes())
 }
 
 /// Constant-time check of a hex proof.
@@ -59,6 +55,19 @@ pub fn verify_proof(code: &str, own_fp: &str, other_fp: &str, proof_hex: &str) -
     mac.update(own_fp.as_bytes());
     mac.update(other_fp.as_bytes());
     mac.verify_slice(&bytes).is_ok()
+}
+
+/// Lowercase hex without a prefix, two digits per byte. Written by hand because
+/// digest 0.11 outputs (`hybrid-array`) no longer implement `LowerHex`; the
+/// strings are stored sha256 ids and TLS fingerprints, so the format is frozen.
+pub fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
+            write!(out, "{b:02x}").expect("writing to a String cannot fail");
+            out
+        })
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
@@ -188,6 +197,18 @@ mod tests {
         assert!(!verify_proof("123457", "aa", "bb", &p));
         assert!(!verify_proof("123456", "aa", "bb", "zz"));
         assert_eq!(p.len(), 64);
+    }
+
+    #[test]
+    fn hex_lower_matches_known_vectors() {
+        use sha2::Digest;
+        // Формат зафиксирован: так хранятся sha256 ассетов и отпечатки пиров.
+        assert_eq!(
+            hex_lower(&Sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(hex_lower(&[0x00, 0x0f]), "000f");
+        assert_eq!(hex_lower(&[]), "");
     }
 
     #[test]

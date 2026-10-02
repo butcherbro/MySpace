@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::errors::WorkspaceError;
 
+use super::pairing::hex_lower;
 use super::peers::TransportIdentity;
 
 fn tls_err(context: &str, e: impl std::fmt::Display) -> WorkspaceError {
@@ -39,7 +40,7 @@ pub fn provider() -> Arc<CryptoProvider> {
 
 /// Lowercase hex SHA-256 of a DER certificate.
 pub fn fingerprint(der: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(der))
+    hex_lower(&Sha256::digest(der))
 }
 
 /// [`fingerprint`] of the first certificate in a PEM string.

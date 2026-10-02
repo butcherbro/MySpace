@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{AssetDto, CreateFileCardInput, ImportAssetInput};
 use crate::repositories::immediate_tx;
+use crate::sync::pairing::hex_lower;
 
 use super::super::db;
 
@@ -131,7 +132,7 @@ pub fn stage_asset_bytes(
 
 /// Lowercase hex SHA-256 of an in-memory buffer.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex_lower(&Sha256::digest(bytes))
 }
 
 /// Lowercase hex SHA-256 of a file, streamed in fixed-size chunks so a large
@@ -147,7 +148,7 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex_lower(&hasher.finalize()))
 }
 
 /// Chunk size for streamed hashing and hashing copies.
@@ -173,7 +174,7 @@ fn copy_and_hash(source: &Path, dest: &Path) -> std::io::Result<(u64, String)> {
         total += read as u64;
     }
     output.sync_all()?;
-    Ok((total, format!("{:x}", hasher.finalize())))
+    Ok((total, hex_lower(&hasher.finalize())))
 }
 
 /// Returns the asset whose stored file has this SHA-256, if any. Used by every
