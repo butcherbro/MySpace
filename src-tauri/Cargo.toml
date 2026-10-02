@@ -42,7 +42,7 @@ tracing-appender = "0.2"
 # thread and spawn_blocking for pooled reads. Tauri already pulls tokio in.
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "net", "time", "io-util"] }
 # Content hash of every managed asset (P1.2, ADR-0011 §4: blob identity).
-sha2 = "0.10"
+sha2 = "0.11"
 # Canonical paths without the Windows `\\?\` verbatim prefix for the path
 # folder locator (already in the tree via tauri-plugin-opener).
 dunce = "1"
@@ -60,7 +60,7 @@ http-body-util = "0.1"
 # Self-signed device certificate (MIT OR Apache-2.0).
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
 # Pairing proofs (MIT OR Apache-2.0); 0.12 matches sha2 0.10.
-hmac = "0.12"
+hmac = "0.13"
 # mDNS discovery (MIT OR Apache-2.0).
 mdns-sd = "0.21"
 # Local addresses shown for "Add by address" (MIT OR BSD-3-Clause; via mdns-sd).
