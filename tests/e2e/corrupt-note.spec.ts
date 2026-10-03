@@ -19,6 +19,9 @@ test("a damaged note is read-only until Repair; Repair + edit + blur saves", asy
   await expect(damaged.locator("[data-static-document]")).toHaveText("Recovered words");
   await expect(healthy).toHaveAttribute("data-corrupt", "false");
   await expect(healthy.locator("[data-static-document]")).toHaveText("Healthy words");
+  // A damaged note is read-only: nothing resizes it on its own (no frame write).
+  await page.waitForTimeout(400);
+  expect(Math.round((await damaged.boundingBox())!.height)).toBe(120);
 
   // Clicking the damaged note does not open an editor, and typing changes nothing.
   await damaged.locator("[data-static-document]").click();

@@ -148,8 +148,9 @@ export const NoteCard = memo(function NoteCard({
   // перечитывает документ — оба раза авторост отращивал уменьшенную вручную
   // карточку обратно. Базу меряем и в покое, так что вход в правку карточку не
   // растит. Заметка с ревизией 1 (вставка на пустой холст, без правки) один раз
-  // подгоняется под текст: запись роста поднимает ревизию.
-  const fitsContent = editing || note.revision === 1;
+  // подгоняется под текст: запись роста поднимает ревизию. Повреждённая заметка —
+  // нет: до Repair она только для чтения, и записи в неё не идут.
+  const fitsContent = editing || (note.revision === 1 && !repair.damaged);
   const contentHeightRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = bodyRef.current;
