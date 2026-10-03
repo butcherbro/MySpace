@@ -66,6 +66,8 @@ export function useWorkspaceShortcuts(deps: WorkspaceShortcutsDeps): void {
       if (e.key === "Backspace" || e.key === "Delete") {
         if (editingText) return;
         e.preventDefault();
+        // Зажатая клавиша не удаляет повторно: одно нажатие — одно удаление.
+        if (e.repeat) return;
         void handleDeleteSelection();
         return;
       }

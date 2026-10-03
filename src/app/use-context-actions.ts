@@ -1,4 +1,4 @@
-import { useCallback, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { useCallback, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { errorMessage } from "../services/error-message";
 import type { IdGenerator } from "../services/id-generator";
 import { pickFolder } from "../services/asset-picker";
@@ -84,9 +84,16 @@ export function useContextActions(deps: ContextActionsDeps): ContextActionsContr
     [cards],
   );
 
+  // Карточки, чьё удаление уже ушло в бэкенд. Выделение снимается только после
+  // ответа, и второе нажатие Delete (или автоповтор клавиши) в этот промежуток
+  // отправляло те же карточки ещё раз — бэкенд отвечал not_found на уже
+  // удалённую (Windows, 2026-10-03).
+  const trashingRef = useRef(new Set<string>());
   const handleDeleteSelection = useCallback(async () => {
-    if (selection.length === 0) return;
-    const items: TrashItem[] = selection
+    const pending = trashingRef.current;
+    const ids = selection.filter((id) => !pending.has(id));
+    if (ids.length === 0) return;
+    const items: TrashItem[] = ids
       .map((id) => {
         const card = cards.find((c) => c.id === id);
         if (!card) return null;
@@ -104,12 +111,15 @@ export function useContextActions(deps: ContextActionsDeps): ContextActionsContr
     );
     const extraIds = cascadedShortcutIds(trashedBoardIds);
 
+    ids.forEach((id) => pending.add(id));
     try {
       await dispatcher.execute(new TrashSelectionCommand(idGenerator.nextId(), items));
-      cardWrites.apply({ type: "cardsRemoved", ids: [...selection, ...extraIds] });
+      cardWrites.apply({ type: "cardsRemoved", ids: [...ids, ...extraIds] });
       void refreshTrash();
     } catch (e) {
       dispatch({ type: "failed", message: errorMessage(e) });
+    } finally {
+      ids.forEach((id) => pending.delete(id));
     }
     // dispatch стабилен (useReducer), но вне App линтер этого не видит —
     // указываем явно.

@@ -1033,6 +1033,15 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   trashSelection(input: TrashSelectionInput): Promise<string> {
+    // Как бэкенд (`trash_selection`): уже удалённая или несуществующая
+    // карточка — not_found, а не молчаливый успех.
+    for (const item of input.items) {
+      const missing =
+        item.kind === "board_portal"
+          ? !this.boards.has(item.id)
+          : ![...this.snapshot.cards, ...this.snapshot.unsortedCards].some((c) => c.id === item.id);
+      if (missing) return Promise.reject({ code: "not_found", message: item.id });
+    }
     const cardIds = new Set(
       input.items.filter((item) => item.kind !== "board_portal").map((item) => item.id),
     );
