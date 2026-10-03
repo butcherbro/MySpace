@@ -41,6 +41,8 @@ interface NoteEditorProps {
   initialCaretPoint?: { x: number; y: number } | "end" | null;
   /** Keystrokes typed while editing was passing to this editor; typed in when it takes focus. */
   takeHandedInput?: () => string;
+  /** Called with the clipboard's plain text right before a paste is inserted. */
+  onPasteText?: (text: string) => void;
 }
 
 /**
@@ -62,11 +64,16 @@ export function NoteEditor({
   onTextColorChange,
   initialCaretPoint = null,
   takeHandedInput,
+  onPasteText,
 }: NoteEditorProps) {
   const takeHandedInputRef = useRef(takeHandedInput);
   useLayoutEffect(() => {
     takeHandedInputRef.current = takeHandedInput;
   }, [takeHandedInput]);
+  const onPasteTextRef = useRef(onPasteText);
+  useLayoutEffect(() => {
+    onPasteTextRef.current = onPasteText;
+  }, [onPasteText]);
   const initialCaretPointRef = useRef(initialCaretPoint);
   // Layout effect: synced before the passive focus effect below reads it.
   useLayoutEffect(() => {
@@ -76,6 +83,13 @@ export function NoteEditor({
     extensions: createEditorExtensions(),
     content: document as JSONContent,
     editable,
+    editorProps: {
+      // Только наблюдаем: `false` оставляет вставку самому ProseMirror.
+      handlePaste: (_view, event) => {
+        onPasteTextRef.current?.(event.clipboardData?.getData("text/plain") ?? "");
+        return false;
+      },
+    },
     onUpdate: ({ editor }) => {
       onChange(editor.getJSON());
     },

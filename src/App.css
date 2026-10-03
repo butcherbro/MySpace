@@ -34,7 +34,7 @@
 .workspace__canvas {
   flex: 1;
   position: relative;
-  overflow: hidden;
+  overflow: clip; /* не скролл-контейнер, см. canvas.css */
   min-height: 0;
   /* dotted board background (React Flow also renders one; this is the fallback
      beneath the absolute-positioned canvas surface). */

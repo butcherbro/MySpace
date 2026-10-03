@@ -13,6 +13,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
+import { detectPlatform } from "../app/platform";
 import { CanvasScrollbars } from "./CanvasScrollbars";
 import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard, staleNodeIds } from "./canvas-mapping";
 import type {
@@ -57,6 +58,7 @@ type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"] };
 
 /** Top-left of the translate extent: the board never scrolls above/left of its origin. */
 const TRANSLATE_EXTENT_MIN = { x: 0, y: 0 } as const;
+const IS_MAC = detectPlatform() === "macos";
 
 const nodeTypes: NodeTypes = {
   // Раньше рамка была принудительно 100%/100% от React Flow узла, чей
@@ -639,6 +641,12 @@ export function CanvasAdapter({
         panOnDrag={spacePan ? [0, 1, 2] : [1, 2]}
         zoomOnScroll
         zoomOnPinch
+        // React Flow по умолчанию переключает колесо с пана на зум, пока держат
+        // Ctrl (Windows) — по собственному учёту keydown/keyup. Потерянный keyup
+        // (Ctrl+V, смена фокуса) оставляет колесо в режиме зума. Ctrl+колесо
+        // зумит и без этого: событие несёт `ctrlKey`, его ловит ветка pinch.
+        // На macOS оставляем Cmd+колесо.
+        zoomActivationKeyCode={IS_MAC ? "Meta" : null}
         zoomOnDoubleClick={false}
         nodesDraggable={!spacePan}
         nodesConnectable={false}

@@ -9,6 +9,7 @@ import type { NoteEditorCommands } from "../../editor/editor-commands";
 import type { TextColorId } from "../../editor/text-color";
 import type { NoteCardDto } from "../../services/workspace-gateway";
 import type { ResizeOptions } from "../resize-options";
+import { autoGrowHeight as autoGrowTarget, widthAfterPaste } from "./note-sizing";
 import "./note-card.css";
 
 interface NoteCardProps {
@@ -116,10 +117,13 @@ export const NoteCard = memo(function NoteCard({
   // уменьшением карточки пользователем.
   const cardRef = useRef<HTMLDivElement>(null);
   const [autoGrowHeight, setAutoGrowHeight] = useState<number | null>(null);
+  // Длинная вставка расширяет узкую заметку (см. `widthAfterPaste`): локально
+  // сразу, чтобы авторост мерил высоту уже по новой ширине.
+  const [autoWidth, setAutoWidth] = useState<number | null>(null);
   const growPendingRef = useRef<number | null>(null);
   const growTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const appliedWidth = draftSize?.width ?? note.frame.width;
+  const appliedWidth = draftSize?.width ?? Math.max(note.frame.width, autoWidth ?? 0);
   const appliedHeight = draftSize?.height ?? Math.max(note.frame.height, autoGrowHeight ?? 0);
 
   function flushPendingGrow() {
@@ -138,13 +142,18 @@ export const NoteCard = memo(function NoteCard({
   // клипует/скроллит его — так и ловим переполнение без синхронного layout-хака.
   // Реагируем только на изменения контента (не на смену `note.frame.height`), иначе
   // эффект тут же отменял бы ручное уменьшение карточки пользователем.
+  // Заметка с ревизией 1 ещё ни разу не менялась после создания (вставка текста
+  // на пустой холст создаёт её 120px высотой и не в режиме правки) — её тоже
+  // подгоняем под контент, один раз: запись роста поднимает ревизию.
+  // Высота упирается в лимит бэкенда (`NOTE_MAX_HEIGHT`): остаток прокручивается
+  // внутри карточки, а не отклоняется записью с рассинхроном стора и DOM.
+  const fitsContent = editing || note.revision === 1;
   useLayoutEffect(() => {
-    if (!editing) return;
+    if (!fitsContent) return;
     const el = cardRef.current;
     if (!el) return;
-    const overflow = el.scrollHeight - el.clientHeight;
-    if (overflow <= 0) return;
-    const needed = Math.ceil(appliedHeight + overflow);
+    const needed = autoGrowTarget(appliedHeight, el.scrollHeight - el.clientHeight);
+    if (needed === null) return;
     setAutoGrowHeight((prev) => (prev === null || needed > prev ? needed : prev));
     growPendingRef.current = needed;
     if (growTimer.current) clearTimeout(growTimer.current);
@@ -156,7 +165,7 @@ export const NoteCard = memo(function NoteCard({
       growPendingRef.current = null;
     }, 250);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, draft, note.documentJson, appliedWidth]);
+  }, [fitsContent, draft, note.documentJson, appliedWidth]);
 
   // Карточка ушла (смена доски) раньше, чем её редактор взял переданный набор:
   // клавиши больше не перехватываются, а набранное не теряется молча.
@@ -203,6 +212,7 @@ export const NoteCard = memo(function NoteCard({
       // Явный ручной resize побеждает автогrow: сбрасываем «горб», иначе
       // уменьшение карточки ниже высоты контента тут же откатилось бы назад.
       setAutoGrowHeight(null);
+      setAutoWidth(null);
       onResize(note.id, final.width, final.height);
       draftSizeRef.current = null;
       setDraftSize(null);
@@ -256,6 +266,14 @@ export const NoteCard = memo(function NoteCard({
           highlightQuery={highlightQuery}
           initialCaretPoint={caretPoint}
           takeHandedInput={() => takeDraftHandoffInput(note.id)}
+          onPasteText={(text) => {
+            const width = widthAfterPaste(appliedWidth, text);
+            if (width === appliedWidth) return;
+            setAutoWidth(width);
+            // Ширину пишем сразу: авторост ниже запишет её же вместе с высотой,
+            // но только если контент переполнит карточку.
+            onResize(note.id, width, appliedHeight, { auto: true });
+          }}
           onCommandsReady={onCommandsReady}
           onBoldStateChange={onBoldStateChange}
           onItalicStateChange={onItalicStateChange}

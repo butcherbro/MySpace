@@ -1,8 +1,13 @@
+/* Канвас движется только transform'ом React Flow; нативной прокрутки у него
+   быть не должно. `overflow: hidden` — всё ещё скролл-контейнер: focus() и
+   scrollIntoView() сдвигают его scrollTop, а обёртка `.react-flow` в ответ
+   делает scrollTo(0, 0) — для пользователя это «пружинит наверх». `clip`
+   обрезает так же, но скролл-контейнером не является. */
 .canvas-surface {
   position: relative;
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  overflow: clip;
   background: var(--desk);
   color: var(--ink);
   outline: none;
@@ -19,6 +24,8 @@
 .canvas-surface .react-flow {
   width: 100%;
   height: 100%;
+  /* React Flow ставит обёртке inline `overflow: hidden`; перебить можно только так. */
+  overflow: clip !important;
 }
 
 .canvas-surface .react-flow__viewport,
