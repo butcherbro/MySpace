@@ -35,7 +35,11 @@ test("a damaged note is read-only until Repair; Repair + edit + blur saves", asy
   const editor = damaged.locator('.ProseMirror[contenteditable="true"]');
   await expect(editor).toBeVisible();
   await expect(editor).toHaveText("Recovered words");
-  await editor.click();
+  // Put the caret after the text by clicking right of it on its line: `End`
+  // does not move the caret in a contenteditable on macOS, so a click on the
+  // editor's centre left it mid-word there ("Recovered wor repairedds").
+  const editorBox = (await editor.boundingBox())!;
+  await editor.click({ position: { x: editorBox.width - 2, y: 8 } });
   await page.keyboard.press("End");
   await page.keyboard.type(" repaired");
   await expect(editor).toHaveText("Recovered words repaired");
