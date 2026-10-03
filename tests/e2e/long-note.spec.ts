@@ -1,9 +1,11 @@
 import { expect, test, type Page } from "./fixtures";
 
 // Long text in a note (user report 2026-10-03, Windows): a narrow "till
-// receipt" note, a scroll that springs back to the top, and — past the
-// backend's 10 000px frame limit — a note that vanished mid-scroll because
-// the rejected auto-grow left the store's height behind the DOM's.
+// receipt" note many screens tall, a scroll that springs back to the top, and
+// — past the backend's 10 000px frame limit — a note that vanished mid-scroll
+// because the rejected auto-grow left the store's height behind the DOM's.
+// Now: width follows the text length, height stops at about a screen, and the
+// rest scrolls inside the note only while it is being edited.
 
 const paragraphs = (n: number) =>
   Array.from(
@@ -41,12 +43,12 @@ const readTranslateY = async (page: Page) => {
 
 test("a long paste into a note widens it and grows it to fit", async ({ page }) => {
   const card = await openNewNote(page);
-  await pasteIntoEditor(page, paragraphs(12));
+  await pasteIntoEditor(page, paragraphs(8));
 
   await expect.poll(async () => (await card.boundingBox())?.width).toBe(480);
   // Grown to the content: nothing left to scroll inside the card.
   await expect
-    .poll(() => card.evaluate((el) => el.scrollHeight - el.clientHeight))
+    .poll(() => page.getByTestId("note-card-body").evaluate((el) => el.scrollHeight - el.clientHeight))
     .toBeLessThanOrEqual(0);
 });
 
@@ -58,32 +60,53 @@ test("a long text pasted on the empty canvas becomes a wide note sized to its co
     const dt = new DataTransfer();
     dt.setData("text/plain", value);
     window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-  }, paragraphs(12));
+  }, paragraphs(8));
 
   const card = page.getByTestId("note-card");
   await expect(card).toHaveCount(1);
   await expect(card).toHaveAttribute("data-editing", "false");
   await expect.poll(async () => (await card.boundingBox())?.width).toBe(480);
   await expect
-    .poll(() => card.evaluate((el) => el.scrollHeight - el.clientHeight))
+    .poll(() => page.getByTestId("note-card-body").evaluate((el) => el.scrollHeight - el.clientHeight))
     .toBeLessThanOrEqual(0);
 });
 
-test("a note taller than the frame limit caps at it and stays on the canvas while scrolling", async ({ page }) => {
+test("a very long note stops at about a screen and scrolls inside only while editing", async ({ page }) => {
   const card = await openNewNote(page);
+  const body = page.getByTestId("note-card-body");
   await pasteIntoEditor(page, paragraphs(220));
 
-  await expect.poll(async () => Math.round((await card.boundingBox())?.height ?? 0)).toBe(10000);
+  // Wide (a readable line), one screen tall, no rejected frame write.
+  await expect.poll(async () => (await card.boundingBox())?.width).toBe(800);
+  await expect.poll(async () => Math.round((await card.boundingBox())?.height ?? 0)).toBe(720);
   await page.waitForTimeout(400); // past the auto-grow write debounce
   await expect(page.locator(".error-banner")).toHaveCount(0);
 
-  await page.mouse.click(1100, 600); // leave edit mode
+  // Editing: the wheel over the note scrolls its text, not the canvas.
+  await body.evaluate((el) => (el.scrollTop = 0));
+  const box = (await card.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 200);
+  const before = await readTranslateY(page);
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  expect(await readTranslateY(page)).toBe(before);
+
+  // At the end of the text the wheel goes back to the canvas.
+  await body.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => readTranslateY(page)).toBeLessThan(before ?? 0);
+
+  // Idle: clipped with a fade, back at the top, and the wheel pans the canvas.
+  await page.mouse.click(1200, 650);
   await expect(card).toHaveAttribute("data-editing", "false");
-  await page.mouse.move(600, 500);
-  for (let i = 0; i < 20; i++) await page.mouse.wheel(0, 400);
-  await expect.poll(() => readTranslateY(page)).toBeLessThan(-2000);
-  // Culling works from the store's frame; it must match the DOM card.
-  await expect(card).toHaveCount(1);
+  await expect(card.locator(".note-card__fade")).toHaveCount(1);
+  expect(await body.evaluate((el) => el.scrollTop)).toBe(0);
+  const idleBox = (await card.boundingBox())!;
+  await page.mouse.move(idleBox.x + idleBox.width / 2, idleBox.y + Math.min(idleBox.height, 400) / 2);
+  const idleBefore = (await readTranslateY(page)) ?? 0;
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => readTranslateY(page)).toBeLessThan(idleBefore);
+  expect(await body.evaluate((el) => el.scrollTop)).toBe(0);
 });
 
 test("a lost Ctrl keyup does not turn the wheel into zoom", async ({ page }) => {
@@ -109,7 +132,7 @@ test("the canvas is never a native scroller", async ({ page }) => {
   // as scrollable overflow, so an `overflow: hidden` ancestor can be scrolled
   // by focus()/scrollIntoView(); React Flow answers on its wrapper with
   // scrollTo(0, 0) — the visible "spring back to the top".
-  await expect.poll(async () => (await card.boundingBox())?.height ?? 0).toBeGreaterThan(2000);
+  await expect.poll(async () => (await card.boundingBox())?.height ?? 0).toBeGreaterThan(700);
   const offsets = await page.evaluate(() =>
     [".workspace__canvas", ".canvas-surface", ".react-flow"].map((selector) => {
       const el = document.querySelector(selector)!;

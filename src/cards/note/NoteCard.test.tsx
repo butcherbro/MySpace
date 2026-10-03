@@ -191,9 +191,9 @@ describe("NoteCard", () => {
     );
 
     // jsdom has no real layout engine: fake the measurement the component reads
-    // (scrollHeight = full content height, clientHeight = the currently applied
+    // on the card body (scrollHeight = full content height, clientHeight = the applied
     // frame height) to simulate a paste that overflows the 80px starting frame.
-    const card = screen.getByTestId("note-card");
+    const card = screen.getByTestId("note-card-body");
     Object.defineProperty(card, "clientHeight", { configurable: true, value: 80 });
     Object.defineProperty(card, "scrollHeight", { configurable: true, value: 220 });
 
@@ -213,7 +213,7 @@ describe("NoteCard", () => {
       <NoteCard note={makeNote()} editing={true} onDeactivate={vi.fn()} onUpdate={vi.fn().mockResolvedValue(undefined)} onContextMenu={vi.fn()} onResize={onResize} />,
     );
 
-    const card = screen.getByTestId("note-card");
+    const card = screen.getByTestId("note-card-body");
     Object.defineProperty(card, "clientHeight", { configurable: true, value: 80 });
     Object.defineProperty(card, "scrollHeight", { configurable: true, value: 220 });
     act(() => lastEditorProps()?.onChange(changedDoc));
