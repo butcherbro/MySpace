@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ImageCardDto } from "../../services/workspace-gateway";
 import { NoteEditor } from "../../editor/NoteEditor";
@@ -7,6 +7,7 @@ import { DamagedDocument } from "../../editor/DamagedDocument";
 import { recoveredDocument, useCorruptRepair, type DocumentSave } from "../../editor/corrupt-document";
 import { useDocumentDraft } from "../../editor/use-document-draft";
 import { computeResizedImageFrameSize } from "./image-card-geometry";
+import { useInnerWheelScroll } from "../inner-scroll";
 import "./image-card.css";
 import { assetUrl } from "../../services/asset-url";
 
@@ -82,6 +83,17 @@ export const ImageCard = memo(function ImageCard({
 
   const appliedWidth = draftSize?.width ?? image.frame.width;
   const appliedHeight = draftSize?.height ?? image.frame.height;
+
+  // Подпись занимает не больше половины карточки, чтобы длинный текст не
+  // выдавливал картинку. Что не влезло, в покое обрезано с затуханием, а при
+  // правке прокручивается внутри (колесо — тексту, у края снова канвасу).
+  const [captionClipped, setCaptionClipped] = useState(false);
+  useLayoutEffect(() => {
+    const el = captionRef.current;
+    if (!el) return;
+    setCaptionClipped(el.scrollHeight - el.clientHeight > 1);
+  }, [editing, draft, image.captionJson, appliedWidth, appliedHeight]);
+  useInnerWheelScroll(captionRef, editing);
   const src = assetUrl(image.asset.filePath);
 
   // Close the preview on Escape.
@@ -215,6 +227,7 @@ export const ImageCard = memo(function ImageCard({
         ) : (
           <div className="image-card__caption-display">Add caption…</div>
         )}
+        {captionClipped && !editing && <div className="image-card__caption-fade" aria-hidden="true" />}
       </div>
       {saving && <div className="image-card__status">Saving…</div>}
       {error && <div className="image-card__status image-card__status--error">{error}</div>}

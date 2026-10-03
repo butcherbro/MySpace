@@ -12,6 +12,7 @@ import { errorMessage } from "../services/error-message";
 import type { IdGenerator } from "../services/id-generator";
 import { pickFolder, pickImageFile } from "../services/asset-picker";
 import { computeInitialImageFrameSize, loadNaturalImageSize } from "../cards/image/image-card-geometry";
+import { noteWidthForText } from "../cards/note/note-sizing";
 import { assetUrl } from "../services/asset-url";
 import { buildCreateImageCardInput } from "./import-image-card";
 import type {
@@ -99,7 +100,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
         kind: "note",
         id,
         boardId: board.id,
-        frame: { x, y, width: 240, height: 120 },
+        frame: { x, y, width: noteWidthForText(plainText), height: 120 },
         zIndex: notes.length,
         revision: 1,
         documentJson,

@@ -32,7 +32,7 @@ npm run test:e2e        # Playwright против mock-бэкенда в бра�
 - Браузер без Rust: `npm run dev` → http://localhost:1420, работает mock-бэкенд; фикстуры через `?fixture=...`
   (`dense-board`, `corrupt-note`, `foreign-shortcut`, `sync-peers`, `startup-failure`).
 - Данные приложения: macOS `~/Library/Application Support/com.bro.myspace`, Windows `%APPDATA%\com.bro.myspace`.
-  Лог — `myspace.log` там же. Dev и установленная версия делят одну базу.
+  Логи — `logs/myspace.log.<YYYY-MM-DD>` там же (JSON, по дню на файл). Dev и установленная версия делят одну базу.
 
 ## Архитектурные правила (не нарушать)
 - Все записи в БД идут через один писатель (`Workspace`, `sync::funnel::apply`) в одной транзакции.

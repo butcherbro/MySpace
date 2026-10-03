@@ -12,14 +12,28 @@
   cursor: text;
   min-width: 120px;
   /* Ширина всегда пользовательская — по горизонтали клипуем. По вертикали
-     карточка обычно растёт под контент (см. NoteCard авторост); overflow-y:
-     auto — только страховка, если контент всё же не помещается (ручное
-     уменьшение ниже высоты контента): скролл внутри, а не обрезка без следа. */
-  overflow-x: hidden;
-  overflow-y: auto;
+     карточка растёт под контент примерно до экрана (NOTE_AUTO_MAX_HEIGHT);
+     что не влезло, прокручивается внутри только в режиме правки. */
+  overflow: clip;
   transition:
     box-shadow 120ms ease,
     transform 120ms ease;
+}
+
+/* Тело с текстом заполняет карточку. В покое — `clip`: не скролл-контейнер,
+   колесо всегда у канваса, а прокрутка с прошлой правки сбрасывается к началу. */
+.note-card__body {
+  height: 100%;
+  overflow: clip;
+}
+
+.note-card--editing .note-card__body {
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Докрученный до края текст не тянет прокрутку дальше (и без упругого отскока
+     WebView2) — колесо у края забирает канвас, см. NoteCard. */
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .note-card--editing {
@@ -82,8 +96,8 @@
 }
 
 .note-card .note-editor {
-  /* Вертикально НЕ клипуем здесь — иначе внешний overflow-y: auto у .note-card
-     никогда не увидит переполнение и не сможет прокрутить его. */
+  /* Вертикально НЕ клипуем здесь — иначе .note-card__body никогда не увидит
+     переполнение и не сможет прокрутить его. */
   overflow-x: hidden;
   word-break: break-word;
 }
@@ -135,3 +149,21 @@
   opacity: 1;
   pointer-events: auto;
 }
+
+/* Обрезанный в покое текст: затухание внизу показывает, что он продолжается. */
+.note-card__fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 72px;
+  border-radius: 0 0 var(--radius-note) var(--radius-note);
+  background: linear-gradient(to bottom, transparent, var(--note-fade, var(--paper)));
+  pointer-events: none;
+}
+.note-card--yellow .note-card__fade { --note-fade: var(--note-yellow); }
+.note-card--pink .note-card__fade { --note-fade: var(--note-rose); }
+.note-card--lavender .note-card__fade { --note-fade: var(--note-lilac); }
+.note-card--blue .note-card__fade { --note-fade: var(--note-blue); }
+.note-card--green .note-card__fade { --note-fade: var(--note-green); }
+.note-card--gray .note-card__fade { --note-fade: var(--note-gray); }

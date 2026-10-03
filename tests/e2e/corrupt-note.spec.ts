@@ -19,6 +19,9 @@ test("a damaged note is read-only until Repair; Repair + edit + blur saves", asy
   await expect(damaged.locator("[data-static-document]")).toHaveText("Recovered words");
   await expect(healthy).toHaveAttribute("data-corrupt", "false");
   await expect(healthy.locator("[data-static-document]")).toHaveText("Healthy words");
+  // A damaged note is read-only: nothing resizes it on its own (no frame write).
+  await page.waitForTimeout(400);
+  expect(Math.round((await damaged.boundingBox())!.height)).toBe(120);
 
   // Clicking the damaged note does not open an editor, and typing changes nothing.
   await damaged.locator("[data-static-document]").click();
@@ -32,7 +35,11 @@ test("a damaged note is read-only until Repair; Repair + edit + blur saves", asy
   const editor = damaged.locator('.ProseMirror[contenteditable="true"]');
   await expect(editor).toBeVisible();
   await expect(editor).toHaveText("Recovered words");
-  await editor.click();
+  // Put the caret after the text by clicking right of it on its line: `End`
+  // does not move the caret in a contenteditable on macOS, so a click on the
+  // editor's centre left it mid-word there ("Recovered wor repairedds").
+  const editorBox = (await editor.boundingBox())!;
+  await editor.click({ position: { x: editorBox.width - 2, y: 8 } });
   await page.keyboard.press("End");
   await page.keyboard.type(" repaired");
   await expect(editor).toHaveText("Recovered words repaired");

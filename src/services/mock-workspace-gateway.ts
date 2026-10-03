@@ -76,6 +76,16 @@ function staleRevision(expected: number, actual: number) {
 }
 
 /**
+ * Mirrors Rust's `Frame::validate` size bounds (src-tauri/src/domain/models.rs),
+ * so browser mode rejects the same out-of-range frame writes the app does.
+ */
+function frameBoundsError(frame: { width: number; height: number }): Error | null {
+  if (!(frame.width >= 120 && frame.width <= 1600)) return new Error("card width must be between 120 and 1600");
+  if (!(frame.height >= 48 && frame.height <= 10000)) return new Error("card height must be between 48 and 10000");
+  return null;
+}
+
+/**
  * In-memory gateway for browser-mode tests and fixtures. It keeps a single
  * Home board and persists notes only for the lifetime of the instance.
  */
@@ -388,6 +398,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
+    const invalid = frameBoundsError(input.frame);
+    if (invalid) return Promise.reject(invalid);
     card.revision += 1;
     card.frame = { ...input.frame };
     return Promise.resolve({ id: card.id, revision: card.revision });
@@ -1021,6 +1033,15 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   trashSelection(input: TrashSelectionInput): Promise<string> {
+    // Как бэкенд (`trash_selection`): уже удалённая или несуществующая
+    // карточка — not_found, а не молчаливый успех.
+    for (const item of input.items) {
+      const missing =
+        item.kind === "board_portal"
+          ? !this.boards.has(item.id)
+          : ![...this.snapshot.cards, ...this.snapshot.unsortedCards].some((c) => c.id === item.id);
+      if (missing) return Promise.reject({ code: "not_found", message: item.id });
+    }
     const cardIds = new Set(
       input.items.filter((item) => item.kind !== "board_portal").map((item) => item.id),
     );

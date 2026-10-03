@@ -127,6 +127,19 @@ describe("useWorkspaceShortcuts", () => {
     expect(deps.handleDeleteSelection).toHaveBeenCalledTimes(1);
   });
 
+  it("a held Delete key (auto-repeat) deletes only once", () => {
+    const deps = makeDeps();
+    renderHook(() => useWorkspaceShortcuts(deps));
+
+    act(() => {
+      dispatchKeyDown({ key: "Delete" });
+      dispatchKeyDown({ key: "Delete", repeat: true });
+      dispatchKeyDown({ key: "Delete", repeat: true });
+    });
+
+    expect(deps.handleDeleteSelection).toHaveBeenCalledTimes(1);
+  });
+
   it("deletes the selection when no editor is focused (a selected damaged note)", () => {
     const deps = makeDeps();
     renderHook(() => useWorkspaceShortcuts(deps));

@@ -218,6 +218,29 @@ describe("useContextActions", () => {
       expect(test.execute).not.toHaveBeenCalled();
     });
 
+    it("does not send a card again while its trash is still in flight", async () => {
+      let finish: () => void = () => undefined;
+      const test = harness({
+        cards: [note()],
+        selection: ["note-1"],
+        execute: () => new Promise<undefined>((resolve) => (finish = () => resolve(undefined))),
+      });
+
+      // A second Delete before the first answer: the selection still holds the card.
+      let first: Promise<void> = Promise.resolve();
+      await act(async () => {
+        first = test.result.current.handleDeleteSelection();
+        await test.result.current.handleDeleteSelection();
+      });
+      expect(test.execute).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        finish();
+        await first;
+      });
+      expect(test.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "failed" }));
+    });
+
     it("dispatches a failure when the trash command rejects", async () => {
       const test = harness({
         cards: [note()],

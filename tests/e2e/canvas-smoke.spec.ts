@@ -572,7 +572,21 @@ test("dropping a board portal pins a quick board; click opens; remove unpins", a
   await page.getByRole("button", { name: "Expand quick boards" }).click();
 
   // Changing the source Board cover updates its pinned identity immediately.
-  await page.getByTestId("board-portal-card").click({ button: "right" });
+  // The drop left the portal by the canvas's right edge, under the now
+  // expanded rail. Pan it out like a user would: the canvas is not a native
+  // scroller, so nothing scrolls the card out from under the rail by itself
+  // (before, Playwright's scroll-into-view did, by scrolling the canvas).
+  const portalCard = page.getByTestId("board-portal-card");
+  await page.mouse.move(300, 400);
+  await page.mouse.wheel(600, 0);
+  await expect
+    .poll(async () => {
+      const card = (await portalCard.boundingBox())!;
+      const rail = (await page.getByTestId("right-rail-region").boundingBox())!;
+      return card.x + card.width < rail.x;
+    })
+    .toBe(true);
+  await portalCard.click({ button: "right" });
   await page.getByRole("button", { name: "Set Cover from Clipboard" }).click();
   await expect(page.locator(".quick-boards-rail__cover")).toHaveCount(1);
 

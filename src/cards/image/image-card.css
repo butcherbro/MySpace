@@ -27,6 +27,12 @@
 }
 
 .image-card__caption {
+  position: relative;
+  /* Не больше половины карточки: длинная подпись не выдавливает картинку.
+     В покое — обрезка с затуханием, при правке — прокрутка (ImageCard). */
+  flex: 0 1 auto;
+  max-height: 50%;
+  overflow: clip;
   padding: 7px 10px 8px;
   min-height: 26px;
   color: var(--ink-secondary);
@@ -120,4 +126,21 @@
   object-fit: contain;
   border-radius: var(--radius-image);
   box-shadow: var(--shadow-menu);
+}
+
+.image-card--editing .image-card__caption {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.image-card__caption-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36px;
+  background: linear-gradient(to bottom, transparent, var(--paper));
+  pointer-events: none;
 }

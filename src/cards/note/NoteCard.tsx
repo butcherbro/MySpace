@@ -9,6 +9,8 @@ import type { NoteEditorCommands } from "../../editor/editor-commands";
 import type { TextColorId } from "../../editor/text-color";
 import type { NoteCardDto } from "../../services/workspace-gateway";
 import type { ResizeOptions } from "../resize-options";
+import { useInnerWheelScroll } from "../inner-scroll";
+import { autoGrowHeight as autoGrowTarget, clampNoteSize, widthAfterPaste } from "./note-sizing";
 import "./note-card.css";
 
 interface NoteCardProps {
@@ -38,6 +40,9 @@ interface NoteCardProps {
   /** Called with the current text color. */
   onTextColorChange?: (color: TextColorId) => void;
 }
+
+/** Content height change (px) below which the auto-grow does not react. */
+const CONTENT_GROWTH_TOLERANCE_PX = 8;
 
 /** How long a pointer-down may precede edit entry and still place the caret. */
 const CARET_CLICK_WINDOW_MS = 1000;
@@ -108,18 +113,21 @@ export const NoteCard = memo(function NoteCard({
   const [draftSize, setDraftSize] = useState<{ width: number; height: number } | null>(null);
   const draftSizeRef = useRef<{ width: number; height: number } | null>(null);
 
-  // Авторост высоты под содержимое (Milanote-стиль): пока карточка редактируется,
-  // высота растёт вслед за контентом — без верхнего предела (скролл внутри нужен
-  // только как страховка после ручного уменьшения, см. ниже). `autoGrowHeight` —
-  // локальный «горб» поверх persisted `note.frame.height`, растущий монотонно;
-  // ручной resize (onResizeUp) сбрасывает его явно, чтобы не спорить с намеренным
-  // уменьшением карточки пользователем.
-  const cardRef = useRef<HTMLDivElement>(null);
+  // Авторост высоты под содержимое (Milanote-стиль), примерно до экрана
+  // (`NOTE_AUTO_MAX_HEIGHT`); дальше текст прокручивается внутри при правке и
+  // обрезан с затуханием в покое. `autoGrowHeight` — локальный «горб» поверх
+  // persisted `note.frame.height`; ручной resize (onResizeUp) сбрасывает его.
+  // Текст живёт во внутреннем `note-card__body`: он и прокручивается, а уголок
+  // resize и затухание остаются на самой карточке.
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [autoGrowHeight, setAutoGrowHeight] = useState<number | null>(null);
+  // Длинная вставка расширяет узкую заметку (см. `widthAfterPaste`): локально
+  // сразу, чтобы авторост мерил высоту уже по новой ширине.
+  const [autoWidth, setAutoWidth] = useState<number | null>(null);
   const growPendingRef = useRef<number | null>(null);
   const growTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const appliedWidth = draftSize?.width ?? note.frame.width;
+  const appliedWidth = draftSize?.width ?? Math.max(note.frame.width, autoWidth ?? 0);
   const appliedHeight = draftSize?.height ?? Math.max(note.frame.height, autoGrowHeight ?? 0);
 
   function flushPendingGrow() {
@@ -133,18 +141,26 @@ export const NoteCard = memo(function NoteCard({
     }
   }
 
-  // Измеряем после каждого изменения контента, пока идёт редактирование: `scrollHeight`
-  // элемента всегда отражает реальную высоту содержимого, даже когда `overflow`
-  // клипует/скроллит его — так и ловим переполнение без синхронного layout-хака.
-  // Реагируем только на изменения контента (не на смену `note.frame.height`), иначе
-  // эффект тут же отменял бы ручное уменьшение карточки пользователем.
+  // Растём, только когда сам текст стал выше, чем при прошлом замере
+  // (`scrollHeight` тела — реальная высота содержимого при любом overflow).
+  // Не по смене размеров карточки и не по одной смене черновика: ручной resize
+  // чуть меняет ширину, а клик по уголку снимает фокус, и редактор сохраняет и
+  // перечитывает документ — оба раза авторост отращивал уменьшенную вручную
+  // карточку обратно. Базу меряем и в покое, так что вход в правку карточку не
+  // растит. Заметка с ревизией 1 (вставка на пустой холст, без правки) один раз
+  // подгоняется под текст: запись роста поднимает ревизию. Повреждённая заметка —
+  // нет: до Repair она только для чтения, и записи в неё не идут.
+  const fitsContent = editing || (note.revision === 1 && !repair.damaged);
+  const contentHeightRef = useRef<number | null>(null);
   useLayoutEffect(() => {
-    if (!editing) return;
-    const el = cardRef.current;
+    const el = bodyRef.current;
     if (!el) return;
-    const overflow = el.scrollHeight - el.clientHeight;
-    if (overflow <= 0) return;
-    const needed = Math.ceil(appliedHeight + overflow);
+    const previous = contentHeightRef.current;
+    contentHeightRef.current = el.scrollHeight;
+    if (!fitsContent) return;
+    if (previous !== null && el.scrollHeight <= previous + CONTENT_GROWTH_TOLERANCE_PX) return;
+    const needed = autoGrowTarget(appliedHeight, el.scrollHeight - el.clientHeight);
+    if (needed === null) return;
     setAutoGrowHeight((prev) => (prev === null || needed > prev ? needed : prev));
     growPendingRef.current = needed;
     if (growTimer.current) clearTimeout(growTimer.current);
@@ -156,7 +172,19 @@ export const NoteCard = memo(function NoteCard({
       growPendingRef.current = null;
     }, 250);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, draft, note.documentJson, appliedWidth]);
+  }, [fitsContent, draft]);
+
+  // Текст, не влезший в карточку, прокручивается внутри только в режиме правки
+  // (`useInnerWheelScroll`); в покое он обрезан с затуханием внизу, а колесо
+  // всегда двигает канвас.
+  const [clipped, setClipped] = useState(false);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setClipped(el.scrollHeight - el.clientHeight > 1);
+  }, [editing, draft, note.documentJson, appliedWidth, appliedHeight]);
+
+  useInnerWheelScroll(bodyRef, editing);
 
   // Карточка ушла (смена доски) раньше, чем её редактор взял переданный набор:
   // клавиши больше не перехватываются, а набранное не теряется молча.
@@ -189,7 +217,7 @@ export const NoteCard = memo(function NoteCard({
     if (!resizeStart.current) return;
     const dx = e.clientX - resizeStart.current.x;
     const dy = e.clientY - resizeStart.current.y;
-    const next = { width: Math.max(120, resizeStart.current.w + dx), height: Math.max(48, resizeStart.current.h + dy) };
+    const next = clampNoteSize(resizeStart.current.w + dx, resizeStart.current.h + dy);
     draftSizeRef.current = next;
     setDraftSize(next);
   }
@@ -203,6 +231,7 @@ export const NoteCard = memo(function NoteCard({
       // Явный ручной resize побеждает автогrow: сбрасываем «горб», иначе
       // уменьшение карточки ниже высоты контента тут же откатилось бы назад.
       setAutoGrowHeight(null);
+      setAutoWidth(null);
       onResize(note.id, final.width, final.height);
       draftSizeRef.current = null;
       setDraftSize(null);
@@ -211,7 +240,6 @@ export const NoteCard = memo(function NoteCard({
 
   return (
     <div
-      ref={cardRef}
       className={`note-card ${editing ? "note-card--editing" : ""}${
         note.colorToken && note.colorToken !== "default" ? ` note-card--${note.colorToken}` : ""
       }`}
@@ -222,6 +250,7 @@ export const NoteCard = memo(function NoteCard({
       data-saving={saving ? "true" : "false"}
       data-error={error ? "true" : "false"}
       data-corrupt={repair.damaged ? "true" : "false"}
+      data-clipped={clipped ? "true" : "false"}
       style={{ width: appliedWidth, height: appliedHeight }}
       onPointerDown={(e) => {
         lastPointerDownRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -232,39 +261,50 @@ export const NoteCard = memo(function NoteCard({
         onContextMenu(note.id, e.clientX, e.clientY);
       }}
     >
-      {repair.damaged ? (
-        <DamagedDocument
-          label="note"
-          plainText={note.plainText}
-          onRepair={startRepair}
-          highlightQuery={highlightQuery}
-        />
-      ) : editing ? (
-        <NoteEditor
-          document={draft}
-          editable
-          onChange={handleChange}
-          onBlur={() => {
-            // Флашим отложенный автогrow-write вместе с флашем контента на blur —
-            // иначе последний рост «в полёте» (debounce ещё не сработал) терялся бы.
-            flushPendingGrow();
-            handleBlur();
-          }}
-          onFinalize={() => {
-            void handleFinalize();
-          }}
-          highlightQuery={highlightQuery}
-          initialCaretPoint={caretPoint}
-          takeHandedInput={() => takeDraftHandoffInput(note.id)}
-          onCommandsReady={onCommandsReady}
-          onBoldStateChange={onBoldStateChange}
-          onItalicStateChange={onItalicStateChange}
-          onStrikeStateChange={onStrikeStateChange}
-          onTextColorChange={onTextColorChange}
-        />
-      ) : (
-        <StaticDocument document={note.documentJson} highlightQuery={highlightQuery} />
-      )}
+      <div ref={bodyRef} className="note-card__body" data-testid="note-card-body">
+        {repair.damaged ? (
+          <DamagedDocument
+            label="note"
+            plainText={note.plainText}
+            onRepair={startRepair}
+            highlightQuery={highlightQuery}
+          />
+        ) : editing ? (
+          <NoteEditor
+            document={draft}
+            editable
+            onChange={handleChange}
+            onBlur={() => {
+              // Флашим отложенный автогrow-write вместе с флашем контента на blur —
+              // иначе последний рост «в полёте» (debounce ещё не сработал) терялся бы.
+              flushPendingGrow();
+              handleBlur();
+            }}
+            onFinalize={() => {
+              void handleFinalize();
+            }}
+            highlightQuery={highlightQuery}
+            initialCaretPoint={caretPoint}
+            takeHandedInput={() => takeDraftHandoffInput(note.id)}
+            onPasteText={(text) => {
+              const width = widthAfterPaste(appliedWidth, text);
+              if (width === appliedWidth) return;
+              setAutoWidth(width);
+              // Ширину пишем сразу: авторост ниже запишет её же вместе с высотой,
+              // но только если контент переполнит карточку.
+              onResize(note.id, width, appliedHeight, { auto: true });
+            }}
+            onCommandsReady={onCommandsReady}
+            onBoldStateChange={onBoldStateChange}
+            onItalicStateChange={onItalicStateChange}
+            onStrikeStateChange={onStrikeStateChange}
+            onTextColorChange={onTextColorChange}
+          />
+        ) : (
+          <StaticDocument document={note.documentJson} highlightQuery={highlightQuery} />
+        )}
+      </div>
+      {clipped && !editing && <div className="note-card__fade" aria-hidden="true" />}
       {saving && <div className="note-card__status note-card__status--saving">Saving…</div>}
       {error && <div className="note-card__status note-card__status--error">{error}</div>}
       <div
