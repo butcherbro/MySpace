@@ -9,7 +9,8 @@ import type { NoteEditorCommands } from "../../editor/editor-commands";
 import type { TextColorId } from "../../editor/text-color";
 import type { NoteCardDto } from "../../services/workspace-gateway";
 import type { ResizeOptions } from "../resize-options";
-import { autoGrowHeight as autoGrowTarget, clampNoteSize, wheelScrollsNote, widthAfterPaste } from "./note-sizing";
+import { useInnerWheelScroll } from "../inner-scroll";
+import { autoGrowHeight as autoGrowTarget, clampNoteSize, widthAfterPaste } from "./note-sizing";
 import "./note-card.css";
 
 interface NoteCardProps {
@@ -39,6 +40,9 @@ interface NoteCardProps {
   /** Called with the current text color. */
   onTextColorChange?: (color: TextColorId) => void;
 }
+
+/** Content height change (px) below which the auto-grow does not react. */
+const CONTENT_GROWTH_TOLERANCE_PX = 8;
 
 /** How long a pointer-down may precede edit entry and still place the caret. */
 const CARET_CLICK_WINDOW_MS = 1000;
@@ -142,18 +146,31 @@ export const NoteCard = memo(function NoteCard({
   // Измеряем после каждого изменения контента, пока идёт редактирование: `scrollHeight`
   // тела карточки всегда отражает реальную высоту содержимого, даже когда `overflow`
   // клипует/скроллит его — так и ловим переполнение без синхронного layout-хака.
-  // Реагируем только на изменения контента (не на смену `note.frame.height`), иначе
-  // эффект тут же отменял бы ручное уменьшение карточки пользователем.
+  // Реагируем только на изменения контента — не на смену высоты или ширины
+  // карточки: ручной resize почти всегда чуть меняет и ширину, и авторост тут же
+  // отращивал бы уменьшенную пользователем карточку обратно («пружина»). Ширину
+  // от длинной вставки эффект видит вместе с самой вставкой (тот же `draft`).
   // Заметка с ревизией 1 ещё ни разу не менялась после создания (вставка текста
   // на пустой холст создаёт её 120px высотой и не в режиме правки) — её тоже
   // подгоняем под контент, один раз: запись роста поднимает ревизию.
   // Высота растёт примерно до экрана (`NOTE_AUTO_MAX_HEIGHT`), дальше текст
   // прокручивается внутри карточки; выше пользователь тянет уголком сам.
   const fitsContent = editing || note.revision === 1;
+  // Растём только когда сам текст стал выше, чем при прошлом замере. Черновик
+  // меняется и без правки (blur на уголке resize сохраняет и перечитывает
+  // документ), и по одной смене черновика авторост отращивал только что
+  // уменьшенную вручную карточку обратно.
+  // Базу меряем и в покое: вход в правку (в т.ч. повторный — клик по уголку
+  // снимает фокус и возвращает его) сам по себе карточку не растит. Допуск —
+  // меньше строки: редактор и статичный вид расходятся на пару пикселей.
+  const contentHeightRef = useRef<number | null>(null);
   useLayoutEffect(() => {
-    if (!fitsContent) return;
     const el = bodyRef.current;
     if (!el) return;
+    const previous = contentHeightRef.current;
+    contentHeightRef.current = el.scrollHeight;
+    if (!fitsContent) return;
+    if (previous !== null && el.scrollHeight <= previous + CONTENT_GROWTH_TOLERANCE_PX) return;
     const needed = autoGrowTarget(appliedHeight, el.scrollHeight - el.clientHeight);
     if (needed === null) return;
     setAutoGrowHeight((prev) => (prev === null || needed > prev ? needed : prev));
@@ -167,14 +184,11 @@ export const NoteCard = memo(function NoteCard({
       growPendingRef.current = null;
     }, 250);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitsContent, draft, note.documentJson, appliedWidth]);
+  }, [fitsContent, draft]);
 
-  // Текст, не влезший в карточку, прокручивается внутри только в режиме правки.
-  // В покое карточка его обрезает (с затуханием внизу), а колесо всегда двигает
-  // канвас. При правке колесо крутит текст, пока есть куда; у края снова канвас.
-  // React Flow слушает колесо на предке-рендерере, поэтому достаточно не пустить
-  // событие вверх; нативная прокрутка карточки идёт сама. Ctrl/Cmd (зум) и Shift
-  // (горизонтальный пан) всегда остаются канвасу.
+  // Текст, не влезший в карточку, прокручивается внутри только в режиме правки
+  // (`useInnerWheelScroll`); в покое он обрезан с затуханием внизу, а колесо
+  // всегда двигает канвас.
   const [clipped, setClipped] = useState(false);
   useLayoutEffect(() => {
     const el = bodyRef.current;
@@ -182,17 +196,7 @@ export const NoteCard = memo(function NoteCard({
     setClipped(el.scrollHeight - el.clientHeight > 1);
   }, [editing, draft, note.documentJson, appliedWidth, appliedHeight]);
 
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el || !editing) return;
-    const onWheel = (event: WheelEvent) => {
-      if (event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
-      if (wheelScrollsNote(el, event.deltaY)) event.stopPropagation();
-    };
-    el.addEventListener("wheel", onWheel, { passive: true });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [editing]);
+  useInnerWheelScroll(bodyRef, editing);
 
   // Карточка ушла (смена доски) раньше, чем её редактор взял переданный набор:
   // клавиши больше не перехватываются, а набранное не теряется молча.

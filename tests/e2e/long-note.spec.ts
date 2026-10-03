@@ -4,8 +4,8 @@ import { expect, test, type Page } from "./fixtures";
 // receipt" note many screens tall, a scroll that springs back to the top, and
 // — past the backend's 10 000px frame limit — a note that vanished mid-scroll
 // because the rejected auto-grow left the store's height behind the DOM's.
-// Now: width follows the text length, height stops at about a screen, and the
-// rest scrolls inside the note only while it is being edited.
+// Now: a long text gets one standard width, height stops at about a screen,
+// and the rest scrolls inside the note only while it is being edited.
 
 const paragraphs = (n: number) =>
   Array.from(
@@ -76,8 +76,8 @@ test("a very long note stops at about a screen and scrolls inside only while edi
   const body = page.getByTestId("note-card-body");
   await pasteIntoEditor(page, paragraphs(220));
 
-  // Wide (a readable line), one screen tall, no rejected frame write.
-  await expect.poll(async () => (await card.boundingBox())?.width).toBe(800);
+  // The standard long-text width, one screen tall, no rejected frame write.
+  await expect.poll(async () => (await card.boundingBox())?.width).toBe(480);
   await expect.poll(async () => Math.round((await card.boundingBox())?.height ?? 0)).toBe(720);
   await page.waitForTimeout(400); // past the auto-grow write debounce
   await expect(page.locator(".error-banner")).toHaveCount(0);
@@ -107,6 +107,59 @@ test("a very long note stops at about a screen and scrolls inside only while edi
   await page.mouse.wheel(0, 300);
   await expect.poll(() => readTranslateY(page)).toBeLessThan(idleBefore);
   expect(await body.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test("a manual shrink of a long note sticks instead of springing back", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 1000 }); // the corner must be on screen
+  const card = await openNewNote(page);
+  await pasteIntoEditor(page, paragraphs(60));
+  await expect.poll(async () => Math.round((await card.boundingBox())?.height ?? 0)).toBe(720);
+  await page.waitForTimeout(400);
+
+  // Drag the corner up and a little left: a real drag changes the width too,
+  // which used to re-run the auto-grow and undo the shrink.
+  const handle = page.getByTestId("note-resize");
+  const h = (await handle.boundingBox())!;
+  await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(h.x + h.width / 2 - 20, h.y + h.height / 2 - 400, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const box = (await card.boundingBox())!;
+  expect(Math.round(box.height)).toBeLessThan(400);
+  expect(Math.round(box.width)).toBeLessThan(480);
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+});
+
+test("a long image caption keeps the image visible and scrolls only while editing", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("canvas")).toBeVisible();
+  await page.mouse.move(500, 380, { steps: 5 });
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" }));
+    window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  const card = page.getByTestId("image-card");
+  await expect(card).toHaveCount(1);
+  const caption = page.getByTestId("image-caption");
+  await caption.dblclick();
+  await expect(card).toHaveAttribute("data-editing", "true");
+  await pasteIntoEditor(page, paragraphs(30));
+
+  const cardBox = (await card.boundingBox())!;
+  // The caption takes at most half the card; the image keeps the rest.
+  await expect.poll(async () => (await caption.boundingBox())!.height).toBeLessThanOrEqual(cardBox.height / 2 + 1);
+  expect((await card.locator(".image-card__image").boundingBox())!.height).toBeGreaterThan(cardBox.height / 3);
+  // Editing: the caption scrolls inside.
+  expect(await caption.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  expect(await caption.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
+
+  // Idle: clipped with a fade, not scrollable.
+  await page.mouse.click(1200, 650);
+  await expect(card).toHaveAttribute("data-editing", "false");
+  await expect(card.locator(".image-card__caption-fade")).toHaveCount(1);
+  expect(await caption.evaluate((el) => getComputedStyle(el).overflowY)).toBe("clip");
 });
 
 test("a lost Ctrl keyup does not turn the wheel into zoom", async ({ page }) => {
