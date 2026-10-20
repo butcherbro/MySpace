@@ -19,4 +19,14 @@
 # ]
 
 [advisories]
-ignore = []
+ignore = [
+    # zip 4.6.1, only via tauri-plugin-updater (2.14 still pins zip 4). The
+    # three advisories are about extracting attacker-made archives (symlinks
+    # out of the destination, permissions through symlinks, SUID bits). The
+    # updater extracts only after the minisign signature check against our
+    # pubkey, and our artifacts are not zips (Windows: NSIS -setup.exe, macOS:
+    # .app.tar.gz). Remove when tauri-plugin-updater moves to zip >= 9.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]
