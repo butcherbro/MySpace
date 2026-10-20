@@ -38,13 +38,13 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AddQuickBoardInput, AssetDto, CardDto, CardReceipt, CardsReceipt, ConvertNoteToEmbedInput,
     CreateBoardShortcutInput, CreateChildBoardInput, CreateFileCardInput,
-    CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult,
-    CreateNoteInput, DuplicateBoardInput, DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult,
-    MoveBoardInput, MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput,
-    MoveSelectionToBoardInput, MoveSelectionToBoardReceipt, PlaceUnsortedCardInput,
-    ReorderQuickBoardsInput, SetNoteColorInput, TextReceipt, TrashSelectionInput,
-    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
-    UpdateViewportInput, ViewportReceipt,
+    CreateFilesystemAliasInput, CreateImageCardInput, CreateItemBatchInput, CreateLinkBatchInput,
+    CreateLinkBatchResult, CreateNoteInput, DuplicateBoardInput, DuplicateBoardReceipt,
+    EmbedCardDto, EmptyTrashResult, MoveBoardInput, MoveCardToBoardInput, MoveCardsInput,
+    MoveCardsToUnsortedInput, MoveSelectionToBoardInput, MoveSelectionToBoardReceipt,
+    PlaceUnsortedCardInput, ReorderQuickBoardsInput, SetNoteColorInput, TextReceipt,
+    TrashSelectionInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
+    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput, ViewportReceipt,
 };
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::devices;
@@ -159,6 +159,7 @@ pub const OP_NAMES: &[&str] = &[
     "device.rename",
     "link_batch.create",
     "link_batch.trash",
+    "item_batch.create",
     "card.apply_embed_metadata",
     "maintenance.collapse_favicons",
     "maintenance.collect_orphaned_assets",
@@ -266,7 +267,9 @@ pub enum Mutation {
 
     // ---- link cards (MCP + enrichment) -----------------------------------
     CreateLinkBatch(CreateLinkBatchInput),
-    /// Trashes every card of an agent batch as one undo unit.
+    /// A mixed agent batch (links, notes, images) under one idempotency key.
+    CreateItemBatch(CreateItemBatchInput),
+    /// Trashes every card of an agent batch (links or mixed) as one undo unit.
     TrashLinkBatch {
         agent_batch_id: String,
     },
@@ -495,6 +498,7 @@ impl Mutation {
             Self::RenameDevice { .. } => "device.rename",
             Self::SyncPeers(_) => "sync.peers",
             Self::CreateLinkBatch(_) => "link_batch.create",
+            Self::CreateItemBatch(_) => "item_batch.create",
             Self::TrashLinkBatch { .. } => "link_batch.trash",
             Self::ApplyEmbedMetadata(_) => "card.apply_embed_metadata",
             Self::CollapseFaviconDuplicates => "maintenance.collapse_favicons",
@@ -554,6 +558,7 @@ impl Mutation {
             Self::RenameDevice { .. } => (K::Device, ""),
             Self::SyncPeers(write) => (K::Device, write.device_id()),
             Self::CreateLinkBatch(i) => (K::Board, &i.board_id),
+            Self::CreateItemBatch(i) => (K::Board, &i.board_id),
             Self::TrashLinkBatch { agent_batch_id } => (K::LinkBatch, agent_batch_id),
             Self::ApplyEmbedMetadata(plan) => (K::Card, &plan.update.id),
             Self::CollapseFaviconDuplicates
@@ -657,6 +662,7 @@ impl Mutation {
             | Self::RefreshFilesystemAliasLocator { .. }
             | Self::CommitFileCard(_)
             | Self::CreateLinkBatch(_)
+            | Self::CreateItemBatch(_)
             | Self::TrashLinkBatch { .. }
             | Self::ApplyEmbedMetadata(_)
             | Self::CollapseFaviconDuplicates
@@ -800,6 +806,9 @@ impl Mutation {
             Self::CreateLinkBatch(input) => {
                 repo::create_link_batch(conn, input).map(Out::LinkBatch)
             }
+            Self::CreateItemBatch(input) => {
+                repo::create_item_batch(conn, input).map(Out::LinkBatch)
+            }
             Self::TrashLinkBatch { agent_batch_id } => {
                 trash_link_batch(conn, agent_batch_id).map(Out::Id)
             }
@@ -845,6 +854,8 @@ fn trash_link_batch(conn: &mut Connection, agent_batch_id: &str) -> Result<Strin
         .into_iter()
         .map(|id| TrashItem {
             id,
+            // Any leaf kind takes the same path in `trash_selection`; a batch
+            // never contains a board portal.
             kind: "embed".to_string(),
         })
         .collect();
@@ -907,6 +918,7 @@ card.set_alias_local_target
 device.rename
 link_batch.create
 link_batch.trash
+item_batch.create
 card.apply_embed_metadata
 maintenance.collapse_favicons
 maintenance.collect_orphaned_assets

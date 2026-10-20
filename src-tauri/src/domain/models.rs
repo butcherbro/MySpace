@@ -904,8 +904,52 @@ pub struct CreateLinkBatchInput {
     pub links: Vec<LinkBatchItem>,
 }
 
-/// Result of a batch Link Card create: the created card ids plus a durable batch
-/// id that represents the operation as one undo/trash unit.
+/// One card of an agent item batch. Notes and images carry text the backend
+/// converts to documents; an image references an asset already stored through
+/// `Mutation::InsertAsset`, so the batch itself does no file I/O.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BatchItem {
+    #[serde(rename_all = "camelCase")]
+    Link {
+        id: String,
+        source_url: String,
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        description: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    Note { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    Image {
+        id: String,
+        asset_id: String,
+        #[serde(default)]
+        caption: String,
+    },
+}
+
+impl BatchItem {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Link { id, .. } | Self::Note { id, .. } | Self::Image { id, .. } => id,
+        }
+    }
+}
+
+/// Input for creating a mixed batch of cards (links, notes, images) in one
+/// durable operation: one transaction, one idempotency key, one undo unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateItemBatchInput {
+    pub idempotency_key: String,
+    pub board_id: String,
+    pub items: Vec<BatchItem>,
+}
+
+/// Result of a batch create (links or mixed items): the created card ids plus a
+/// durable batch id that represents the operation as one undo/trash unit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateLinkBatchResult {

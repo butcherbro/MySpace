@@ -7,6 +7,7 @@ pub mod device;
 pub mod duplicate_board;
 pub mod errors;
 pub mod filesystem_alias_service;
+pub mod image_dimensions;
 pub mod kinds;
 pub mod link_metadata;
 pub mod markdown_preview;

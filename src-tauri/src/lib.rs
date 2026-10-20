@@ -2,6 +2,7 @@ pub mod app;
 pub mod commands;
 pub mod db;
 pub mod domain;
+pub mod mcp;
 pub mod repositories;
 pub mod services;
 pub mod sync;

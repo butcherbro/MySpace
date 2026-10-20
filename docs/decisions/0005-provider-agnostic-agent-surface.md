@@ -169,3 +169,23 @@ Before implementation, define the first supported paste targets and test against
 Accepted on 2026-09-05: after Board hierarchy and the backup/restore safety gate,
 ship the first useful MCP agent vertical slice before browser tabs. The embedded
 chat UI and the choice of an agent provider remain later product work.
+
+## Amendment 2026-10-20: delivery and the item batch
+
+- **Delivery.** The MCP server is a mode of the app executable, `myspace --mcp`, not a
+  separate binary. It is then installed on macOS and Windows by the normal installers,
+  updated by the auto-updater and never older or newer than the schema it opens. A sidecar
+  (`bundle.externalBin`) was rejected: every `cargo` and `tauri dev` run would need a prebuilt
+  per-triple binary, and it would still be a second artifact to keep in step.
+  `src-tauri/src/bin/myspace-mcp.rs` stays as the development entry point.
+- **`add_items`** replaces `add_links` as the agent write tool: one idempotent batch of notes,
+  links and images (`Mutation::CreateItemBatch`, op `item_batch.create`), one undo unit
+  (`trash_batch`). Images are copied into the asset store before the batch, deduplicated by
+  SHA-256; a rejected batch leaves at most an unreferenced asset for the orphan collector.
+  `add_links`, `enrich_links` and `trash_links` stay callable but unlisted; the app enriches
+  pending links itself.
+- **Scope of trust.** stdio means the agent runs on this machine with the user's rights, so
+  the server allows every listed operation. Remote agents (a server-side bot) get a separate,
+  write-only inbox, decided in its own ADR; they never talk to this server.
+- Agent manual and host setup: `docs/agents.md`. The server also returns a short manual in
+  the MCP `instructions` field on `initialize`.

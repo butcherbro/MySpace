@@ -40,6 +40,27 @@ pub fn plain_text_to_document(text: &str) -> Value {
     }
 }
 
+/// Wraps multi-line plain text into a document with one paragraph per line, so
+/// an agent's text keeps its line breaks in the editor (a `\n` inside a text
+/// node would render as a space). Blank lines become empty paragraphs.
+pub fn lines_to_document(text: &str) -> Value {
+    let paragraphs: Vec<Value> = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .map(|line| {
+            if line.is_empty() {
+                serde_json::json!({ "type": "paragraph" })
+            } else {
+                serde_json::json!({
+                    "type": "paragraph",
+                    "content": [{ "type": "text", "text": line }]
+                })
+            }
+        })
+        .collect();
+    serde_json::json!({ "type": "doc", "content": paragraphs })
+}
+
 fn node_type(node: &Value) -> Option<&str> {
     node.get("type").and_then(Value::as_str)
 }

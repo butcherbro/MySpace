@@ -114,25 +114,12 @@ certificate yet.
   `passive` mode (`plugins.updater.windows.installMode`): a small progress
   window, no questions, then the app restarts.
 
-## MCP server (`myspace-mcp`) and sidecars
+## MCP server
 
-`src-tauri/tauri.conf.json` has **no** `bundle.externalBin`, and
-`scripts/release.sh` does not build or copy the MCP binary. So the installers
-contain only the app; `myspace-mcp` (`src-tauri/src/bin/myspace-mcp.rs`) is
-still built from source by whoever wires it into an agent host
-(`cargo build --release --bin myspace-mcp`).
-
-If it is ever shipped as a sidecar (`"externalBin": ["binaries/myspace-mcp"]`),
-Tauri looks for one file per target triple next to that path, and the release
-workflow must build it per matrix entry **before** tauri-action:
-
-- `binaries/myspace-mcp-aarch64-apple-darwin`
-- `binaries/myspace-mcp-x86_64-apple-darwin`
-- `binaries/myspace-mcp-x86_64-pc-windows-msvc.exe` (Windows needs the MSVC
-  triple and the `.exe` suffix)
-
-e.g. `cargo build --release --bin myspace-mcp --target <triple>` and copy
-`target/<triple>/release/myspace-mcp[.exe]` to that name.
+The MCP server ships inside the app binary: `myspace --mcp` (see `src-tauri/src/main.rs`,
+`src-tauri/src/mcp.rs`). Installers need nothing extra, no `bundle.externalBin` sidecar, and
+the server always matches the app's schema because it updates with it. Agent setup:
+`docs/agents.md`. `cargo run --bin myspace-mcp` runs the same server in development.
 
 ## Local builds
 

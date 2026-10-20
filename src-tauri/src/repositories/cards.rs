@@ -9,13 +9,16 @@ use crate::domain::card_kind::{handler, registry, sql_in_list, CardKind};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::kinds;
 use crate::domain::models::{
-    ApplyEmbedMetadataInput, CardDto, CardReceipt, CardsReceipt, ConvertNoteToEmbedInput,
-    CreateImageCardInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
-    EmbedCardDto, EmbedForMetadata, Frame, MoveCardToBoardInput, MoveCardsInput,
-    MoveCardsToUnsortedInput, PlaceUnsortedCardInput, SetNoteColorInput, TextReceipt,
-    UpdateCardFrameInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
+    ApplyEmbedMetadataInput, BatchItem, CardDto, CardReceipt, CardsReceipt,
+    ConvertNoteToEmbedInput, CreateImageCardInput, CreateItemBatchInput, CreateLinkBatchInput,
+    CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata, Frame,
+    MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, PlaceUnsortedCardInput,
+    SetNoteColorInput, TextReceipt, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
+    UpdateImageCaptionInput, UpdateNoteInput,
 };
-use crate::domain::plain_text::{document_to_plain_text, plain_text_to_document};
+use crate::domain::plain_text::{
+    document_to_plain_text, lines_to_document, plain_text_to_document,
+};
 
 use super::super::db;
 use super::immediate_tx;
@@ -882,13 +885,112 @@ pub fn place_unsorted_card(
     Ok(receipt)
 }
 
-/// Creates a batch of Link Cards in one durable operation. Idempotent under a
-/// caller-supplied `idempotency_key`: a replayed key returns the original batch
-/// id and card ids instead of creating duplicates. Cards are placed with a
-/// deterministic downward cascade so they never overlap unseen.
+/// Creates a batch of Link Cards in one durable operation. A link-only
+/// [`create_item_batch`]: same idempotency, placement and undo unit.
 pub fn create_link_batch(
     conn: &mut Connection,
     input: &CreateLinkBatchInput,
+) -> Result<CreateLinkBatchResult, WorkspaceError> {
+    create_item_batch(
+        conn,
+        &CreateItemBatchInput {
+            idempotency_key: input.idempotency_key.clone(),
+            board_id: input.board_id.clone(),
+            items: input
+                .links
+                .iter()
+                .map(|link| BatchItem::Link {
+                    id: link.id.clone(),
+                    source_url: link.source_url.clone(),
+                    title: link.title.clone(),
+                    description: link.description.clone(),
+                })
+                .collect(),
+        },
+    )
+}
+
+/// Gap between cards stacked by an agent batch.
+const BATCH_GAP: f64 = 24.0;
+const BATCH_LINK_SIZE: (f64, f64) = (320.0, 240.0);
+/// Mirrors `NOTE_DEFAULT_WIDTH` / `NOTE_LONG_TEXT_WIDTH` / `LONG_TEXT_CHARS`
+/// in `src/cards/note/note-sizing.ts`, so an agent's note gets the width the
+/// user would get by pasting the same text.
+const BATCH_NOTE_WIDTH: f64 = 240.0;
+const BATCH_NOTE_LONG_WIDTH: f64 = 480.0;
+const BATCH_NOTE_LONG_CHARS: usize = 400;
+/// `NOTE_AUTO_MAX_HEIGHT`: a longer note scrolls inside the card.
+const BATCH_NOTE_MAX_HEIGHT: f64 = 720.0;
+const BATCH_IMAGE_WIDTH: f64 = 320.0;
+
+/// Note frame for `text`: the paste width rule plus a height estimated from the
+/// wrapped line count. The card auto-grows on first render if the estimate is
+/// short; estimating keeps the next stacked card from being covered meanwhile.
+fn batch_note_size(text: &str) -> (f64, f64) {
+    let width = if text.trim().chars().count() >= BATCH_NOTE_LONG_CHARS {
+        BATCH_NOTE_LONG_WIDTH
+    } else {
+        BATCH_NOTE_WIDTH
+    };
+    // ~7.5 px per character at the note font, minus the card's padding.
+    let chars_per_line = ((width - 24.0) / 7.5).floor().max(1.0) as usize;
+    let lines: usize = text
+        .split('\n')
+        .map(|line| line.chars().count().div_ceil(chars_per_line).max(1))
+        .sum();
+    let height = (24.0 + lines as f64 * 22.0).clamp(48.0, BATCH_NOTE_MAX_HEIGHT);
+    (width, height)
+}
+
+/// Image frame from the stored asset's pixel size, keeping its aspect ratio;
+/// a square-ish default when the size is unknown (the card letterboxes).
+fn batch_image_size(width: Option<i64>, height: Option<i64>) -> (f64, f64) {
+    match (width, height) {
+        (Some(w), Some(h)) if w > 0 && h > 0 => {
+            let scaled = BATCH_IMAGE_WIDTH * h as f64 / w as f64;
+            (BATCH_IMAGE_WIDTH, scaled.clamp(48.0, 1600.0))
+        }
+        _ => (BATCH_IMAGE_WIDTH, 240.0),
+    }
+}
+
+/// Inserts the `cards` row every batch item starts with.
+fn insert_batch_card(
+    tx: &Connection,
+    id: &str,
+    board_id: &str,
+    kind: &str,
+    frame: &Frame,
+    z_index: i64,
+    now: i64,
+) -> Result<(), WorkspaceError> {
+    frame.validate()?;
+    tx.execute(
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9)",
+        params![
+            id,
+            board_id,
+            kind,
+            frame.x,
+            frame.y,
+            frame.width,
+            frame.height,
+            z_index,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Creates a mixed batch of cards (links, notes, images) in one durable
+/// operation. Idempotent under a caller-supplied `idempotency_key`: a replayed
+/// key returns the original batch id and card ids instead of creating
+/// duplicates. Cards keep the input order in a deterministic downward cascade
+/// below the board's existing content, so they never overlap unseen.
+pub fn create_item_batch(
+    conn: &mut Connection,
+    input: &CreateItemBatchInput,
 ) -> Result<CreateLinkBatchResult, WorkspaceError> {
     let now = db::migrations::now_millis();
 
@@ -897,16 +999,8 @@ pub fn create_link_batch(
     let tx = immediate_tx(conn)?;
 
     // Idempotent replay: return the recorded result for a seen key.
-    if let Some((batch_id, card_ids_json)) = tx
-        .query_row(
-            "SELECT batch_id, card_ids FROM mutation_receipts WHERE idempotency_key = ?1",
-            [input.idempotency_key.as_str()],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        )
-        .optional()?
-    {
-        let card_ids: Vec<String> = serde_json::from_str(&card_ids_json).unwrap_or_default();
-        return Ok(CreateLinkBatchResult { batch_id, card_ids });
+    if let Some(done) = find_batch_receipt(&tx, &input.idempotency_key)? {
+        return Ok(done);
     }
 
     // The target board must exist and be active.
@@ -920,57 +1014,110 @@ pub fn create_link_batch(
     }
 
     let batch_id = uuid::Uuid::now_v7().to_string();
-    let mut card_ids = Vec::with_capacity(input.links.len());
+    let mut card_ids = Vec::with_capacity(input.items.len());
     let mut next_y = next_card_y(&tx, &input.board_id);
+    let to_json = |doc: &serde_json::Value| {
+        serde_json::to_string(doc).map_err(|e| WorkspaceError::Database(e.to_string()))
+    };
 
-    for link in &input.links {
-        let display_url = link.source_url.clone(); // enriched later if needed
-                                                   // A user comment becomes the link's description body (authoritative).
-        let description = link.description.trim();
-        let description_doc = if description.is_empty() {
-            serde_json::json!({"type": "doc", "content": []})
-        } else {
-            plain_text_to_document(description)
+    for item in &input.items {
+        let z_index = card_ids.len() as i64;
+        let height = match item {
+            BatchItem::Link {
+                id,
+                source_url,
+                title,
+                description,
+            } => {
+                let (width, height) = BATCH_LINK_SIZE;
+                let frame = Frame {
+                    x: 40.0,
+                    y: next_y,
+                    width,
+                    height,
+                };
+                insert_batch_card(&tx, id, &input.board_id, "embed", &frame, z_index, now)?;
+                // A user comment becomes the link's description body (authoritative).
+                let description = description.trim();
+                let description_doc = if description.is_empty() {
+                    serde_json::json!({"type": "doc", "content": []})
+                } else {
+                    plain_text_to_document(description)
+                };
+                // Derived, never trusted: the same codec as every other text column.
+                let description_plain_text = document_to_plain_text(&description_doc);
+                let description_origin = (!description.is_empty()).then_some("user");
+                tx.execute(
+                    "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, description_origin, metadata_status)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')",
+                    params![
+                        id,
+                        source_url,
+                        source_url, // display url, enriched later
+                        title,
+                        to_json(&description_doc)?,
+                        description_plain_text,
+                        description_origin
+                    ],
+                )?;
+                height
+            }
+            BatchItem::Note { id, text } => {
+                let (width, height) = batch_note_size(text);
+                let frame = Frame {
+                    x: 40.0,
+                    y: next_y,
+                    width,
+                    height,
+                };
+                insert_batch_card(&tx, id, &input.board_id, "note", &frame, z_index, now)?;
+                let document = lines_to_document(text);
+                tx.execute(
+                    "INSERT INTO note_cards (card_id, document_json, plain_text) VALUES (?1, ?2, ?3)",
+                    params![id, to_json(&document)?, document_to_plain_text(&document)],
+                )?;
+                height
+            }
+            BatchItem::Image {
+                id,
+                asset_id,
+                caption,
+            } => {
+                let size: Option<(Option<i64>, Option<i64>)> = tx
+                    .query_row(
+                        "SELECT width, height FROM assets WHERE id = ?1",
+                        [asset_id.as_str()],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((asset_width, asset_height)) = size else {
+                    return Err(WorkspaceError::NotFound(asset_id.clone()));
+                };
+                let (width, height) = batch_image_size(asset_width, asset_height);
+                let frame = Frame {
+                    x: 40.0,
+                    y: next_y,
+                    width,
+                    height,
+                };
+                insert_batch_card(&tx, id, &input.board_id, "image", &frame, z_index, now)?;
+                let caption_doc = lines_to_document(caption.trim());
+                tx.execute(
+                    "INSERT INTO image_cards (card_id, asset_id, caption_json, caption_plain_text)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        id,
+                        asset_id,
+                        to_json(&caption_doc)?,
+                        document_to_plain_text(&caption_doc)
+                    ],
+                )?;
+                height
+            }
         };
-        let description_json = serde_json::to_string(&description_doc)
-            .map_err(|e| WorkspaceError::Database(e.to_string()))?;
-        // Derived, never trusted: the same codec as every other text column.
-        let description_plain_text = document_to_plain_text(&description_doc);
 
-        let frame = Frame {
-            x: 40.0,
-            y: next_y,
-            width: 320.0,
-            height: 240.0,
-        };
-        frame.validate()?;
-        tx.execute(
-            "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
-             VALUES (?1, ?2, 'embed', ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)",
-            params![
-                link.id,
-                input.board_id,
-                frame.x,
-                frame.y,
-                frame.width,
-                frame.height,
-                card_ids.len() as i64,
-                now,
-            ],
-        )?;
-        let description_origin = if description.is_empty() {
-            None
-        } else {
-            Some("user")
-        };
-        tx.execute(
-            "INSERT INTO embed_cards (card_id, source_url, display_url, title, description_json, description_plain_text, description_origin, metadata_status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')",
-            params![link.id, link.source_url, display_url, link.title, description_json, description_plain_text, description_origin],
-        )?;
-
-        card_ids.push(link.id.clone());
-        next_y += 264.0; // 240 height + 24 gap
+        card_ids.push(item.id().to_string());
+        next_y += height + BATCH_GAP;
     }
 
     let card_ids_json =
@@ -983,6 +1130,24 @@ pub fn create_link_batch(
     tx.commit()?;
 
     Ok(CreateLinkBatchResult { batch_id, card_ids })
+}
+
+/// The result recorded for a batch created under `idempotency_key`, if any.
+pub fn find_batch_receipt(
+    conn: &Connection,
+    idempotency_key: &str,
+) -> Result<Option<CreateLinkBatchResult>, WorkspaceError> {
+    let row = conn
+        .query_row(
+            "SELECT batch_id, card_ids FROM mutation_receipts WHERE idempotency_key = ?1",
+            [idempotency_key],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    Ok(row.map(|(batch_id, card_ids_json)| CreateLinkBatchResult {
+        batch_id,
+        card_ids: serde_json::from_str(&card_ids_json).unwrap_or_default(),
+    }))
 }
 
 /// Returns the card ids recorded for an agent batch id, if it exists.
