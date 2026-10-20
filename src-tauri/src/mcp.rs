@@ -60,7 +60,9 @@ Rules: items keep their order and are stacked below the board's existing cards. 
 plain text (line breaks kept, Markdown is not rendered). Links get their preview (title, image) \
 when the user opens the board. Images come from a local file path or a public http(s) URL \
 (PNG, JPEG, GIF, WebP). trash_batch with the batchId from add_items undoes a whole batch \
-(recoverable from the app's Trash). Never delete anything the user did not ask you to.";
+(recoverable from the app's Trash). Never delete anything the user did not ask you to.
+
+Full manual: https://raw.githubusercontent.com/butcherbro/MySpace/main/docs/agents.md";
 
 /// Where the workspace lives. `--data-dir <dir>` wins, then `--db <file>` (its
 /// parent dir), then `MYSPACE_DATA_DIR`, then the app's own data dir.
