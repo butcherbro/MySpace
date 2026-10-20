@@ -104,6 +104,14 @@ kept. Reports are local files, never synced. The error banner's
 **Copy report** button copies the same report as text, so it can be pasted
 into a chat when the files are out of reach (on Windows the banner says so).
 
+## AI agents (MCP)
+
+The installed app is also an MCP server: `myspace --mcp` (macOS
+`/Applications/myspace.app/Contents/MacOS/myspace`, Windows
+`%LOCALAPPDATA%\myspace\myspace.exe`). Agents on the same machine (Claude
+Desktop, Claude Code, Codex, …) can list and create boards and add notes,
+links and images. Setup and the agent manual: [`docs/agents.md`](docs/agents.md).
+
 ## Sync (LAN)
 
 Two computers on the same network (the Mac and the Windows PC on one Wi-Fi)

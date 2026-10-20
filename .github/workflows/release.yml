@@ -193,9 +193,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # No sidecar step: tauri.conf.json has no `bundle.externalBin`, and the
-      # `myspace-mcp` binary is not shipped inside the installers (see
-      # docs/release.md, "MCP server").
+      # No sidecar step: the MCP server is the app binary itself
+      # (`myspace --mcp`, see docs/release.md, "MCP server").
 
       # tauri-action v0 (0.6.x at the time of writing). `owner`/`repo` publish
       # to the public releases repo; with `releaseId` it uploads into the draft

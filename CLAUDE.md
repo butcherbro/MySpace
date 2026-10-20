@@ -9,6 +9,7 @@ SQLite (rusqlite bundled, FTS5), синхронизация устройств �
 - Текущее состояние и следующий шаг: `.continue-here.md` (читать первым).
 - Бэклог и известные ограничения: `tasks/todo.md` (разделы «Следующие фичи», «Sync», «P2 / platform»).
 - Архитектура: `docs/audits/2026-09-24-architecture-audit.md`, решения — `docs/decisions/` (ADR-0011 sync, ADR-0012 устройства).
+- MCP для агентов (`myspace --mcp`, `src-tauri/src/mcp.rs`): `docs/agents.md`.
 - Релизы: `docs/release.md`. Платформы: `README.md`, раздел Platforms.
 
 ## Ветки и релизы

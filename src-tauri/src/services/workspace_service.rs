@@ -10,12 +10,18 @@
 //! Tauri commands, the MCP adapter, startup maintenance — is visible to the
 //! same journal hook.
 
+use std::io::Read;
+use std::path::Path;
+
 use crate::app::Workspace;
+use crate::domain::asset_service;
 use crate::domain::errors::WorkspaceError;
+use crate::domain::image_dimensions::{image_dimensions, HEADER_PROBE_BYTES};
+use crate::domain::link_metadata::{MetadataFetcher, ReqwestMetadataFetcher};
 use crate::domain::models::{
-    AddQuickBoardInput, BoardSnapshot, BoardSummary, CardDto, CreateChildBoardInput,
-    CreateFilesystemAliasInput, CreateLinkBatchInput, CreateLinkBatchResult, Frame, QuickBoardDto,
-    ReorderQuickBoardsInput,
+    AddQuickBoardInput, AssetDto, BoardSnapshot, BoardSummary, CardDto, CreateChildBoardInput,
+    CreateFilesystemAliasInput, CreateItemBatchInput, CreateLinkBatchInput, CreateLinkBatchResult,
+    Frame, QuickBoardDto, ReorderQuickBoardsInput,
 };
 use crate::domain::mutation::Mutation;
 use crate::repositories::workspace_repository;
@@ -53,6 +59,64 @@ pub fn parse_address(address: &str) -> Result<(String, String), WorkspaceError> 
         )));
     }
     Ok((kind, id))
+}
+
+/// Image formats an agent may import: the ones the board renders and
+/// [`image_dimensions`] can size.
+fn sniff_image_mime(header: &[u8]) -> Result<&'static str, WorkspaceError> {
+    let mime = if header.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if header.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a") {
+        "image/gif"
+    } else if header.len() >= 12 && &header[0..4] == b"RIFF" && &header[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        return Err(WorkspaceError::ConstraintViolation(
+            "unsupported image: expected PNG, JPEG, GIF or WebP".into(),
+        ));
+    };
+    Ok(mime)
+}
+
+fn read_header(path: &Path) -> Result<Vec<u8>, WorkspaceError> {
+    let file = std::fs::File::open(path).map_err(|e| {
+        WorkspaceError::ConstraintViolation(format!("cannot read {}: {e}", path.display()))
+    })?;
+    let mut header = Vec::new();
+    file.take(HEADER_PROBE_BYTES as u64)
+        .read_to_end(&mut header)
+        .map_err(|e| {
+            WorkspaceError::ConstraintViolation(format!("cannot read {}: {e}", path.display()))
+        })?;
+    Ok(header)
+}
+
+fn set_dimensions(asset: &mut AssetDto, header: &[u8]) {
+    if let Some((width, height)) = image_dimensions(header) {
+        asset.width = Some(width.into());
+        asset.height = Some(height.into());
+    }
+}
+
+fn find_by_content(ws: &Workspace, sha256: &str) -> Result<Option<AssetDto>, WorkspaceError> {
+    let sha256 = sha256.to_string();
+    ws.read_blocking(move |conn| asset_service::find_asset_by_sha256(conn, &sha256))
+}
+
+/// Records a staged asset through the writer, removing the file on failure.
+fn record_staged(
+    ws: &Workspace,
+    staged: asset_service::StagedAsset,
+) -> Result<AssetDto, WorkspaceError> {
+    match ws.apply_blocking(Mutation::InsertAsset(staged.asset.clone())) {
+        Ok(_) => Ok(staged.asset),
+        Err(error) => {
+            asset_service::discard_staged(&staged);
+            Err(error)
+        }
+    }
 }
 
 /// The typed application service.
@@ -156,6 +220,101 @@ impl WorkspaceService {
     ) -> Result<CreateLinkBatchResult, WorkspaceError> {
         ws.apply_blocking(Mutation::CreateLinkBatch(input.clone()))?
             .into_link_batch()
+    }
+
+    /// Creates a mixed batch of cards (links, notes, images) in one durable,
+    /// idempotent operation. Image items must reference stored assets (see
+    /// [`Self::import_image_bytes`] / [`Self::import_image_file`]).
+    pub fn create_item_batch(
+        ws: &Workspace,
+        input: &CreateItemBatchInput,
+    ) -> Result<CreateLinkBatchResult, WorkspaceError> {
+        ws.apply_blocking(Mutation::CreateItemBatch(input.clone()))?
+            .into_link_batch()
+    }
+
+    /// The recorded result of a batch created under `idempotency_key`, if any.
+    pub fn find_batch(
+        ws: &Workspace,
+        idempotency_key: &str,
+    ) -> Result<Option<CreateLinkBatchResult>, WorkspaceError> {
+        let key = idempotency_key.to_string();
+        ws.read_blocking(move |conn| workspace_repository::find_batch_receipt(conn, &key))
+    }
+
+    /// Stores image bytes as a managed asset and returns it. The format is
+    /// sniffed from the bytes (PNG, JPEG, GIF, WebP), never trusted from a name
+    /// or header. Content-addressed: the same bytes return the existing asset.
+    pub fn import_image_bytes(
+        ws: &Workspace,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> Result<AssetDto, WorkspaceError> {
+        let mime_type = sniff_image_mime(bytes)?;
+        if let Some(existing) = find_by_content(ws, &asset_service::sha256_hex(bytes))? {
+            return Ok(existing);
+        }
+        let mut staged = asset_service::stage_asset_bytes(
+            &ws.paths().assets_dir(),
+            file_name,
+            mime_type,
+            bytes,
+        )?;
+        set_dimensions(&mut staged.asset, bytes);
+        record_staged(ws, staged)
+    }
+
+    /// Copies an image file into the asset store (streamed, never held in
+    /// memory) and returns the asset. Same sniffing and dedup as
+    /// [`Self::import_image_bytes`].
+    pub fn import_image_file(ws: &Workspace, path: &Path) -> Result<AssetDto, WorkspaceError> {
+        let header = read_header(path)?;
+        let mime_type = sniff_image_mime(&header)?;
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "image".to_string());
+        let source = path.to_string_lossy();
+        let mut staged = asset_service::stage_image_asset(
+            &ws.paths().assets_dir(),
+            &uuid::Uuid::now_v7().to_string(),
+            &file_name,
+            mime_type,
+            &source,
+        )?;
+        if let Some(sha256) = staged.asset.sha256.clone() {
+            match find_by_content(ws, &sha256) {
+                Ok(Some(existing)) => {
+                    asset_service::discard_staged(&staged);
+                    return Ok(existing);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    asset_service::discard_staged(&staged);
+                    return Err(error);
+                }
+            }
+        }
+        set_dimensions(&mut staged.asset, &header);
+        record_staged(ws, staged)
+    }
+
+    /// Downloads an image from a public http(s) URL (the link-preview fetcher:
+    /// private addresses blocked, size-capped) and stores it as an asset.
+    pub fn import_image_url(ws: &Workspace, url: &str) -> Result<AssetDto, WorkspaceError> {
+        let fetcher = ReqwestMetadataFetcher::new()?;
+        let response = fetcher
+            .fetch_image(url)
+            .map_err(|e| WorkspaceError::ConstraintViolation(format!("cannot fetch {url}: {e}")))?;
+        let file_name = url::Url::parse(&response.final_url)
+            .ok()
+            .and_then(|u| {
+                u.path_segments()
+                    .and_then(|mut s| s.next_back().map(str::to_string))
+            })
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "image".to_string());
+        Self::import_image_bytes(ws, &file_name, &response.bytes)
     }
 
     /// Trashes all cards of an agent batch as one undo unit. Returns the trash
