@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::domain::models::{
-    AssetDto, CardDto, CreateBoardShortcutInput, CreateFilesystemAliasInput, CreateImageCardInput,
-    CreateLinkBatchInput, CreateNoteInput, Frame, LinkBatchItem, UpdateCardFrameInput,
-    UpdateNoteInput,
+    AssetDto, CardDto, CreateBoardShortcutInput, CreateConnectorInput, CreateFilesystemAliasInput,
+    CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame, LinkBatchItem,
+    UpdateCardFrameInput, UpdateConnectorInput, UpdateNoteInput,
 };
 use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::domain::plain_text::plain_text_to_document;
@@ -137,7 +137,13 @@ impl Drop for Replica {
 fn strip(value: &mut Value) {
     match value {
         Value::Object(map) => {
-            for key in ["revision", "viewport", "local", "originDeviceName"] {
+            for key in [
+                "revision",
+                "updatedAt",
+                "viewport",
+                "local",
+                "originDeviceName",
+            ] {
                 map.remove(key);
             }
             map.values_mut().for_each(strip);
@@ -201,6 +207,8 @@ struct Fixture {
     note: String,
     image: String,
     alias: String,
+    /// Коннектор note → image.
+    connector: String,
 }
 
 /// Scenario (a)'s content, created on `a` only.
@@ -263,13 +271,39 @@ fn populate(a: &Replica) -> Fixture {
         z_index: 4,
         target_board_id: child.clone(),
     }));
+    let connector = new_id();
+    a.apply(Mutation::CreateConnector(CreateConnectorInput {
+        id: connector.clone(),
+        board_id: board.clone(),
+        from_card_id: note.clone(),
+        to_card_id: image.clone(),
+        color_token: Some("blue".into()),
+        arrow_ends: None,
+    }));
     Fixture {
         board,
         child,
         note,
         image,
         alias,
+        connector,
     }
+}
+
+/// Id коннекторов, которые показывает снимок доски `board` на реплике.
+fn shown_connectors(r: &Replica, board: &str) -> Vec<String> {
+    let id = board.to_string();
+    r.ws.read_blocking(move |c| repo::load_board_snapshot(c, &id))
+        .unwrap()
+        .connectors
+        .into_iter()
+        .map(|c| c.id)
+        .collect()
+}
+
+fn connector_revision(r: &Replica, id: &str) -> i64 {
+    r.scalar("SELECT revision FROM connectors WHERE id = ?1", id)
+        .unwrap()
 }
 
 fn alias_dto(r: &Replica, id: &str) -> myspace_lib::domain::models::FilesystemAliasDto {
@@ -743,4 +777,315 @@ fn a_failed_mutation_leaves_no_journal_row() {
         },
     ));
     assert_eq!(count(&a), before);
+}
+
+#[test]
+fn a_connector_replicates_and_follows_trash_and_restore() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let fx = populate(&a);
+    let report = sync(&a, &b);
+    assert_eq!(report.pending, 0, "{report:?}");
+    assert_eq!(report.rejected, 0, "{report:?}");
+    assert_eq!(
+        shown_connectors(&b, &fx.board),
+        std::slice::from_ref(&fx.connector)
+    );
+    assert_eq!(b.board(&fx.board), a.board(&fx.board));
+
+    // Правка на B едет обратно.
+    b.apply(Mutation::UpdateConnector(UpdateConnectorInput {
+        connector_id: fx.connector.clone(),
+        expected_revision: connector_revision(&b, &fx.connector),
+        color_token: Some("pink".into()),
+        arrow_ends: Some("both".into()),
+        from_card_id: None,
+        to_card_id: None,
+        label: None,
+    }));
+    let report = sync(&b, &a);
+    assert!(report.touched_boards.contains(&fx.board), "{report:?}");
+    let color: String = a
+        .scalar(
+            "SELECT color_token FROM connectors WHERE id = ?1",
+            &fx.connector,
+        )
+        .unwrap();
+    assert_eq!(color, "pink");
+
+    // Корзина конца на A прячет коннектор на B, с тем же батчем.
+    let batch = a
+        .apply(Mutation::TrashNote {
+            card_id: fx.note.clone(),
+        })
+        .into_id()
+        .unwrap();
+    sync(&a, &b);
+    assert!(shown_connectors(&b, &fx.board).is_empty());
+    let on_b: Option<String> = b.scalar(
+        "SELECT trash_batch_id FROM connectors WHERE id = ?1",
+        &fx.connector,
+    );
+    assert_eq!(on_b, Some(batch.clone()));
+
+    a.apply(Mutation::RestoreTrashBatch { batch_id: batch });
+    sync(&a, &b);
+    assert_eq!(
+        shown_connectors(&b, &fx.board),
+        std::slice::from_ref(&fx.connector)
+    );
+    assert_eq!(b.board(&fx.board), a.board(&fx.board));
+
+    // Удаление пользователем мягкое и едет регистром `life`.
+    a.apply(Mutation::RemoveConnector {
+        connector_id: fx.connector.clone(),
+    });
+    sync(&a, &b);
+    assert!(connector_deleted(&b, &fx.connector));
+    assert!(shown_connectors(&b, &fx.board).is_empty());
+    assert_eq!(b.board(&fx.board), a.board(&fx.board));
+}
+
+fn connector_deleted(r: &Replica, id: &str) -> bool {
+    let deleted: Option<Option<i64>> =
+        r.scalar("SELECT deleted_at FROM connectors WHERE id = ?1", id);
+    matches!(deleted, Some(Some(_)))
+}
+
+fn recolor(r: &Replica, id: &str, color: &str) {
+    r.apply(Mutation::UpdateConnector(UpdateConnectorInput {
+        connector_id: id.to_string(),
+        expected_revision: connector_revision(r, id),
+        color_token: Some(color.into()),
+        arrow_ends: None,
+        from_card_id: None,
+        to_card_id: None,
+        label: None,
+    }));
+}
+
+/// Удаление на A и более новая (по HLC) перекраска на B: перекраска остаётся,
+/// но коннектор удалён на обоих — правка не отменяет удаление.
+#[test]
+fn a_newer_recolour_never_undoes_a_concurrent_remove() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let fx = populate(&a);
+    sync(&a, &b);
+
+    a.apply(Mutation::RemoveConnector {
+        connector_id: fx.connector.clone(),
+    });
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    recolor(&b, &fx.connector, "pink");
+    converge(&a, &b);
+
+    for r in [&a, &b] {
+        assert!(connector_deleted(r, &fx.connector));
+        assert!(shown_connectors(r, &fx.board).is_empty());
+        let color: String = r
+            .scalar(
+                "SELECT color_token FROM connectors WHERE id = ?1",
+                &fx.connector,
+            )
+            .unwrap();
+        assert_eq!(color, "pink", "the edit itself is kept");
+    }
+    assert_eq!(a.board(&fx.board), b.board(&fx.board));
+}
+
+/// Обратный порядок: перекраска на B раньше удаления на A.
+#[test]
+fn a_remove_newer_than_a_concurrent_recolour_wins() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let fx = populate(&a);
+    sync(&a, &b);
+
+    recolor(&b, &fx.connector, "pink");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    a.apply(Mutation::RemoveConnector {
+        connector_id: fx.connector.clone(),
+    });
+    converge(&a, &b);
+
+    for r in [&a, &b] {
+        assert!(connector_deleted(r, &fx.connector));
+        assert!(shown_connectors(r, &fx.board).is_empty());
+    }
+    assert_eq!(a.board(&fx.board), b.board(&fx.board));
+}
+
+#[test]
+fn a_late_connector_edit_never_resurrects_a_purged_cards_connector() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let fx = populate(&a);
+    sync(&a, &b);
+
+    // A кладёт конец в корзину и очищает её; B, ещё не знающий об этом,
+    // правит коннектор позже: строка B новее удаления на A.
+    a.apply(Mutation::TrashNote {
+        card_id: fx.note.clone(),
+    });
+    a.apply(Mutation::EmptyTrash {
+        confirmation: "EMPTY".into(),
+    });
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    b.apply(Mutation::UpdateConnector(UpdateConnectorInput {
+        connector_id: fx.connector.clone(),
+        expected_revision: connector_revision(&b, &fx.connector),
+        color_token: Some("green".into()),
+        arrow_ends: None,
+        from_card_id: None,
+        to_card_id: None,
+        label: None,
+    }));
+
+    let report = sync(&b, &a);
+    assert_eq!(report.pending, 0, "{report:?}");
+    assert!(report.dropped_purged >= 1, "{report:?}");
+    converge(&a, &b);
+
+    for r in [&a, &b] {
+        let rows: i64 = r
+            .scalar(
+                "SELECT COUNT(*) FROM connectors WHERE id = ?1",
+                &fx.connector,
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
+        let pending: i64 = r
+            .scalar("SELECT COUNT(*) FROM pending_changes WHERE ?1 = ?1", "x")
+            .unwrap();
+        assert_eq!(pending, 0, "nothing parked forever");
+    }
+    assert_eq!(a.board(&fx.board), b.board(&fx.board));
+}
+
+/// HLC устройства `peerx`, `offset_ms` от текущего времени.
+fn peer_hlc(offset_ms: i64, counter: u32) -> String {
+    let wall = myspace_lib::db::migrations::now_millis() + offset_ms;
+    format!("{wall:015}-{counter:05}-peerx")
+}
+
+/// Строка журнала коннектора от `peerx`.
+fn peer_connector_row(id: &str, hlc: &str, clocks: Value, state: Value) -> ChangeRow {
+    ChangeRow {
+        origin_device_id: "peerx".into(),
+        hlc: hlc.into(),
+        entity_kind: "connector".into(),
+        entity_id: id.into(),
+        op: "connector.update".into(),
+        payload_json: serde_json::json!({ "v": 1, "clocks": clocks, "state": state }).to_string(),
+    }
+}
+
+fn live_connector_state(fx: &Fixture, color: &str) -> Value {
+    serde_json::json!({
+        "present": true,
+        "board_id": fx.board,
+        "from_card_id": fx.note,
+        "to_card_id": fx.image,
+        "color_token": color,
+        "arrow_ends": "end",
+        "label": null,
+        "created_at": 1,
+        "deleted_at": null,
+        "trash_batch_id": null,
+    })
+}
+
+/// `present: false` с более новыми часами `body`, пришедшая раньше самой
+/// перекраски, не делает перекраску устаревшей: такая строка двигает только
+/// часы `life`, а `life` здесь новее (локальный restore).
+#[test]
+fn an_absent_row_never_supersedes_the_recolour_it_carries() {
+    let a = Replica::new("a");
+    let fx = populate(&a);
+    let batch = a
+        .apply(Mutation::TrashNote {
+            card_id: fx.note.clone(),
+        })
+        .into_id()
+        .unwrap();
+    a.apply(Mutation::RestoreTrashBatch { batch_id: batch });
+
+    let body = peer_hlc(60_000, 0);
+    let old_life = "000000000000001-00000-peerx";
+    let absent = peer_connector_row(
+        &fx.connector,
+        &peer_hlc(60_000, 1),
+        serde_json::json!({ "body": body, "life": old_life }),
+        serde_json::json!({ "present": false }),
+    );
+    let report = a.apply_rows(vec![absent]);
+    assert_eq!(report.superseded, 1, "{report:?}");
+    assert_eq!(
+        shown_connectors(&a, &fx.board),
+        std::slice::from_ref(&fx.connector)
+    );
+
+    let recolour = peer_connector_row(
+        &fx.connector,
+        &body,
+        serde_json::json!({ "body": body, "life": old_life }),
+        live_connector_state(&fx, "pink"),
+    );
+    let report = a.apply_rows(vec![recolour]);
+    assert_eq!(report.applied, 1, "{report:?}");
+    let color: String = a
+        .scalar(
+            "SELECT color_token FROM connectors WHERE id = ?1",
+            &fx.connector,
+        )
+        .unwrap();
+    assert_eq!(color, "pink");
+    assert!(!connector_deleted(&a, &fx.connector));
+}
+
+/// Строки, поставленные в очередь миграцией 0027, применяются при старте
+/// (`retry_pending_blocking`), не дожидаясь непустой страницы от пира.
+#[test]
+fn queued_connector_rows_apply_at_startup_without_a_peer_page() {
+    let a = Replica::new("a");
+    let fx = populate(&a);
+    let id = new_id();
+    let hlc = peer_hlc(0, 0);
+    let row = peer_connector_row(
+        &id,
+        &hlc,
+        serde_json::json!({ "body": hlc, "life": hlc }),
+        live_connector_state(&fx, "green"),
+    );
+
+    // Как у старой сборки: строка лежит в `changes`, но не применена.
+    let mut raw = rusqlite::Connection::open(a.ws.paths().db_path()).unwrap();
+    raw.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    raw.execute(
+        "INSERT INTO changes (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+        rusqlite::params![
+            row.origin_device_id,
+            row.hlc,
+            row.entity_kind,
+            row.entity_id,
+            row.op,
+            row.payload_json
+        ],
+    )
+    .unwrap();
+    let tx = raw.transaction().unwrap();
+    myspace_lib::db::migrations::requeue_connector_changes(&tx).unwrap();
+    tx.commit().unwrap();
+    drop(raw);
+    assert!(shown_connectors(&a, &fx.board).iter().all(|k| *k != id));
+
+    let report = myspace_lib::sync::retry_pending_blocking(&a.ws)
+        .unwrap()
+        .expect("there were parked rows");
+    assert_eq!(report.pending, 0, "{report:?}");
+    assert!(shown_connectors(&a, &fx.board).contains(&id));
+    assert!(
+        myspace_lib::sync::retry_pending_blocking(&a.ws)
+            .unwrap()
+            .is_none(),
+        "nothing left to retry"
+    );
 }

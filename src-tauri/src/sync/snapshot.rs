@@ -4,9 +4,10 @@
 //! could never learn about it. [`ensure_journal_snapshot`] emits, once per
 //! database, a synthetic row for every synced entity with this device as
 //! origin and a fresh HLC, in dependency order (boards parent-first, assets,
-//! cards, quick-board references): exactly what `tracking::flush` writes for
-//! a write that touched everything. Trashed boards and cards are included, so
-//! a later restore or Empty Trash on any device has something to act on.
+//! cards, quick-board references, connectors): exactly what `tracking::flush`
+//! writes for a write that touched everything. Trashed boards and cards are
+//! included, so a later restore or Empty Trash on any device has something to
+//! act on.
 //!
 //! Not part of the snapshot (never synced): everything in
 //! `LOCAL_ONLY_TABLES`, `workspaces`, `favicon_cache`, the idempotency

@@ -128,4 +128,29 @@ export interface CanvasEvents {
    *  Returns true when the drop was consumed (pinned to Quick Boards or moved
    *  to a portal), so the canvas must not also persist a plain reposition. */
   onCardDragEnd?(): boolean | void;
+  /** Связь протянута от одной карточки к другой (никогда к самой себе). */
+  onConnectorCreate?(e: ConnectorRequested): void;
+  /** Изменился набор выделенных связей. */
+  onConnectorSelectionChanged?(e: SelectionChanged): void;
+  /** Правый клик по связи. Координаты экранные. */
+  onConnectorContextMenu?(id: string, x: number, y: number): void;
+}
+
+/** На каких концах связи стрелка. "end" — только у `to`. */
+export type CanvasConnectorArrowEnds = "end" | "both" | "none";
+
+/** Стрелка между двумя карточками в собственных терминах холста. */
+export interface CanvasConnector {
+  id: string;
+  fromCardId: string;
+  toCardId: string;
+  /** Id цветового пресета заметки ('default' — нейтральная серая линия). */
+  colorToken: string;
+  arrowEnds: CanvasConnectorArrowEnds;
+}
+
+/** Связь, протянутая от ручки одной карточки, отпущена над другой. */
+export interface ConnectorRequested {
+  fromCardId: string;
+  toCardId: string;
 }

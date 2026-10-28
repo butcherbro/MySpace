@@ -315,4 +315,156 @@ describe("MockWorkspaceGateway", () => {
     expect(saved.text).toContain("boom");
     expect(saved.text).toContain("0.2.3");
   });
+
+  describe("connectors", () => {
+    async function twoNotes() {
+      const gateway = new MockWorkspaceGateway();
+      await gateway.createNote(noteInput("a", "A"));
+      await gateway.createNote(noteInput("b", "B"));
+      return gateway;
+    }
+    const link = { id: "c1", boardId: "home", fromCardId: "a", toCardId: "b" };
+
+    it("creates a connector with defaults, idempotently by id, and loads it with the board", async () => {
+      const gateway = await twoNotes();
+      const created = await gateway.createConnector(link);
+      expect(created).toMatchObject({ ...link, colorToken: "default", arrowEnds: "end", label: null, revision: 1 });
+
+      const again = await gateway.createConnector({ ...link, colorToken: "blue" });
+      expect(again).toEqual(created);
+
+      const snapshot = await gateway.loadBoardSnapshot("home");
+      expect(snapshot.connectors).toEqual([created]);
+    });
+
+    it("refuses self links, missing endpoints and unknown values, and a missing board", async () => {
+      const gateway = await twoNotes();
+      await expect(gateway.createConnector({ ...link, toCardId: "a" })).rejects.toMatchObject({ code: "constraint_violation" });
+      await expect(gateway.createConnector({ ...link, toCardId: "nope" })).rejects.toMatchObject({ code: "constraint_violation" });
+      await expect(gateway.createConnector({ ...link, colorToken: "neon" })).rejects.toMatchObject({ code: "constraint_violation" });
+      await expect(gateway.createConnector({ ...link, boardId: "nowhere" })).rejects.toMatchObject({ code: "not_found" });
+    });
+
+    it("updates with a revision check and swaps ends on reverse", async () => {
+      const gateway = await twoNotes();
+      await gateway.createConnector(link);
+      const updated = await gateway.updateConnector({ connectorId: "c1", expectedRevision: 1, colorToken: "green", arrowEnds: "both" });
+      expect(updated).toMatchObject({ colorToken: "green", arrowEnds: "both", revision: 2 });
+
+      await expect(gateway.updateConnector({ connectorId: "c1", expectedRevision: 1, arrowEnds: "none" })).rejects.toEqual({
+        code: "stale_revision",
+        message: { expected: 1, actual: 2 },
+      });
+
+      const reversed = await gateway.updateConnector({ connectorId: "c1", expectedRevision: 2, fromCardId: "b", toCardId: "a" });
+      expect(reversed).toMatchObject({ fromCardId: "b", toCardId: "a", revision: 3 });
+    });
+
+    it("removes a connector, and removing a missing one is a no-op", async () => {
+      const gateway = await twoNotes();
+      await gateway.createConnector(link);
+      await gateway.removeConnector({ connectorId: "c1" });
+      await gateway.removeConnector({ connectorId: "c1" });
+      await gateway.removeConnector({ connectorId: "nope" });
+      expect((await gateway.loadBoardSnapshot("home")).connectors).toEqual([]);
+    });
+
+    it("soft-removes a connector with its revision kept; creating the same id restores the stored row", async () => {
+      const gateway = await twoNotes();
+      await gateway.createConnector(link);
+      const styled = await gateway.updateConnector({ connectorId: "c1", expectedRevision: 1, colorToken: "green", label: "why" });
+      await gateway.removeConnector({ connectorId: "c1" });
+
+      await expect(gateway.updateConnector({ connectorId: "c1", expectedRevision: 2, arrowEnds: "none" })).rejects.toMatchObject({
+        code: "not_found",
+      });
+
+      const restored = await gateway.createConnector({ ...link, colorToken: "blue", arrowEnds: "both" });
+      expect(restored).toEqual(styled);
+      expect((await gateway.loadBoardSnapshot("home")).connectors).toEqual([styled]);
+    });
+
+    it("empty trash keeps a removed connector between live cards, so creating its id still restores it", async () => {
+      const gateway = await twoNotes();
+      await gateway.createConnector(link);
+      await gateway.updateConnector({ connectorId: "c1", expectedRevision: 1, colorToken: "green" });
+      await gateway.removeConnector({ connectorId: "c1" });
+      await gateway.emptyTrash("EMPTY");
+
+      const restored = await gateway.createConnector({ ...link, colorToken: "blue" });
+      expect(restored).toMatchObject({ colorToken: "green", revision: 2 });
+    });
+
+    it("removing a connector that is in the trash takes it out of its batch", async () => {
+      const gateway = await twoNotes();
+      await gateway.createConnector(link);
+      const batchId = await gateway.trashSelection({ items: [{ id: "a", kind: "note" }] });
+      await gateway.removeConnector({ connectorId: "c1" });
+
+      await gateway.restoreTrashBatch(batchId);
+      expect((await gateway.loadBoardSnapshot("home")).connectors).toEqual([]);
+    });
+
+    it("trashes connectors with their card in the same batch and restores them with it", async () => {
+      const gateway = await twoNotes();
+      await gateway.createConnector(link);
+      const batchId = await gateway.trashSelection({ items: [{ id: "a", kind: "note" }] });
+      expect((await gateway.loadBoardSnapshot("home")).connectors).toEqual([]);
+
+      await gateway.restoreTrashBatch(batchId);
+      expect((await gateway.loadBoardSnapshot("home")).connectors.map((c) => c.id)).toEqual(["c1"]);
+    });
+
+    it("keeps a restored connector hidden until its other trashed endpoint returns", async () => {
+      const gateway = await twoNotes();
+      await gateway.createConnector(link);
+      const first = await gateway.trashSelection({ items: [{ id: "a", kind: "note" }] });
+      const second = await gateway.trashSelection({ items: [{ id: "b", kind: "note" }] });
+
+      await gateway.restoreTrashBatch(first);
+      expect((await gateway.loadBoardSnapshot("home")).connectors).toEqual([]);
+      await gateway.restoreTrashBatch(second);
+      expect((await gateway.loadBoardSnapshot("home")).connectors.map((c) => c.id)).toEqual(["c1"]);
+    });
+
+    it("empty trash purges the connectors of purged cards for good", async () => {
+      const gateway = await twoNotes();
+      await gateway.createConnector(link);
+      await gateway.updateConnector({ connectorId: "c1", expectedRevision: 1, colorToken: "green" });
+      const batchId = await gateway.trashSelection({ items: [{ id: "a", kind: "note" }] });
+      await gateway.emptyTrash("EMPTY");
+      await gateway.restoreTrashBatch(batchId);
+      await gateway.createNote(noteInput("a", "A again"));
+      expect((await gateway.loadBoardSnapshot("home")).connectors).toEqual([]);
+
+      // Строки больше нет: тот же id создаётся заново, а не восстанавливается.
+      const created = await gateway.createConnector({ ...link, colorToken: "blue" });
+      expect(created).toMatchObject({ colorToken: "blue", revision: 1 });
+    });
+
+    it("soft-deletes the connectors of a card that leaves the board or goes to Unsorted", async () => {
+      const gateway = await twoNotes();
+      await gateway.createNote(noteInput("c", "C"));
+      await gateway.createChildBoard({
+        parentBoardId: "home",
+        boardId: "child",
+        portalCardId: "portal",
+        frame: { x: 0, y: 0, width: 120, height: 112 },
+        title: "Child",
+      });
+      await gateway.createConnector(link);
+      await gateway.createConnector({ ...link, id: "c2", fromCardId: "c" });
+      await gateway.moveCardsToBoardUnsorted({ targetBoardId: "home", cards: [{ id: "a", expectedRevision: 1 }] });
+      await gateway.moveCardToBoard({ id: "c", expectedRevision: 1, targetBoardId: "child" });
+
+      await gateway.placeUnsortedCard({ id: "a", expectedRevision: 2, frame: { x: 0, y: 0, width: 200, height: 80 } });
+      await gateway.moveCardToBoard({ id: "c", expectedRevision: 2, targetBoardId: "home" });
+      expect((await gateway.loadBoardSnapshot("home")).connectors).toEqual([]);
+
+      // Строка осталась (мягко удалена, ревизия та же): create с тем же id её возвращает.
+      const restored = await gateway.createConnector(link);
+      expect(restored).toMatchObject({ id: "c1", revision: 1 });
+      expect((await gateway.loadBoardSnapshot("home")).connectors.map((c) => c.id)).toEqual(["c1"]);
+    });
+  });
 });

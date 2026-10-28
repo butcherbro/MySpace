@@ -86,6 +86,7 @@ function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
     viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
     cards: [],
     unsortedCards: [],
+    connectors: [],
     ...overrides,
   };
 }
@@ -245,6 +246,7 @@ describe("useBoardLoading", () => {
           okPortal,
         ],
         unsortedCards: [{ ...unsortedNote, documentJson: { type: "doc", content: [] } }],
+        connectors: [],
         sinceRequest: { written: [], added: [], removed: [] },
       });
     });

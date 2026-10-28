@@ -36,15 +36,16 @@ use crate::domain::asset_service::{self, StagedAsset};
 use crate::domain::device::DeviceIdentity;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    AddQuickBoardInput, AssetDto, CardDto, CardReceipt, CardsReceipt, ConvertNoteToEmbedInput,
-    CreateBoardShortcutInput, CreateChildBoardInput, CreateFileCardInput,
-    CreateFilesystemAliasInput, CreateImageCardInput, CreateItemBatchInput, CreateLinkBatchInput,
-    CreateLinkBatchResult, CreateNoteInput, DuplicateBoardInput, DuplicateBoardReceipt,
-    EmbedCardDto, EmptyTrashResult, MoveBoardInput, MoveCardToBoardInput, MoveCardsInput,
-    MoveCardsToUnsortedInput, MoveSelectionToBoardInput, MoveSelectionToBoardReceipt,
-    PlaceUnsortedCardInput, ReorderQuickBoardsInput, SetNoteColorInput, TextReceipt,
-    TrashSelectionInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
-    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput, ViewportReceipt,
+    AddQuickBoardInput, AssetDto, CardDto, CardReceipt, CardsReceipt, ConnectorDto,
+    ConvertNoteToEmbedInput, CreateBoardShortcutInput, CreateChildBoardInput, CreateConnectorInput,
+    CreateFileCardInput, CreateFilesystemAliasInput, CreateImageCardInput, CreateItemBatchInput,
+    CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, DuplicateBoardInput,
+    DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult, MoveBoardInput, MoveCardToBoardInput,
+    MoveCardsInput, MoveCardsToUnsortedInput, MoveSelectionToBoardInput,
+    MoveSelectionToBoardReceipt, PlaceUnsortedCardInput, ReorderQuickBoardsInput,
+    SetNoteColorInput, TextReceipt, TrashSelectionInput, UpdateCardFrameInput,
+    UpdateConnectorInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
+    UpdateViewportInput, ViewportReceipt,
 };
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::devices;
@@ -96,6 +97,7 @@ pub enum EntityKind {
     Card,
     Asset,
     QuickBoard,
+    Connector,
     TrashBatch,
     LinkBatch,
     Device,
@@ -110,6 +112,7 @@ impl EntityKind {
             EntityKind::Card => "card",
             EntityKind::Asset => "asset",
             EntityKind::QuickBoard => "quick_board",
+            EntityKind::Connector => "connector",
             EntityKind::TrashBatch => "trash_batch",
             EntityKind::LinkBatch => "link_batch",
             EntityKind::Device => "device",
@@ -168,6 +171,9 @@ pub const OP_NAMES: &[&str] = &[
     "sync.peers",
     "sync.compact_journal",
     "maintenance.vacuum",
+    "connector.create",
+    "connector.update",
+    "connector.remove",
 ];
 
 /// One write, as data. See the module docs.
@@ -227,6 +233,14 @@ pub enum Mutation {
         board_id: String,
     },
     ReorderQuickBoards(ReorderQuickBoardsInput),
+
+    // ---- connectors ---------------------------------------------------------
+    CreateConnector(CreateConnectorInput),
+    UpdateConnector(UpdateConnectorInput),
+    /// Мягкое удаление; неизвестный id — no-op.
+    RemoveConnector {
+        connector_id: String,
+    },
 
     // ---- assets and filesystem cards -------------------------------------
     /// Records an asset whose file was already staged by the caller. On error
@@ -327,6 +341,7 @@ pub enum MutationOutcome {
     Id(String),
     Count(i64),
     Card(CardDto),
+    Connector(ConnectorDto),
     /// Boxed: the embed projection is the largest outcome by far.
     Embed(Box<EmbedCardDto>),
     MoveSelectionReceipt(MoveSelectionToBoardReceipt),
@@ -372,6 +387,12 @@ impl MutationOutcome {
         match self {
             Self::Card(card) => Ok(card),
             _ => Err(unexpected("card")),
+        }
+    }
+    pub fn into_connector(self) -> Result<ConnectorDto, WorkspaceError> {
+        match self {
+            Self::Connector(connector) => Ok(connector),
+            _ => Err(unexpected("connector")),
         }
     }
     pub fn into_embed(self) -> Result<EmbedCardDto, WorkspaceError> {
@@ -490,6 +511,9 @@ impl Mutation {
             Self::AddQuickBoard(_) => "quick_board.add",
             Self::RemoveQuickBoard { .. } => "quick_board.remove",
             Self::ReorderQuickBoards(_) => "quick_board.reorder",
+            Self::CreateConnector(_) => "connector.create",
+            Self::UpdateConnector(_) => "connector.update",
+            Self::RemoveConnector { .. } => "connector.remove",
             Self::InsertAsset(_) => "asset.insert",
             Self::CreateFilesystemAlias(_) => "card.create_filesystem_alias",
             Self::RefreshFilesystemAliasLocator { .. } => "card.refresh_alias_locator",
@@ -550,6 +574,9 @@ impl Mutation {
             Self::AddQuickBoard(i) => (K::QuickBoard, &i.board_id),
             Self::RemoveQuickBoard { board_id } => (K::QuickBoard, board_id),
             Self::ReorderQuickBoards(_) => (K::Workspace, ""),
+            Self::CreateConnector(i) => (K::Connector, &i.id),
+            Self::UpdateConnector(i) => (K::Connector, &i.connector_id),
+            Self::RemoveConnector { connector_id } => (K::Connector, connector_id),
             Self::InsertAsset(asset) => (K::Asset, &asset.id),
             Self::CreateFilesystemAlias(i) => (K::Card, &i.id),
             Self::RefreshFilesystemAliasLocator { card_id, .. } => (K::Card, card_id),
@@ -657,6 +684,9 @@ impl Mutation {
             | Self::AddQuickBoard(_)
             | Self::RemoveQuickBoard { .. }
             | Self::ReorderQuickBoards(_)
+            | Self::CreateConnector(_)
+            | Self::UpdateConnector(_)
+            | Self::RemoveConnector { .. }
             | Self::InsertAsset(_)
             | Self::CreateFilesystemAlias(_)
             | Self::RefreshFilesystemAliasLocator { .. }
@@ -757,6 +787,12 @@ impl Mutation {
             }
             Self::ReorderQuickBoards(input) => {
                 repo::reorder_quick_boards(conn, input).map(|_| Out::Unit)
+            }
+
+            Self::CreateConnector(input) => repo::create_connector(conn, input).map(Out::Connector),
+            Self::UpdateConnector(input) => repo::update_connector(conn, input).map(Out::Connector),
+            Self::RemoveConnector { connector_id } => {
+                repo::remove_connector(conn, connector_id).map(|_| Out::Unit)
             }
 
             Self::InsertAsset(asset) => {
@@ -926,7 +962,10 @@ maintenance.hash_assets
 sync.apply_changes
 sync.peers
 sync.compact_journal
-maintenance.vacuum"
+maintenance.vacuum
+connector.create
+connector.update
+connector.remove"
         );
     }
 

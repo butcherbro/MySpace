@@ -450,4 +450,40 @@ describe("TauriWorkspaceGateway", () => {
     expect(invokeMock).toHaveBeenCalledWith("record_error_report", { report: input });
     expect(result).toEqual(saved);
   });
+
+  it("calls create_connector with a wrapped input payload and returns the connector", async () => {
+    const dto = {
+      id: "c1",
+      boardId: "home",
+      fromCardId: "a",
+      toCardId: "b",
+      colorToken: "default",
+      arrowEnds: "end",
+      label: null,
+      revision: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    invokeMock.mockResolvedValue(dto);
+    const gw = new TauriWorkspaceGateway();
+    const input = { id: "c1", boardId: "home", fromCardId: "a", toCardId: "b" };
+    const result = await gw.createConnector(input);
+    expect(invokeMock).toHaveBeenCalledWith("create_connector", { input });
+    expect(result).toEqual(dto);
+  });
+
+  it("calls update_connector with a wrapped input payload", async () => {
+    invokeMock.mockResolvedValue({});
+    const gw = new TauriWorkspaceGateway();
+    const input = { connectorId: "c1", expectedRevision: 2, colorToken: "blue" };
+    await gw.updateConnector(input);
+    expect(invokeMock).toHaveBeenCalledWith("update_connector", { input });
+  });
+
+  it("calls remove_connector with a connectorId payload", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const gw = new TauriWorkspaceGateway();
+    await gw.removeConnector({ connectorId: "c1" });
+    expect(invokeMock).toHaveBeenCalledWith("remove_connector", { connectorId: "c1" });
+  });
 });

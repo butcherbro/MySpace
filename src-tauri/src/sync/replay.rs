@@ -54,7 +54,7 @@ use super::image::{
 use super::tracking::{self, load_clocks, record_purge, set_clock};
 use super::{
     board_from_wire, board_to_wire, journal, ApplyReport, ChangeRow, ENTITY_ASSET, ENTITY_BOARD,
-    ENTITY_CARD, ENTITY_QUICK_BOARD, OP_CONFLICT_COPY, ROOT_BOARD_ALIAS,
+    ENTITY_CARD, ENTITY_CONNECTOR, ENTITY_QUICK_BOARD, OP_CONFLICT_COPY, ROOT_BOARD_ALIAS,
 };
 use crate::domain::card_kind::{handler, registry, CardKind};
 use crate::domain::errors::WorkspaceError;
@@ -307,6 +307,7 @@ fn apply_row(
         ENTITY_BOARD => apply_board(conn, ctx, row, &env),
         ENTITY_ASSET => apply_asset(conn, row, &env),
         ENTITY_QUICK_BOARD => apply_quick_board(conn, ctx, row, &env),
+        ENTITY_CONNECTOR => apply_connector(conn, ctx, row, &env),
         _ => Ok(Outcome::Rejected),
     }
 }
@@ -754,7 +755,7 @@ fn apply_board(
     Ok(Outcome::Applied)
 }
 
-// ---- assets and quick boards --------------------------------------------------
+// ---- assets, quick boards and connectors ----------------------------------------
 
 fn apply_asset(
     conn: &Connection,
@@ -793,6 +794,71 @@ fn apply_quick_board(
     Ok(Outcome::Applied)
 }
 
+/// Образ коннектора, по регистрам как у карточки: `body` пишет содержимое,
+/// `life` — корзину и само существование (`present`). Нет доски или конца —
+/// вставка падает на FK, и строка паркуется.
+fn apply_connector(
+    conn: &Connection,
+    ctx: &Ctx,
+    row: &ChangeRow,
+    env: &Envelope,
+) -> Result<Outcome, WorkspaceError> {
+    let id = row.entity_id.as_str();
+    let state = &env.state;
+    let local = load_clocks(conn, ENTITY_CONNECTOR, id)?;
+    let wins = winners(ENTITY_CONNECTOR, env, &local);
+    if wins.is_empty() {
+        return Ok(Outcome::Superseded);
+    }
+    if !image::connector_present(state)? {
+        // `present: false` пишет только FK-каскад от стёртой карточки или
+        // доски, а их purge-тумбстоун придёт следом и каскадом сотрёт строку
+        // и здесь. Сама строка ничего не стирает и не несёт содержимого
+        // `body`, поэтому двигает только часы `life`: сдвиг `body` сделал бы
+        // настоящую перекраску Superseded, и компакция (R1) её бы выбросила.
+        if !wins.contains(&REG_LIFE) {
+            return Ok(Outcome::Superseded);
+        }
+        set_clocks(conn, ENTITY_CONNECTOR, id, env, &[REG_LIFE])?;
+        return Ok(Outcome::Applied);
+    }
+
+    // Конец или доска уже стёрты purge'ем: такая строка — поздняя правка
+    // устройства, не видевшего Empty Trash. Без этой проверки она бы вечно
+    // парковалась на FK, а purge окончателен.
+    if is_purged(conn, ENTITY_BOARD, get_str(state, "board_id")?)?
+        || is_purged(conn, ENTITY_CARD, get_str(state, "from_card_id")?)?
+        || is_purged(conn, ENTITY_CARD, get_str(state, "to_card_id")?)?
+    {
+        return Ok(Outcome::Purged);
+    }
+
+    let exists = conn
+        .query_row("SELECT 1 FROM connectors WHERE id = ?1", [id], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if !exists {
+        // Строки здесь нет. Если её стёрло более новое значение `life`, правка
+        // `body` её не воскрешает (как правка не отменяет корзину).
+        if local.contains_key(REG_LIFE) && !wins.contains(&REG_LIFE) {
+            return Ok(Outcome::Superseded);
+        }
+        image::insert_connector(conn, id, state, &ctx.root, ctx.now)?;
+        set_clocks(conn, ENTITY_CONNECTOR, id, env, &wins)?;
+        return Ok(Outcome::Applied);
+    }
+
+    if wins.contains(&REG_BODY) {
+        image::update_connector_body(conn, id, state, &ctx.root)?;
+    }
+    if wins.contains(&REG_LIFE) {
+        image::update_connector_life(conn, id, state)?;
+    }
+    image::touch_connector(conn, id, ctx.now)?;
+    set_clocks(conn, ENTITY_CONNECTOR, id, env, &wins)?;
+    Ok(Outcome::Applied)
+}
+
 // ---- purge -------------------------------------------------------------------
 
 fn purge_entity(
@@ -815,8 +881,8 @@ fn purge_entity(
     }
 }
 
-/// Hard-deletes cards (detail rows first; locators cascade) and records
-/// their tombstones. Missing cards still get a tombstone.
+/// Hard-deletes cards (detail rows first; locators and connectors cascade)
+/// and records their tombstones. Missing cards still get a tombstone.
 fn purge_cards_local(conn: &Connection, ids: &[String], hlc: &str) -> Result<(), WorkspaceError> {
     for handler in registry() {
         handler.delete_details(conn, ids)?;

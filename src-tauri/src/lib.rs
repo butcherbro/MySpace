@@ -207,6 +207,12 @@ pub fn run() {
                 .name("myspace-startup".into())
                 .spawn(move || {
                     std::thread::sleep(STARTUP_MAINTENANCE_DELAY);
+                    // Rows parked before this start (migration 0027 queues the
+                    // connector rows an older build rejected) apply now, not
+                    // only when a peer next sends a non-empty page.
+                    if let Err(error) = sync::retry_pending_blocking(&workspace) {
+                        tracing::warn!(%error, error_code = "sync_retry_pending_failed", "sync: retrying parked rows at startup failed");
+                    }
                     if !upgrade_pending {
                         db::backup::snapshot_on_startup(&db_path, &assets_dir, &backup_dir);
                     }
@@ -285,6 +291,9 @@ pub fn run() {
             commands::quick_boards::add_quick_board,
             commands::quick_boards::remove_quick_board,
             commands::quick_boards::reorder_quick_boards,
+            commands::connectors::create_connector,
+            commands::connectors::update_connector,
+            commands::connectors::remove_connector,
             commands::sync::sync_export_changes,
             commands::sync::sync_apply_changes,
             commands::sync::sync_status,

@@ -376,6 +376,72 @@ pub struct BoardSnapshot {
     pub cards: Vec<CardDto>,
     /// Cards in this board's Unsorted panel (not yet placed on the canvas).
     pub unsorted_cards: Vec<CardDto>,
+    /// Живые коннекторы, оба конца которых — живые карточки холста этой доски.
+    #[serde(default)]
+    pub connectors: Vec<ConnectorDto>,
+}
+
+/// Стрелка между двумя карточками одной доски (`from` → `to`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorDto {
+    pub id: String,
+    pub board_id: String,
+    pub from_card_id: String,
+    pub to_card_id: String,
+    /// Пресет цвета заметки (`default`, `yellow`, …).
+    pub color_token: String,
+    /// `end` (наконечник у `to`), `both` или `none`.
+    pub arrow_ends: String,
+    /// Хранится, в v1 не редактируется.
+    pub label: Option<String>,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Ввод создания коннектора. Идемпотентно по `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateConnectorInput {
+    pub id: String,
+    pub board_id: String,
+    pub from_card_id: String,
+    pub to_card_id: String,
+    /// По умолчанию `default`.
+    #[serde(default)]
+    pub color_token: Option<String>,
+    /// По умолчанию `end`.
+    #[serde(default)]
+    pub arrow_ends: Option<String>,
+}
+
+/// Ввод правки коннектора; отсутствующие поля не меняются.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConnectorInput {
+    pub connector_id: String,
+    pub expected_revision: i64,
+    #[serde(default)]
+    pub color_token: Option<String>,
+    #[serde(default)]
+    pub arrow_ends: Option<String>,
+    #[serde(default)]
+    pub from_card_id: Option<String>,
+    #[serde(default)]
+    pub to_card_id: Option<String>,
+    /// Нет поля — без изменений; `null` — очистить; строка — задать.
+    #[serde(default, deserialize_with = "present_or_null")]
+    pub label: Option<Option<String>>,
+}
+
+/// Отличает явный `null` (`Some(None)`) от отсутствующего поля (`None`,
+/// через `#[serde(default)]`).
+fn present_or_null<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// Input for creating a note card.

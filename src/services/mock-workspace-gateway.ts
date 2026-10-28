@@ -10,10 +10,13 @@ import type {
   CardDto,
   CardReceipt,
   CardsReceipt,
+  ConnectorArrowEnds,
+  ConnectorDto,
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateBoardShortcutInput,
   CreateChildBoardInput,
+  CreateConnectorInput,
   CreateFileCardInput,
   CreateFolderAliasInput,
   CreateImageCardInput,
@@ -39,6 +42,7 @@ import type {
   MoveCardsToUnsortedInput,
   PlaceUnsortedCardInput,
   QuickBoardDto,
+  RemoveConnectorInput,
   ReorderQuickBoardsInput,
   SaveViewportInput,
   SearchResultDto,
@@ -49,6 +53,7 @@ import type {
   TrashEntryDto,
   TrashSelectionInput,
   TrashSummaryDto,
+  UpdateConnectorInput,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
@@ -65,6 +70,7 @@ import type {
 import { denseBoardSnapshot } from "../test/dense-board-fixture";
 import { documentToPlainText, plainTextToDocument } from "../editor/document-codec";
 import { fileNameFromPath } from "./platform-path";
+import { NOTE_COLOR_OPTIONS } from "../cards/note/note-color";
 
 /**
  * The rejection the Tauri gateway passes on for Rust's
@@ -79,6 +85,34 @@ function staleRevision(expected: number, actual: number) {
  * Mirrors Rust's `Frame::validate` size bounds (src-tauri/src/domain/models.rs),
  * so browser mode rejects the same out-of-range frame writes the app does.
  */
+/** `WorkspaceError::ConstraintViolation` из Rust в том виде, в каком его передаёт Tauri-шлюз. */
+function constraintViolation(message: string) {
+  return { code: "constraint_violation", message };
+}
+
+/** Связь, как её хранит мок: DTO плюс состояние удаления. */
+interface StoredConnector extends ConnectorDto {
+  deletedAt: number | null;
+  trashBatchId: string | null;
+}
+
+const CONNECTOR_ARROW_ENDS: readonly ConnectorArrowEnds[] = ["end", "both", "none"];
+
+function connectorDto(stored: StoredConnector): ConnectorDto {
+  return {
+    id: stored.id,
+    boardId: stored.boardId,
+    fromCardId: stored.fromCardId,
+    toCardId: stored.toCardId,
+    colorToken: stored.colorToken,
+    arrowEnds: stored.arrowEnds,
+    label: stored.label,
+    revision: stored.revision,
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt,
+  };
+}
+
 function frameBoundsError(frame: { width: number; height: number }): Error | null {
   if (!(frame.width >= 120 && frame.width <= 1600)) return new Error("card width must be between 120 and 1600");
   if (!(frame.height >= 48 && frame.height <= 10000)) return new Error("card height must be between 48 and 10000");
@@ -107,7 +141,11 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
     cards: [],
     unsortedCards: [],
+    connectors: [],
   };
+
+  /** Все связи всех досок, включая удалённые (`deletedAt`). */
+  private connectors = new Map<string, StoredConnector>();
 
   private quickBoards: QuickBoardDto[] = [];
   private trashBatches = new Map<
@@ -134,6 +172,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   /** Seeded once by the `?fixture=external-write` fixture; counts its change polls. */
   private externalWriteFixtureSeeded = false;
   private externalWritePolls = 0;
+
+  /** Засевается один раз фикстурой `?fixture=connectors`. */
+  private connectorsFixtureSeeded = false;
 
   /** Seeded once by the `?fixture=foreign-shortcut` fixture (ADR-0012). */
   private foreignShortcutFixtureSeeded = false;
@@ -186,6 +227,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     const fingerprint = JSON.stringify([
       board,
       this.snapshot.cards.filter((card) => card.boardId === boardId),
+      this.liveConnectors(boardId),
       [...this.boards.values()].filter((b) => b.parentBoardId === boardId),
     ]);
     const entry = this.changeSeqs.get(boardId);
@@ -244,6 +286,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
         cards: [structuredClone(alias)],
         unsortedCards: [],
+        connectors: [],
       });
     }
     // Test-only corrupt-note fixture (P1.7): one note whose stored document
@@ -299,6 +342,27 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       this.foreignShortcutFixtureSeeded = true;
       this.snapshot.cards = foreignShortcutFixtureCards(this.device.deviceName);
     }
+    // Тестовая фикстура связей: две заметки и одна стрелка между ними. Засевается
+    // один раз, чтобы правки и удаления переживали перезагрузку (undo/redo её делает).
+    if (boardId === "home" && !this.connectorsFixtureSeeded && fixtureParam() === "connectors") {
+      this.connectorsFixtureSeeded = true;
+      this.snapshot.cards = connectorsFixtureCards();
+      const now = Date.now();
+      this.connectors.set("connector-1", {
+        id: "connector-1",
+        boardId: "home",
+        fromCardId: "connector-note-a",
+        toCardId: "connector-note-b",
+        colorToken: "default",
+        arrowEnds: "end",
+        label: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+        trashBatchId: null,
+      });
+    }
     // Test-only dense fixture activated by a query parameter.
     if (
       boardId === "home" &&
@@ -333,7 +397,132 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           (card) => card.boardId === boardId && (card as { unsorted?: boolean }).unsorted,
         ),
       ),
+      connectors: this.liveConnectors(boardId),
     });
+  }
+
+  /** Как загрузчик бэкенда: не удалена, и оба конца — живые карточки на холсте этой доски. */
+  private liveConnectors(boardId: string): ConnectorDto[] {
+    const onCanvas = new Set(
+      this.snapshot.cards
+        .filter((card) => card.boardId === boardId && !(card as { unsorted?: boolean }).unsorted)
+        .map((card) => card.id),
+    );
+    return [...this.connectors.values()]
+      .filter(
+        (c) =>
+          c.boardId === boardId &&
+          c.deletedAt === null &&
+          onCanvas.has(c.fromCardId) &&
+          onCanvas.has(c.toCardId),
+      )
+      .map(connectorDto);
+  }
+
+  /** Повторяет проверку концов и значений бэкенда для создания и изменения. */
+  private connectorInputError(
+    boardId: string,
+    fromCardId: string,
+    toCardId: string,
+    colorToken: string,
+    arrowEnds: ConnectorArrowEnds,
+  ): object | null {
+    if (fromCardId === toCardId) return constraintViolation("a connector cannot join a card to itself");
+    for (const id of [fromCardId, toCardId]) {
+      const card = this.snapshot.cards.find((c) => c.id === id);
+      if (!card || card.boardId !== boardId || (card as { unsorted?: boolean }).unsorted) {
+        return constraintViolation(`connector endpoint is not a live card of the board: ${id}`);
+      }
+    }
+    if (!NOTE_COLOR_OPTIONS.some((option) => option.id === colorToken)) {
+      return constraintViolation(`unknown connector color: ${colorToken}`);
+    }
+    if (!CONNECTOR_ARROW_ENDS.includes(arrowEnds)) {
+      return constraintViolation(`unknown connector arrow ends: ${arrowEnds}`);
+    }
+    return null;
+  }
+
+  createConnector(input: CreateConnectorInput): Promise<ConnectorDto> {
+    const existing = this.connectors.get(input.id);
+    if (existing) {
+      // Как бэкенд: мягко удалённая связь восстанавливается как хранилась (ревизия,
+      // цвет, концы и подпись — свои, поля запроса игнорируются); живая — без изменений.
+      if (existing.deletedAt !== null) {
+        existing.deletedAt = null;
+        existing.trashBatchId = null;
+      }
+      return Promise.resolve(connectorDto(existing));
+    }
+    if (!this.boards.has(input.boardId)) {
+      return Promise.reject({ code: "not_found", message: `board ${input.boardId}` });
+    }
+    const colorToken = input.colorToken ?? "default";
+    const arrowEnds = input.arrowEnds ?? "end";
+    const invalid = this.connectorInputError(input.boardId, input.fromCardId, input.toCardId, colorToken, arrowEnds);
+    if (invalid) return Promise.reject(invalid);
+    const now = Date.now();
+    const stored: StoredConnector = {
+      id: input.id,
+      boardId: input.boardId,
+      fromCardId: input.fromCardId,
+      toCardId: input.toCardId,
+      colorToken,
+      arrowEnds,
+      label: null,
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+      trashBatchId: null,
+    };
+    this.connectors.set(stored.id, stored);
+    return Promise.resolve(connectorDto(stored));
+  }
+
+  updateConnector(input: UpdateConnectorInput): Promise<ConnectorDto> {
+    const stored = this.connectors.get(input.connectorId);
+    if (!stored || stored.deletedAt !== null) {
+      return Promise.reject({ code: "not_found", message: `connector ${input.connectorId}` });
+    }
+    if (stored.revision !== input.expectedRevision) {
+      return Promise.reject(staleRevision(input.expectedRevision, stored.revision));
+    }
+    const next = {
+      fromCardId: input.fromCardId ?? stored.fromCardId,
+      toCardId: input.toCardId ?? stored.toCardId,
+      colorToken: input.colorToken ?? stored.colorToken,
+      arrowEnds: input.arrowEnds ?? stored.arrowEnds,
+      label: input.label === undefined ? stored.label : input.label,
+    };
+    const invalid = this.connectorInputError(stored.boardId, next.fromCardId, next.toCardId, next.colorToken, next.arrowEnds);
+    if (invalid) return Promise.reject(invalid);
+    Object.assign(stored, next, { revision: stored.revision + 1, updatedAt: Date.now() });
+    return Promise.resolve(connectorDto(stored));
+  }
+
+  removeConnector(input: RemoveConnectorInput): Promise<void> {
+    // Мягкое удаление без партии корзины; ревизия сохраняется, чтобы цепочка
+    // undo (перекраска → удаление) продолжала сходиться. Уже удалённая связь
+    // теряет партию корзины: восстановление партии её не вернёт. Нет id — no-op.
+    const stored = this.connectors.get(input.connectorId);
+    if (stored) {
+      stored.deletedAt ??= Date.now();
+      stored.trashBatchId = null;
+    }
+    return Promise.resolve();
+  }
+
+  /**
+   * Правило 4 контракта: карточка уходит с доски (или в Unsorted) — её связи
+   * мягко удаляются (без партии корзины, ревизия сохраняется). Физически строка
+   * исчезает только вместе с очищенной из корзины карточкой.
+   */
+  private softDeleteConnectorsTouching(cardIds: Set<string>): void {
+    const now = Date.now();
+    for (const c of this.connectors.values()) {
+      if ((cardIds.has(c.fromCardId) || cardIds.has(c.toCardId)) && c.deletedAt === null) c.deletedAt = now;
+    }
   }
 
   createNote(input: CreateNoteInput): Promise<CardReceipt> {
@@ -433,6 +622,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
+    if (card.boardId !== input.targetBoardId) this.softDeleteConnectorsTouching(new Set([card.id]));
     card.revision += 1;
     card.boardId = input.targetBoardId;
     card.frame = input.frame
@@ -460,6 +650,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     board.parentBoardId = input.targetParentBoardId;
     board.revision += 1;
+    if (portal.boardId !== input.targetParentBoardId) this.softDeleteConnectorsTouching(new Set([portal.id]));
     portal.boardId = input.targetParentBoardId;
     portal.frame = { ...input.frame };
     portal.revision += 1;
@@ -670,6 +861,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     this.snapshot.cards.push(
       ...structuredClone(batch.cards.filter((card) => !activeCardIds.has(card.id))),
     );
+    // Связь с концом, всё ещё лежащим в корзине, восстанавливается, но скрыта
+    // загрузчиком снимка, пока не вернётся и он (правило 2 контракта).
+    for (const c of this.connectors.values()) {
+      if (c.trashBatchId === batchId) {
+        c.deletedAt = null;
+        c.trashBatchId = null;
+      }
+    }
     this.trashBatches.delete(batchId);
     return Promise.resolve();
   }
@@ -1104,11 +1303,17 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     let boardCount = 0;
     let cardCount = 0;
+    const purgedCardIds = new Set<string>();
     for (const batch of this.trashBatches.values()) {
       boardCount += batch.boards.length;
       cardCount += batch.cards.length;
+      for (const card of batch.cards) purgedCardIds.add(card.id);
     }
     this.trashBatches.clear();
+    // Как каскад внешнего ключа в бэкенде: исчезают только связи очищенных карточек.
+    for (const [id, c] of this.connectors) {
+      if (purgedCardIds.has(c.fromCardId) || purgedCardIds.has(c.toCardId)) this.connectors.delete(id);
+    }
     return Promise.resolve({ boardCount, cardCount, orphanAssetCount: 0 });
   }
 
@@ -1284,11 +1489,19 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     this.snapshot.cards = this.snapshot.cards.filter((card) => !removedCardIds.has(card.id));
 
     const batchId = `batch-${++this.trashSequence}`;
+    const deletedAt = Date.now();
     this.trashBatches.set(batchId, {
       cards: structuredClone(removedCards),
       boards: structuredClone(removedBoards),
-      deletedAt: Date.now(),
+      deletedAt,
     });
+    // Связи удалённых карточек уходят в ту же партию корзины (правило 1 контракта).
+    for (const c of this.connectors.values()) {
+      if (c.deletedAt === null && (removedCardIds.has(c.fromCardId) || removedCardIds.has(c.toCardId))) {
+        c.deletedAt = deletedAt;
+        c.trashBatchId = batchId;
+      }
+    }
     return batchId;
   }
 
@@ -1412,6 +1625,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(staleRevision(item.expectedRevision, card.revision));
       }
     }
+    this.softDeleteConnectorsTouching(new Set(input.cards.map((item) => item.id)));
     const receipts: CardReceipt[] = [];
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id)!;
@@ -1502,6 +1716,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         };
       });
 
+      this.softDeleteConnectorsTouching(
+        new Set([...cards.map((card) => card.id), ...boards.map(({ portal }) => portal.id)]),
+      );
       cards.forEach((card, index) => {
         card.revision = receiptCards[index].afterRevision;
         card.boardId = input.targetBoardId;
@@ -1844,6 +2061,22 @@ function staleCardFixtureNote(revision: number, text: string): CardDto {
     plainText: text,
     colorToken: "default",
   };
+}
+
+/** Две заметки доски `?fixture=connectors`. */
+function connectorsFixtureCards(): CardDto[] {
+  const note = (id: string, x: number, y: number, text: string): CardDto => ({
+    kind: "note",
+    id,
+    boardId: "home",
+    frame: { x, y, width: 240, height: 120 },
+    zIndex: 0,
+    revision: 1,
+    documentJson: plainTextToDocument(text),
+    plainText: text,
+    colorToken: "default",
+  });
+  return [note("connector-note-a", 80, 120, "Note A"), note("connector-note-b", 560, 200, "Note B")];
 }
 
 /** Cards of the `?fixture=corrupt-note` board (P1.7). */

@@ -767,6 +767,7 @@ pub fn move_card_to_board(
         });
     }
 
+    super::connectors::delete_connectors_touching(&tx, &[input.id.as_str()])?;
     let receipt = card_receipt(&tx, &input.id)?;
     tx.commit()?;
     Ok(receipt)
@@ -826,6 +827,8 @@ pub fn move_cards_to_board_unsorted(
         )?;
         cards.push(card_receipt(&tx, &item.id)?);
     }
+    let moved: Vec<&str> = input.cards.iter().map(|c| c.id.as_str()).collect();
+    super::connectors::delete_connectors_touching(&tx, &moved)?;
 
     tx.commit()?;
     Ok(CardsReceipt { cards })

@@ -15,6 +15,7 @@ import { usePasteActions } from "./app/use-paste-actions";
 import { useCardEdits } from "./app/use-card-edits";
 import { useCardCreation } from "./app/use-card-creation";
 import { useContextActions } from "./app/use-context-actions";
+import { useConnectorActions } from "./app/use-connector-actions";
 import { useCardDrop } from "./app/use-card-drop";
 import { useBoardLoading } from "./app/use-board-loading";
 import { useBoardRefresh } from "./app/use-board-refresh";
@@ -24,7 +25,7 @@ import { useTrashController } from "./app/use-trash-controller";
 import { useErrorReports } from "./app/error-reports";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
-import type { CanvasCard } from "./canvas/canvas-types";
+import type { CanvasCard, CanvasConnector } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
@@ -306,6 +307,13 @@ function App() {
     aliasLocal: c.kind === "filesystem_alias" ? c.local : undefined,
   })), [state.cards]);
   const cardsById = useMemo(() => new Map(state.cards.map((c) => [c.id, c])), [state.cards]);
+  const canvasConnectors: CanvasConnector[] = useMemo(() => state.connectors.map((c) => ({
+    id: c.id,
+    fromCardId: c.fromCardId,
+    toCardId: c.toCardId,
+    colorToken: c.colorToken,
+    arrowEnds: c.arrowEnds,
+  })), [state.connectors]);
 
 
   const {
@@ -335,6 +343,22 @@ function App() {
     cardWrites,
     refreshTrash,
   });
+
+  const connectorActions = useConnectorActions({
+    board,
+    connectors: state.connectors,
+    dispatcher,
+    idGenerator,
+    dispatch,
+    cardWrites,
+  });
+  const connectorDeleteKey = connectorActions.handleDeleteKey;
+  // Delete/Backspace: сначала выделенные связи, потом выделенные карточки в
+  // корзину — по очереди (см. handleDeleteKey в use-connector-actions.ts).
+  const handleDeleteKey = useCallback(
+    () => connectorDeleteKey(state.selection, handleDeleteSelection),
+    [connectorDeleteKey, state.selection, handleDeleteSelection],
+  );
 
   // Viewport saves are debounced, flushed on navigation, and pinned to the board
   // revision captured when the viewport settled. The board-scoped policy around
@@ -528,7 +552,7 @@ function App() {
     handleNavigateForward,
     handleWorkspaceUndo,
     handleWorkspaceRedo,
-    handleDeleteSelection,
+    handleDeleteSelection: handleDeleteKey,
     handleCopySelection,
     trashOpen,
     closeTrashDrawer,
@@ -723,6 +747,15 @@ function App() {
               />
             );
           })()}
+        {connectorActions.connectorMenu && connectorActions.connectorMenuActions.length > 0 && (
+          <ContextMenu
+            x={connectorActions.connectorMenu.x}
+            y={connectorActions.connectorMenu.y}
+            actions={connectorActions.connectorMenuActions}
+            onClose={connectorActions.closeConnectorMenu}
+            testId="connector-context-menu"
+          />
+        )}
         {paneContextMenu && (
           <ContextMenu
             x={paneContextMenu.x}
@@ -855,6 +888,7 @@ function App() {
         <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
           <CanvasAdapter
             cards={canvasCards}
+            connectors={canvasConnectors}
             viewport={viewport}
             viewportResetToken={boardOpenRevision}
             editingCardId={state.editingCardId}
@@ -879,6 +913,9 @@ function App() {
               onPortalHighlight: setHighlightedPortalId,
               onCardDragMove: crossBoardDragSession.onDragMove,
               onCardDragEnd: handleCardDragEnd,
+              onConnectorCreate: connectorActions.handleConnectorCreate,
+              onConnectorSelectionChanged: connectorActions.handleConnectorSelectionChanged,
+              onConnectorContextMenu: connectorActions.handleConnectorContextMenu,
               // Double-click on the empty canvas creates a note directly, top-left
               // corner at the click point, and opens it for editing (todo.md №19,
               // Milanote-style — corrects №10, which routed this through a menu).

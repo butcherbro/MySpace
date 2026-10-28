@@ -20,7 +20,7 @@ use crate::domain::card_kind::{handler, CardKind, CopyContext};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::kinds::board_portal;
 use crate::domain::models::{DuplicateBoardInput, DuplicateBoardReceipt};
-use crate::repositories::immediate_tx;
+use crate::repositories::{connectors, immediate_tx};
 
 /// The deepest a duplicated portal chain may nest before the copy is refused.
 /// A board can in principle contain itself-shaped cycles of portals only
@@ -154,6 +154,8 @@ pub(crate) fn copy_board_subtree(
         depth,
     };
 
+    // Старый id карточки → id копии: по нему копируются стрелки доски.
+    let mut copied_ids = std::collections::HashMap::with_capacity(source_cards.len());
     for card in &source_cards {
         // An unknown kind (a row written by a newer build) is refused before
         // anything is inserted for it; the whole duplicate rolls back.
@@ -182,7 +184,10 @@ pub(crate) fn copy_board_subtree(
         // Each kind copies its own detail row; a nested portal recursively
         // duplicates its target board (see `kinds::board_portal`).
         handler(kind).copy_detail(tx, &card.id, &new_card_id, &ctx)?;
+        copied_ids.insert(card.id.clone(), new_card_id);
     }
+
+    connectors::copy_board_connectors(tx, source_board_id, new_board_id, &copied_ids, now)?;
 
     Ok(())
 }

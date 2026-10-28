@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  ConnectorDto,
+  CreateConnectorInput,
+  RemoveConnectorInput,
+  UpdateConnectorInput,
   DiscoveredDevice,
   PairingCode,
   PairWithInput,
@@ -298,6 +302,18 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
 
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<CardReceipt> {
     return invoke<CardReceipt>("place_unsorted_card", { input });
+  }
+
+  createConnector(input: CreateConnectorInput): Promise<ConnectorDto> {
+    return invoke<ConnectorDto>("create_connector", { input });
+  }
+
+  updateConnector(input: UpdateConnectorInput): Promise<ConnectorDto> {
+    return invoke<ConnectorDto>("update_connector", { input });
+  }
+
+  removeConnector(input: RemoveConnectorInput): Promise<void> {
+    return invoke<void>("remove_connector", { connectorId: input.connectorId });
   }
 
   listBackups(): Promise<BackupSummary[]> {

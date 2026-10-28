@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CanvasAdapter } from "./CanvasAdapter";
 import { ImageCard } from "../cards/image/ImageCard";
-import type { CanvasCard } from "./canvas-types";
+import type { CanvasCard, CanvasConnector } from "./canvas-types";
 import type { ImageCardDto } from "../services/workspace-gateway";
 
 const setViewport = vi.fn();
@@ -34,6 +34,11 @@ vi.mock("@xyflow/react", async () => {
       return null;
     },
     BackgroundVariant: { Dots: "dots" },
+    ConnectionLineType: { Straight: "straight" },
+    Position: { Top: "top", Right: "right" },
+    Handle: ({ className, ...props }: { className?: string; "data-testid"?: string }) => (
+      <div className={className} data-testid={props["data-testid"]} />
+    ),
     SelectionMode: { Partial: "partial" },
     applyNodeChanges: (_changes: unknown, nodes: unknown) => nodes,
     ReactFlow: ({
@@ -722,5 +727,36 @@ describe("CanvasAdapter", () => {
     // it: nothing pins it to the pre-drag 320x240 box.
     expect(frame.style.width).toBe("");
     expect(frame.style.height).toBe("");
+  });
+
+  it("drops a deleted connector from the edge selection and reports the pruned selection", () => {
+    reactFlowProps.length = 0;
+    const connector: CanvasConnector = { id: "c1", fromCardId: "a", toCardId: "b", colorToken: "default", arrowEnds: "end" };
+    const onConnectorSelectionChanged = vi.fn();
+    const events = { onConnectorSelectionChanged };
+    type EdgeProps = {
+      edges: Array<{ id: string; selected?: boolean }>;
+      onEdgesChange: (changes: Array<{ type: "select"; id: string; selected: boolean }>) => void;
+    };
+    const last = () => reactFlowProps[reactFlowProps.length - 1] as EdgeProps;
+    const view = (connectors: CanvasConnector[]) => (
+      <CanvasAdapter
+        cards={cards}
+        connectors={connectors}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        events={events}
+        renderCard={(card) => <span>{card.id}</span>}
+      />
+    );
+    const { rerender } = render(view([connector]));
+    act(() => last().onEdgesChange([{ type: "select", id: "c1", selected: true }]));
+    expect(last().edges).toEqual([expect.objectContaining({ id: "c1", selected: true })]);
+
+    rerender(view([]));
+    expect(onConnectorSelectionChanged).toHaveBeenLastCalledWith({ ids: [] });
+
+    // Undo вернул связь: она приходит невыделенной.
+    rerender(view([connector]));
+    expect(last().edges).toEqual([expect.objectContaining({ id: "c1", selected: false })]);
   });
 });

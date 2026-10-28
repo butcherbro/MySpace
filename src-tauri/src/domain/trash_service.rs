@@ -13,7 +13,7 @@ use crate::domain::kinds::{asset_at, asset_columns};
 use crate::domain::models::{
     AssetDto, EmptyTrashResult, TrashBatchDto, TrashEntryDto, TrashSelectionInput, TrashSummaryDto,
 };
-use crate::repositories::immediate_tx;
+use crate::repositories::{connectors, immediate_tx};
 
 use super::super::db;
 
@@ -22,7 +22,8 @@ use super::super::db;
 pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, WorkspaceError> {
     let now = db::migrations::now_millis();
     let batch_id = uuid::Uuid::now_v7().to_string();
-    let changed = conn.execute(
+    let tx = immediate_tx(conn)?;
+    let changed = tx.execute(
         &format!(
             "UPDATE cards SET deleted_at = ?1, trash_batch_id = ?2, updated_at = ?1
              WHERE id = ?3 AND kind IN {} AND deleted_at IS NULL",
@@ -33,6 +34,8 @@ pub fn trash_note(conn: &mut Connection, card_id: &str) -> Result<String, Worksp
     if changed == 0 {
         return Err(WorkspaceError::NotFound(card_id.to_string()));
     }
+    connectors::trash_connectors_of_batch(&tx, &batch_id, now)?;
+    tx.commit()?;
     Ok(batch_id)
 }
 
@@ -130,6 +133,7 @@ pub fn trash_board(conn: &mut Connection, board_id: &str) -> Result<String, Work
         params![board_id, now, batch_id],
     )?;
 
+    connectors::trash_connectors_of_batch(&tx, &batch_id, now)?;
     tx.commit()?;
     Ok(batch_id)
 }
@@ -200,6 +204,8 @@ fn trash_board_in_tx(
         params![board_id, now, batch_id],
     )?;
 
+    // Коннекторы карточек этого поддерева помечает `trash_selection` одним
+    // проходом по всему батчу, после всех элементов выделения.
     Ok(())
 }
 
@@ -253,6 +259,7 @@ pub fn trash_selection(
         }
     }
 
+    connectors::trash_connectors_of_batch(&tx, &batch_id, now)?;
     tx.commit()?;
     Ok(batch_id)
 }
@@ -305,6 +312,7 @@ pub fn restore_trash_batch(conn: &mut Connection, batch_id: &str) -> Result<(), 
         "UPDATE cards SET deleted_at = NULL, trash_batch_id = NULL WHERE trash_batch_id = ?1",
         [batch_id],
     )?;
+    connectors::restore_connectors_of_batch(&tx, batch_id)?;
 
     tx.commit()?;
     Ok(())
@@ -376,6 +384,9 @@ pub fn empty_trash(
         [],
     )?;
 
+    // Коннекторы не стираются явно: стёртые карточки забирают свои FK-каскадом
+    // (с записью `present: false` в журнал), а мягко удалённые стрелки между
+    // живыми карточками остаются скрытыми строками.
     tx.execute("DELETE FROM cards WHERE deleted_at IS NOT NULL", [])?;
     tx.execute("DELETE FROM boards WHERE deleted_at IS NOT NULL", [])?;
     tx.commit()?;

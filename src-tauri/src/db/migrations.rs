@@ -188,7 +188,34 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../../migrations/0026_sync_peers.sql"),
         after: None,
     },
+    Migration {
+        version: 27,
+        name: "connectors",
+        sql: include_str!("../../migrations/0027_connectors.sql"),
+        after: Some(requeue_connector_changes),
+    },
 ];
+
+/// Rust step of migration 0027: queues every `connector` journal row this
+/// database already holds into `pending_changes`, so the next replay applies
+/// it.
+///
+/// Старая сборка, получив строки `connector`, сохраняет их в `changes`,
+/// двигает курсор и отвергает их (неизвестный вид сущности). После
+/// обновления пир их уже не пришлёт, поэтому они ставятся в очередь
+/// повторов той же вставкой, что и `sync::journal::park`; повторный запуск
+/// не создаёт дублей (конфликт по `(origin_device_id, hlc)`).
+pub fn requeue_connector_changes(tx: &Transaction) -> Result<()> {
+    tx.execute(
+        "INSERT INTO pending_changes
+            (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at, attempts)
+         SELECT origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at, 1
+         FROM changes WHERE entity_kind = 'connector'
+         ON CONFLICT(origin_device_id, hlc) DO UPDATE SET attempts = attempts + 1",
+        [],
+    )?;
+    Ok(())
+}
 
 /// The result of comparing the database's applied migrations against what
 /// this build of the application knows about, without mutating anything.

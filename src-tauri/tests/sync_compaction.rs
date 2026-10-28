@@ -13,8 +13,8 @@ use std::path::PathBuf;
 
 use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::domain::models::{
-    CreateChildBoardInput, CreateNoteInput, Frame, MoveBoardInput, MoveCardToBoardInput,
-    UpdateCardFrameInput, UpdateNoteInput,
+    CreateChildBoardInput, CreateConnectorInput, CreateNoteInput, Frame, MoveBoardInput,
+    MoveCardToBoardInput, UpdateCardFrameInput, UpdateConnectorInput, UpdateNoteInput,
 };
 use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::domain::plain_text::plain_text_to_document;
@@ -203,6 +203,28 @@ impl Replica {
                     // The card's board id is local: alias Home.
                     out.push(card.replace(&home, "@home"));
                 }
+                let mut stmt = c.prepare(
+                    "SELECT id, board_id, from_card_id, to_card_id, color_token, arrow_ends, label,
+                            deleted_at, trash_batch_id
+                     FROM connectors ORDER BY id",
+                )?;
+                let connectors = stmt.query_map([], |r| {
+                    Ok(format!(
+                        "connector {} on={} {}->{} {} {} {:?} {:?} {:?}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<i64>>(7)?,
+                        r.get::<_, Option<String>>(8)?,
+                    ))
+                })?;
+                for connector in connectors {
+                    out.push(connector?.replace(&home, "@home"));
+                }
                 out.extend(copies.iter().map(|text| format!("copy {text:?}")));
                 out.sort();
                 Ok(out)
@@ -357,6 +379,34 @@ fn move_board(r: &Replica, board: &str, parent: &str) -> bool {
         expected_portal_revision: portal_rev,
         target_parent_board_id: parent.to_string(),
         frame: frame(700.0),
+    }))
+}
+
+fn connect(r: &Replica, board: &str, from: &str, to: &str) -> String {
+    let id = new_id();
+    r.apply(Mutation::CreateConnector(CreateConnectorInput {
+        id: id.clone(),
+        board_id: board.to_string(),
+        from_card_id: from.to_string(),
+        to_card_id: to.to_string(),
+        color_token: None,
+        arrow_ends: None,
+    }));
+    id
+}
+
+fn recolor_connector(r: &Replica, id: &str, color: &str) -> bool {
+    let Some(revision) = r.revision("connectors", id) else {
+        return false;
+    };
+    r.try_apply(Mutation::UpdateConnector(UpdateConnectorInput {
+        connector_id: id.to_string(),
+        expected_revision: revision,
+        color_token: Some(color.to_string()),
+        arrow_ends: None,
+        from_card_id: None,
+        to_card_id: None,
+        label: None,
     }))
 }
 
@@ -657,6 +707,16 @@ fn history(a: &Replica) -> (String, Vec<String>) {
         }
         notes.push(note);
     }
+    // Коннекторы на `board` (заметки 0, 2, 4): один уходит в корзину с
+    // заметкой 0, один правится дважды, один создаётся и удаляется.
+    connect(a, &board, &notes[0], &notes[2]);
+    let edited = connect(a, &board, &notes[2], &notes[4]);
+    assert!(recolor_connector(a, &edited, "yellow"));
+    assert!(recolor_connector(a, &edited, "gray"));
+    let removed = connect(a, &board, &notes[4], &notes[2]);
+    a.apply(Mutation::RemoveConnector {
+        connector_id: removed,
+    });
     a.try_apply(Mutation::RenameBoard {
         board_id: child.clone(),
         title: "Renamed".into(),
@@ -1165,4 +1225,39 @@ fn an_unreadable_floor_refuses_compaction() {
         ),
         ["{not json"]
     );
+}
+
+/// Коннектор со стёртым концом, поздно правленный на другом устройстве:
+/// после компакции свежая реплика не паркует позднюю строку и не показывает
+/// коннектор.
+#[test]
+fn a_late_edit_of_a_purged_cards_connector_never_parks_after_compaction() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let home = a.home();
+    let x = create_note(&a, &home, "x");
+    let y = create_note(&a, &home, "y");
+    let k = connect(&a, &home, &x, &y);
+    sync(&a, &b);
+
+    a.apply(Mutation::TrashNote { card_id: x.clone() });
+    assert!(empty_trash(&a));
+    compact(&a);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert!(
+        recolor_connector(&b, &k, "pink"),
+        "B has not seen the purge"
+    );
+    settle(&[&a, &b]);
+    compact(&a);
+    compact(&b);
+
+    let fresh = Replica::new("fresh");
+    sync(&a, &fresh);
+    assert_eq!(fresh.pending(), 0);
+    assert_eq!(
+        fresh.count("SELECT COUNT(*) FROM connectors WHERE id = ?1", &k),
+        0
+    );
+    assert_same(&fresh.state(), &a.state(), "fresh vs A");
+    assert_same(&b.state(), &a.state(), "B vs A");
 }

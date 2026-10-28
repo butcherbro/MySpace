@@ -9,6 +9,7 @@ pub use super::assets::*;
 pub use super::board_shortcuts::*;
 pub use super::boards::*;
 pub use super::cards::*;
+pub use super::connectors::*;
 pub use super::move_selection::*;
 pub use super::quick_boards::*;
 pub use super::receipts::*;

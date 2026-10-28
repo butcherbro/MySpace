@@ -73,14 +73,21 @@ export function createCardWrites(
     apply(action) {
       // Ответ создания пришёл, когда уже открыта другая доска: карточка не отсюда.
       if (action.type === "cardAdded" && action.card.boardId !== board?.id) return;
+      if (action.type === "connectorCreated" && action.connector.boardId !== board?.id) return;
       const before = { cards: cardsRef.current, unsortedCards: unsortedCardsRef.current };
       const next = run(action);
       const at = ++seq;
       if (action.type === "cardAdded") {
         lastChange.set(action.card.id, { at, kind: "write" });
         addedAt.set(action.card.id, at);
-      } else if (action.type === "cardsRemoved") {
+      } else if (action.type === "cardsRemoved" || action.type === "connectorsRemoved") {
         for (const id of action.ids) lastChange.set(id, { at, kind: "remove" });
+      } else if (action.type === "connectorCreated") {
+        // Связи штампуются в тех же картах, что и карточки: id не пересекаются (UUID).
+        lastChange.set(action.connector.id, { at, kind: "write" });
+        addedAt.set(action.connector.id, at);
+      } else if (action.type === "connectorUpdated") {
+        lastChange.set(action.connector.id, { at, kind: "write" });
       } else if ("id" in action && held(before, action.id) !== held(next, action.id)) {
         // Штампуем только ответ, который действительно изменил карточку:
         // отброшенный как устаревший не даёт своей копии права на снимок.

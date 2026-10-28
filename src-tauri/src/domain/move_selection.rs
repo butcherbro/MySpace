@@ -3,7 +3,7 @@
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{MoveSelectionToBoardInput, MoveSelectionToBoardReceipt};
-use crate::repositories::immediate_tx;
+use crate::repositories::{connectors, immediate_tx};
 use std::collections::HashSet;
 
 /// Canonical fingerprint of a mixed-selection request.
@@ -319,6 +319,16 @@ pub fn move_selection_to_board(
         boards: receipt_boards,
     };
 
+    // Карточки и порталы ушли с доски (или в Unsorted): их стрелки удаляются
+    // в той же транзакции, на новом месте у них нет второго конца.
+    let moved: Vec<&str> = receipt
+        .cards
+        .iter()
+        .map(|c| c.id.as_str())
+        .chain(receipt.boards.iter().map(|b| b.portal_card_id.as_str()))
+        .collect();
+    connectors::delete_connectors_touching(&tx, &moved)?;
+
     repo::store_operation_receipt(
         &tx,
         &receipt.operation_id,
@@ -432,6 +442,14 @@ pub fn undo_move_selection(
             });
         }
     }
+
+    let moved: Vec<&str> = receipt
+        .cards
+        .iter()
+        .map(|c| c.id.as_str())
+        .chain(receipt.boards.iter().map(|b| b.portal_card_id.as_str()))
+        .collect();
+    connectors::delete_connectors_touching(&tx, &moved)?;
 
     tx.commit()?;
     Ok(())

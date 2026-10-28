@@ -189,5 +189,6 @@ export function denseBoardSnapshot(): BoardSnapshot {
       folderAlias("folder-0", 40, 1040, "/Users/me/Research", "Research"),
     ],
     unsortedCards: [],
+    connectors: [],
   };
 }

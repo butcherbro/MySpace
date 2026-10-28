@@ -46,6 +46,16 @@
   --note-lilac: #e8dff0;
   --note-gray: #e9ebea;
 
+  /* Цвета линий связей: те же пресеты, что у заметок, но насыщеннее — бледная
+     заливка заметки в линии толщиной 2px на столе не видна. */
+  --connector-default: #8a918d;
+  --connector-yellow: #c9a227;
+  --connector-pink: #cf7a8a;
+  --connector-lavender: #9a83c2;
+  --connector-blue: #5a9bc3;
+  --connector-green: #6aa265;
+  --connector-gray: #6f7773;
+
   --text-blue: #2563eb;
   --text-green: #16a34a;
   --text-orange: #ea580c;
@@ -114,6 +124,15 @@
     --ink-muted: #6f7873;
 
     --note-gray: #262b28;
+
+    /* Те же оттенки связей, светлее — чтобы линия читалась на тёмном столе. */
+    --connector-default: #8f9893;
+    --connector-yellow: #e3c35a;
+    --connector-pink: #eb9aa9;
+    --connector-lavender: #b9a5e0;
+    --connector-blue: #7fbbe0;
+    --connector-green: #8cc787;
+    --connector-gray: #a9b1ad;
 
     --text-blue: #60a5fa;
     --text-green: #4ade80;

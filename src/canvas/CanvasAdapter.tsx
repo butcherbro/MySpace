@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Background,
   BackgroundVariant,
+  ConnectionLineType,
+  Handle,
+  Position,
   ReactFlow,
   SelectionMode,
   applyNodeChanges,
+  type Connection,
+  type Edge,
+  type EdgeChange,
+  type EdgeTypes,
   type Node,
   type NodeChange,
   type NodeTypes,
@@ -16,14 +23,19 @@ import "./canvas.css";
 import { detectPlatform } from "../app/platform";
 import { CanvasScrollbars } from "./CanvasScrollbars";
 import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard, staleNodeIds } from "./canvas-mapping";
+import { connectorsToEdgeLikes } from "./connector-mapping";
+import { ConnectorEdge, type ConnectorEdgeType } from "./ConnectorEdge";
 import type {
   CanvasCard,
+  CanvasConnector,
   CanvasEvents,
   CanvasViewport,
 } from "./canvas-types";
 
 interface CanvasAdapterProps {
   cards: CanvasCard[];
+  /** Связи (стрелки) между карточками; рисуются, только когда оба конца есть в `cards`. */
+  connectors?: CanvasConnector[];
   viewport: CanvasViewport;
   viewportResetToken?: number;
   events: CanvasEvents;
@@ -68,6 +80,13 @@ const nodeTypes: NodeTypes = {
   // состояния во время drag) — рамка должна брать размер у контента, а не
   // навязывать свой, иначе во время drag виден «призрак» старой рамки
   // вокруг уже сжавшегося содержимого (tasks/lessons.md 2026-09-18).
+  //
+  // Две ручки связей живут на рамке, а не в компонентах карточек: так они есть
+  // у карточки любого вида. Источник — кружок в правом верхнем углу (как в
+  // Milanote). Цель растянута на всю карточку, чтобы связь можно было бросить
+  // в любое её место; указатель она ловит только во время протягивания связи
+  // (класс React Flow `connectionindicator` при `isConnectableStart={false}`),
+  // иначе перекрыла бы клики, ввод и перетаскивание карточки.
   card: ({ data, selected }: { data: CardNodeData; selected?: boolean }) => (
     <div
       className="canvas-card-frame"
@@ -75,9 +94,28 @@ const nodeTypes: NodeTypes = {
       data-selected={selected ? "true" : undefined}
     >
       {data.content}
+      <Handle
+        type="target"
+        position={Position.Top}
+        id="in"
+        className="connector-target"
+        isConnectableStart={false}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="out"
+        className="connector-handle"
+        data-testid="connector-handle"
+      />
     </div>
   ),
 };
+
+const edgeTypes: EdgeTypes = { connector: ConnectorEdge };
+
+/** Связь карточки с самой собой отвергается уже при протягивании: бросок показан как недопустимый. */
+const isValidConnection = (connection: Connection | Edge) => connection.source !== connection.target;
 
 function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode): Node<CardNodeData> {
   const like = cardToNodeLike(card);
@@ -96,12 +134,15 @@ function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode):
   };
 }
 
+const NO_CONNECTORS: CanvasConnector[] = [];
+
 /**
  * The single place React Flow is used (ADR-002). It maps domain cards to
  * renderer nodes and reports only application-owned events back out.
  */
 export function CanvasAdapter({
   cards,
+  connectors = NO_CONNECTORS,
   viewport,
   viewportResetToken = 0,
   events,
@@ -240,6 +281,47 @@ export function CanvasAdapter({
       });
     }
   }
+
+  // Рёбра выводятся на каждом рендере из связей ∩ карточек; состояние холста —
+  // только их выделение (React Flow сообщает о нём через onEdgesChange).
+  const [selectedEdgeIds, setSelectedEdgeIds] = useState<ReadonlySet<string>>(() => new Set());
+  const edges = useMemo<ConnectorEdgeType[]>(
+    () =>
+      connectorsToEdgeLikes(connectors, cards).map((e) => ({
+        id: e.id,
+        type: "connector",
+        source: e.source,
+        target: e.target,
+        sourceHandle: "out",
+        targetHandle: "in",
+        selected: selectedEdgeIds.has(e.id),
+        data: { colorToken: e.colorToken, arrowEnds: e.arrowEnds },
+      })),
+    [connectors, cards, selectedEdgeIds],
+  );
+
+  // Выделение не должно переживать саму связь: иначе после удаления и undo
+  // восстановленная связь рисовалась бы выделенной. Чистим набор при смене
+  // связей или карточек (связь пропадает и вместе с удалённой карточкой) —
+  // приёмом «подправить state во время рендера», как и узлы выше.
+  const [edgeInputs, setEdgeInputs] = useState({ connectors, cards });
+  const [prunedEdgeSelection, setPrunedEdgeSelection] = useState<string[] | null>(null);
+  if (connectors !== edgeInputs.connectors || cards !== edgeInputs.cards) {
+    setEdgeInputs({ connectors, cards });
+    const drawn = new Set(edges.map((e) => e.id));
+    if ([...selectedEdgeIds].some((id) => !drawn.has(id))) {
+      const kept = [...selectedEdgeIds].filter((id) => drawn.has(id));
+      setSelectedEdgeIds(new Set(kept));
+      setPrunedEdgeSelection(kept);
+    }
+  }
+  // Очищенный набор сообщаем приложению один раз (события — вне рендера).
+  const reportedPruneRef = useRef<string[] | null>(null);
+  useEffect(() => {
+    if (prunedEdgeSelection === null || prunedEdgeSelection === reportedPruneRef.current) return;
+    reportedPruneRef.current = prunedEdgeSelection;
+    events.onConnectorSelectionChanged?.({ ids: prunedEdgeSelection });
+  }, [prunedEdgeSelection, events]);
 
   const nodesRef = useRef(nodes);
   const selectedIdsRef = useRef<Set<string>>(new Set());
@@ -419,6 +501,30 @@ export function CanvasAdapter({
     const ids = params.nodes.map((n) => n.id);
     selectedIdsRef.current = new Set(ids);
     events.onSelectionChanged?.({ ids });
+    events.onConnectorSelectionChanged?.({ ids: params.edges.map((e) => e.id) });
+  };
+
+  const handleEdgesChange = (changes: EdgeChange<ConnectorEdgeType>[]) => {
+    setSelectedEdgeIds((prev) => {
+      let next: Set<string> | null = null;
+      for (const change of changes) {
+        if (change.type !== "select" || prev.has(change.id) === change.selected) continue;
+        next ??= new Set(prev);
+        if (change.selected) next.add(change.id);
+        else next.delete(change.id);
+      }
+      return next ?? prev;
+    });
+  };
+
+  const handleConnect = (connection: Connection) => {
+    if (connection.source === connection.target) return;
+    events.onConnectorCreate?.({ fromCardId: connection.source, toCardId: connection.target });
+  };
+
+  const handleEdgeContextMenu = (event: React.MouseEvent, edge: ConnectorEdgeType) => {
+    event.preventDefault();
+    events.onConnectorContextMenu?.(edge.id, event.clientX, event.clientY);
   };
 
   const handleNodeDragStop = (
@@ -622,6 +728,9 @@ export function CanvasAdapter({
         key={interactionResetRevision}
         nodes={nodes}
         nodeTypes={nodeTypes}
+        edges={edges}
+        edgeTypes={edgeTypes}
+        onEdgesChange={handleEdgesChange}
         // P1.8: mount only the cards that intersect the viewport. React Flow
         // still renders every node once (to measure it), then unmounts the
         // off-screen ones; marquee selection, select-all and group drag work
@@ -649,7 +758,18 @@ export function CanvasAdapter({
         zoomActivationKeyCode={IS_MAC ? "Meta" : null}
         zoomOnDoubleClick={false}
         nodesDraggable={!spacePan}
-        nodesConnectable={false}
+        // Space-пан отключает и протягивание связей: ручка несёт `nopan`.
+        nodesConnectable={!spacePan}
+        // Связь создаётся только перетаскиванием: клик по ручке не должен
+        // включать режим «кликни цель», в котором вся карточка становится целью.
+        connectOnClick={false}
+        // Бросок засчитывается только над самой карточкой (её целевой ручкой
+        // под указателем), а не «рядом с ближайшей ручкой» в радиусе.
+        connectionRadius={0}
+        connectionLineType={ConnectionLineType.Straight}
+        isValidConnection={isValidConnection}
+        onConnect={handleConnect}
+        onEdgeContextMenu={handleEdgeContextMenu}
         edgesFocusable={false}
         nodesFocusable
         elementsSelectable

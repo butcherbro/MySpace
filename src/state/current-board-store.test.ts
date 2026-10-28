@@ -9,6 +9,7 @@ import {
 import type {
   BoardPortalDto,
   BoardSummary,
+  ConnectorDto,
   EmbedCardDto,
   ImageCardDto,
   FilesystemAliasDto,
@@ -644,5 +645,76 @@ describe("boardCoverChanged", () => {
     );
     expect(next.cards[0]).toEqual({ ...portal, target: { ...portal.target, coverAsset: cover } });
     expect(next.cards[1]).toEqual(note("n"));
+  });
+});
+
+describe("connectors", () => {
+  function connector(id: string, revision = 1): ConnectorDto {
+    return {
+      id,
+      boardId: "home",
+      fromCardId: "a",
+      toCardId: "b",
+      colorToken: "default",
+      arrowEnds: "end",
+      label: null,
+      revision,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+  }
+
+  function load(
+    state: CurrentBoardState,
+    connectors: ConnectorDto[] | undefined,
+    sinceRequest: Partial<SnapshotRequestChanges> = {},
+  ) {
+    return reducer(state, {
+      type: "snapshotLoaded",
+      board: home,
+      breadcrumbs: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      viewportRevision: 1,
+      cards: [note("a"), note("b")],
+      unsortedCards: [],
+      connectors,
+      sinceRequest: { written: [], added: [], removed: [], ...sinceRequest },
+    });
+  }
+
+  it("takes the snapshot's connectors on a board switch, none when absent", () => {
+    expect(load(initialState, [connector("c1")]).connectors).toEqual([connector("c1")]);
+    expect(load({ ...initialState, connectors: [connector("c1")] }, undefined).connectors).toEqual([]);
+  });
+
+  it("adds, updates (never to an older revision) and removes connectors", () => {
+    let state = reducer(initialState, { type: "connectorCreated", connector: connector("c1") });
+    state = reducer(state, { type: "connectorCreated", connector: connector("c1") });
+    expect(state.connectors).toHaveLength(1);
+
+    state = reducer(state, { type: "connectorUpdated", connector: { ...connector("c1", 3), colorToken: "blue" } });
+    state = reducer(state, { type: "connectorUpdated", connector: { ...connector("c1", 2), colorToken: "pink" } });
+    expect(state.connectors[0]).toMatchObject({ revision: 3, colorToken: "blue" });
+
+    state = reducer(state, { type: "connectorsRemoved", ids: ["c1"] });
+    expect(state.connectors).toEqual([]);
+  });
+
+  it("merges a same-board reload with connectors created, updated or removed since the request", () => {
+    const open: CurrentBoardState = {
+      ...initialState,
+      board: home,
+      connectors: [connector("added"), { ...connector("written", 4), colorToken: "green" }],
+    };
+    const next = load(open, [connector("written", 3), connector("removed"), connector("other")], {
+      added: ["added"],
+      written: ["added", "written"],
+      removed: ["removed"],
+    });
+    expect(next.connectors.map((c) => [c.id, c.revision])).toEqual([
+      ["written", 4],
+      ["other", 1],
+      ["added", 1],
+    ]);
   });
 });

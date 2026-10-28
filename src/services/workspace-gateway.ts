@@ -284,6 +284,57 @@ export interface BoardSnapshot {
   cards: CardDto[];
   /** Cards in this board's Unsorted panel (not yet placed on the canvas). */
   unsortedCards: CardDto[];
+  /** Живые связи, у которых оба конца — живые карточки на холсте этой доски. */
+  connectors: ConnectorDto[];
+}
+
+/** На каких концах связи стрелка. "end" — только у `to`. */
+export type ConnectorArrowEnds = "end" | "both" | "none";
+
+/** Стрелка между двумя карточками одной доски; направление `from` → `to`. */
+export interface ConnectorDto {
+  id: string;
+  boardId: string;
+  fromCardId: string;
+  toCardId: string;
+  /** Id цветового пресета заметки ('default' — нейтральная серая линия). */
+  colorToken: string;
+  arrowEnds: ConnectorArrowEnds;
+  /** Хранится, но в v1 не редактируется. */
+  label: string | null;
+  revision: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Идемпотентно по `id`: живая связь возвращается без изменений, мягко удалённая
+ * восстанавливается как хранилась (поля запроса игнорируются).
+ */
+export interface CreateConnectorInput {
+  id: string;
+  boardId: string;
+  fromCardId: string;
+  toCardId: string;
+  /** По умолчанию 'default'. */
+  colorToken?: string;
+  /** По умолчанию 'end'. */
+  arrowEnds?: ConnectorArrowEnds;
+}
+
+export interface UpdateConnectorInput {
+  connectorId: string;
+  expectedRevision: number;
+  colorToken?: string;
+  arrowEnds?: ConnectorArrowEnds;
+  /** «Reverse direction» меняет местами `fromCardId` и `toCardId`. */
+  fromCardId?: string;
+  toCardId?: string;
+  label?: string | null;
+}
+
+export interface RemoveConnectorInput {
+  connectorId: string;
 }
 
 export interface CreateNoteInput {
@@ -646,6 +697,11 @@ export interface WorkspaceGateway {
   /** Reverses a mixed-selection move from the receipt that move returned. */
   undoMoveSelection(receipt: MoveSelectionToBoardReceipt): Promise<void>;
   placeUnsortedCard(input: PlaceUnsortedCardInput): Promise<CardReceipt>;
+  createConnector(input: CreateConnectorInput): Promise<ConnectorDto>;
+  /** Возвращает изменённую связь с новой ревизией; удалённая — not_found. */
+  updateConnector(input: UpdateConnectorInput): Promise<ConnectorDto>;
+  /** Мягкое удаление с сохранением ревизии; отсутствующий id — no-op, чтобы цепочки undo/redo не падали с not_found. */
+  removeConnector(input: RemoveConnectorInput): Promise<void>;
   /** Lists backup snapshots under `backups/`, newest first. */
   listBackups(): Promise<BackupSummary[]>;
   /**
