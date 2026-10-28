@@ -64,6 +64,15 @@ pub const ENTITY_CARD: &str = "card";
 pub const ENTITY_ASSET: &str = "asset";
 pub const ENTITY_QUICK_BOARD: &str = "quick_board";
 pub const ENTITY_CONNECTOR: &str = "connector";
+/// Every entity kind this build replays (each has registers in
+/// [`image::registers`]).
+pub const ENTITY_KINDS: &[&str] = &[
+    ENTITY_BOARD,
+    ENTITY_CARD,
+    ENTITY_ASSET,
+    ENTITY_QUICK_BOARD,
+    ENTITY_CONNECTOR,
+];
 
 /// One journal row as exchanged between devices. `received_at` and `seq`
 /// are local and never travel.
@@ -99,7 +108,15 @@ pub struct ApplyReport {
     pub rejected: usize,
     /// Rows parked in `pending_changes` by this batch.
     pub parked: usize,
-    /// Rows still pending after the retry passes (this and earlier batches).
+    /// Rows this batch LEFT deferred for a newer build (unknown kind, register
+    /// or payload version), never retried until the build changes. Includes
+    /// rows re-deferred by the retry passes and rows that also applied their
+    /// known registers (an unknown register; those are counted in `applied`
+    /// or `superseded` too, so the categories can sum above `received`).
+    #[serde(default)]
+    pub deferred: usize,
+    /// Rows still pending after the retry passes (this and earlier batches,
+    /// deferred ones included).
     pub pending: usize,
     /// Ids of conflict-copy notes created by this batch.
     pub conflict_copies: Vec<String>,
@@ -108,15 +125,51 @@ pub struct ApplyReport {
     pub touched_boards: Vec<String>,
 }
 
+/// `local_meta` key of the [`capabilities`] the deferred rows were last
+/// tried against.
+pub const CAPABILITIES_KEY: &str = "sync_capabilities";
+
+/// What this build can interpret in a journal row: the payload version, every
+/// entity kind with its registers, the card kinds and the schema version.
+/// When it differs from the stored value, replay releases the deferred rows.
+pub fn capabilities() -> String {
+    let entities: Vec<String> = ENTITY_KINDS
+        .iter()
+        .map(|kind| format!("{kind}:{}", image::registers(kind).join(",")))
+        .collect();
+    let cards: Vec<&str> = crate::domain::card_kind::CardKind::ALL
+        .iter()
+        .map(|k| k.as_str())
+        .collect();
+    format!(
+        "v{}|{}|cards:{}|schema:{}",
+        image::IMAGE_VERSION,
+        entities.join(";"),
+        cards.join(","),
+        crate::db::migrations::max_app_version()
+    )
+}
+
 /// Replays the rows parked in `pending_changes` once, if there are any.
 ///
 /// Повторы паркованных строк идут только внутри реплея пришедшей страницы.
 /// Строки `connector`, поставленные в очередь миграцией 0027, ждали бы
 /// первой непустой страницы от пира; при старте они применяются сразу.
+/// Отложенные для новой сборки строки пробуются, только когда сменились
+/// [`capabilities`] (обновление): иначе транзакция писателя при каждом
+/// старте ничего бы не изменила.
 pub fn retry_pending_blocking(
     ws: &crate::app::Workspace,
 ) -> Result<Option<ApplyReport>, WorkspaceError> {
-    if ws.read_blocking(journal::pending_count)? == 0 {
+    let due = ws.read_blocking(|conn| {
+        let deferred = journal::deferred_count(conn)?;
+        let parked = journal::pending_count(conn)? - deferred;
+        let changed = || -> Result<bool, WorkspaceError> {
+            Ok(compact::meta(conn, CAPABILITIES_KEY)?.as_deref() != Some(&capabilities()))
+        };
+        Ok(parked > 0 || (deferred > 0 && changed()?))
+    })?;
+    if !due {
         return Ok(None);
     }
     ws.apply_blocking(crate::domain::mutation::Mutation::ApplySyncChanges(
@@ -155,5 +208,19 @@ pub fn board_from_wire(root: &str, id: &str) -> String {
         root.to_string()
     } else {
         id.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`ENTITY_KINDS`] and `image::registers` agree: a listed kind without
+    /// registers would be deferred forever by replay.
+    #[test]
+    fn every_entity_kind_has_registers() {
+        for kind in ENTITY_KINDS {
+            assert!(!image::registers(kind).is_empty(), "{kind}");
+        }
     }
 }

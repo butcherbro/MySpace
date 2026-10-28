@@ -224,11 +224,67 @@ pub fn park(conn: &Connection, row: &ChangeRow, received_at: i64) -> Result<(), 
     Ok(())
 }
 
-/// Every pending row, in HLC order.
+/// Reasons a row is deferred for a newer build (`pending_changes.reason`).
+pub const DEFER_ENTITY_KIND: &str = "entity_kind";
+pub const DEFER_CARD_KIND: &str = "card_kind";
+pub const DEFER_REGISTER: &str = "register";
+pub const DEFER_PAYLOAD_VERSION: &str = "payload_version";
+
+/// Defers a received row this build cannot interpret yet. Unlike [`park`],
+/// it is not retried within a batch and `attempts` never grows; it waits for
+/// [`release_deferred`].
+pub fn defer(
+    conn: &Connection,
+    row: &ChangeRow,
+    reason: &str,
+    received_at: i64,
+) -> Result<(), WorkspaceError> {
+    // При конфликте меняется только причина: отложенные строки вне бюджета
+    // попыток, повторная отсрочка `attempts` не трогает.
+    conn.execute(
+        "INSERT INTO pending_changes
+            (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at,
+             attempts, reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)
+         ON CONFLICT(origin_device_id, hlc) DO UPDATE SET reason = excluded.reason",
+        params![
+            row.origin_device_id,
+            row.hlc,
+            row.entity_kind,
+            row.entity_id,
+            row.op,
+            row.payload_json,
+            received_at,
+            reason
+        ],
+    )?;
+    Ok(())
+}
+
+/// Makes every deferred row an ordinary pending one again (the build learned
+/// something new); returns how many there were.
+pub fn release_deferred(conn: &Connection) -> Result<usize, WorkspaceError> {
+    Ok(conn.execute(
+        "UPDATE pending_changes SET reason = NULL WHERE reason IS NOT NULL",
+        [],
+    )?)
+}
+
+/// Rows deferred for a newer build.
+pub fn deferred_count(conn: &Connection) -> Result<i64, WorkspaceError> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM pending_changes WHERE reason IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
+/// Every pending row waiting for a dependency (not the deferred ones), in
+/// HLC order.
 pub fn pending(conn: &Connection) -> Result<Vec<ChangeRow>, WorkspaceError> {
     let mut stmt = conn.prepare(
         "SELECT origin_device_id, hlc, entity_kind, entity_id, op, payload_json
-         FROM pending_changes ORDER BY hlc",
+         FROM pending_changes WHERE reason IS NULL ORDER BY hlc",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(ChangeRow {
@@ -243,6 +299,7 @@ pub fn pending(conn: &Connection) -> Result<Vec<ChangeRow>, WorkspaceError> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Every row in `pending_changes`, deferred ones included.
 pub fn pending_count(conn: &Connection) -> Result<i64, WorkspaceError> {
     Ok(conn.query_row("SELECT COUNT(*) FROM pending_changes", [], |r| r.get(0))?)
 }

@@ -21,6 +21,12 @@
 //!    the batch, in HLC order, until a pass resolves none of them (a
 //!    compacted journal no longer delivers rows in creation order, so there
 //!    is no fixed number of passes).
+//! 7. A row this build cannot interpret yet (unknown entity kind, card kind
+//!    or payload version) is deferred in `pending_changes` with a reason
+//!    instead of rejected: the peer never sends it again. A row with an
+//!    unknown register applies its known registers and is deferred as well.
+//!    Deferred rows are not retried within a batch; they are released once
+//!    [`super::capabilities`] changes (the build was updated).
 //!
 //! Conflict policy as implemented:
 //! - frames, board/card placement, titles, colors, covers, trash state:
@@ -48,8 +54,8 @@ use serde_json::{json, Value};
 
 use super::hlc::{self, Hlc};
 use super::image::{
-    self, card_kind, card_place, get_opt_str, get_str, registers, Cause, Envelope, REG_BODY,
-    REG_LIFE, REG_META, REG_PLACE,
+    self, card_kind, card_place, get_opt_str, get_str, registers, Cause, DecodeError, Envelope,
+    REG_BODY, REG_LIFE, REG_META, REG_PLACE,
 };
 use super::tracking::{self, load_clocks, record_purge, set_clock};
 use super::{
@@ -77,6 +83,32 @@ enum Outcome {
     Purged,
     Park,
     Rejected,
+    /// Not interpretable by this build; the reason goes to `pending_changes`.
+    Deferred(&'static str),
+}
+
+/// What [`apply_one`] did with a row.
+struct RowResult {
+    outcome: Outcome,
+    /// The image carries a register this build does not know: whatever
+    /// applied, the row is also deferred so the register lands after an
+    /// update.
+    unknown_register: bool,
+}
+
+impl RowResult {
+    /// The reason to defer the row with, if any.
+    fn deferral(&self) -> Option<&'static str> {
+        match self.outcome {
+            Outcome::Deferred(reason) => Some(reason),
+            // Стёртой сущности новый регистр уже не нужен, а отвергнутая
+            // строка битая; откладывать их — держать в очереди вечно.
+            Outcome::Applied | Outcome::Superseded if self.unknown_register => {
+                Some(journal::DEFER_REGISTER)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Applies a batch of peer rows. Opens its own IMMEDIATE transaction when
@@ -108,6 +140,14 @@ fn apply_in_tx(
         root: super::root_board_id(conn)?,
         now: crate::db::migrations::now_millis(),
     };
+    // Сборка узнала что-то новое (обновление): отложенные строки снова
+    // становятся обычными и пробуются в цикле повторов ниже — один раз на
+    // каждую такую смену, а не в каждом батче.
+    let capabilities = super::capabilities();
+    if super::compact::meta(conn, super::CAPABILITIES_KEY)?.as_deref() != Some(&capabilities) {
+        journal::release_deferred(conn)?;
+        super::compact::set_meta(conn, super::CAPABILITIES_KEY, &capabilities)?;
+    }
     let seqs_before = change_seqs(conn)?;
     let mut report = ApplyReport {
         received: batch.len(),
@@ -135,11 +175,17 @@ fn apply_in_tx(
         }
         journal::advance_cursor(conn, &row.origin_device_id, &row.hlc)?;
         hlc::observe_remote(conn, &ctx.device, &hlc)?;
-        match apply_one(conn, &ctx, &row, &mut report)? {
+        let result = apply_one(conn, &ctx, &row, &mut report)?;
+        if let Some(reason) = result.deferral() {
+            journal::defer(conn, &row, reason, ctx.now)?;
+            report.deferred += 1;
+        }
+        match result.outcome {
             Outcome::Park => {
                 journal::park(conn, &row, ctx.now)?;
                 report.parked += 1;
             }
+            Outcome::Deferred(_) => {}
             outcome => count(&mut report, outcome),
         }
     }
@@ -153,10 +199,22 @@ fn apply_in_tx(
         }
         let mut progress = false;
         for row in pending {
-            match apply_one(conn, &ctx, &row, &mut report)? {
+            let result = apply_one(conn, &ctx, &row, &mut report)?;
+            let deferral = result.deferral();
+            if let Some(reason) = deferral {
+                journal::defer(conn, &row, reason, ctx.now)?;
+                report.deferred += 1;
+            }
+            match result.outcome {
                 Outcome::Park => journal::bump_attempts(conn, &row.origin_device_id, &row.hlc)?,
+                Outcome::Deferred(_) => {}
                 outcome => {
-                    journal::unpark(conn, &row.origin_device_id, &row.hlc)?;
+                    // Строка с новым регистром применила известные и осталась
+                    // отложенной: из цикла повторов она выходит, как и снятая
+                    // с парковки, так что цикл всё равно конечен.
+                    if deferral.is_none() {
+                        journal::unpark(conn, &row.origin_device_id, &row.hlc)?;
+                    }
                     count(&mut report, outcome);
                     progress = true;
                 }
@@ -193,21 +251,24 @@ fn count(report: &mut ApplyReport, outcome: Outcome) {
         Outcome::Purged => report.dropped_purged += 1,
         Outcome::Rejected => report.rejected += 1,
         Outcome::Park => report.parked += 1,
+        Outcome::Deferred(_) => report.deferred += 1,
     }
 }
 
 /// Runs one row in a savepoint: kept only when it applied; a missing
-/// dependency (foreign key) parks it, an invalid payload rejects it, any
-/// other error aborts the batch.
+/// dependency (foreign key) parks it, an invalid payload rejects it, a row
+/// this build cannot interpret yet is deferred, any other error aborts the
+/// batch.
 fn apply_one(
     conn: &Connection,
     ctx: &Ctx,
     row: &ChangeRow,
     report: &mut ApplyReport,
-) -> Result<Outcome, WorkspaceError> {
+) -> Result<RowResult, WorkspaceError> {
     conn.execute_batch("SAVEPOINT sync_row")?;
     let mut copies = Vec::new();
-    let result = apply_row(conn, ctx, row, &mut copies);
+    let mut unknown_register = false;
+    let result = apply_row(conn, ctx, row, &mut copies, &mut unknown_register);
     let outcome = match result {
         Ok(outcome) => outcome,
         Err(WorkspaceError::Database(message))
@@ -228,18 +289,29 @@ fn apply_one(
         conn.execute_batch("RELEASE sync_row")?;
         report.conflict_copies.extend(copies);
     } else {
-        if outcome == Outcome::Rejected {
-            tracing::warn!(
+        match outcome {
+            Outcome::Rejected => tracing::warn!(
                 entity_kind = %row.entity_kind,
                 op = %row.op,
                 error_code = "sync_row_rejected",
                 "sync: refused an invalid change row"
-            );
+            ),
+            Outcome::Deferred(reason) => tracing::info!(
+                reason,
+                entity_kind = %row.entity_kind,
+                op = %row.op,
+                error_code = "sync_row_deferred",
+                "sync: deferred a change row this build cannot interpret yet"
+            ),
+            _ => {}
         }
         conn.execute_batch("ROLLBACK TO sync_row; RELEASE sync_row;")?;
     }
     tracking::clear(conn)?;
-    Ok(outcome)
+    Ok(RowResult {
+        outcome,
+        unknown_register,
+    })
 }
 
 fn is_purged(conn: &Connection, kind: &str, wire_id: &str) -> Result<bool, WorkspaceError> {
@@ -290,12 +362,23 @@ fn apply_row(
     ctx: &Ctx,
     row: &ChangeRow,
     copies: &mut Vec<String>,
+    unknown_register: &mut bool,
 ) -> Result<Outcome, WorkspaceError> {
-    let env = Envelope::decode(&row.payload_json)?;
+    let env = match Envelope::decode(&row.payload_json) {
+        Ok(env) => env,
+        Err(DecodeError::UnsupportedVersion(_)) => {
+            return Ok(Outcome::Deferred(journal::DEFER_PAYLOAD_VERSION))
+        }
+        Err(invalid) => return Err(invalid.into()),
+    };
     let kind = row.entity_kind.as_str();
-    if registers(kind).is_empty() {
-        return Ok(Outcome::Rejected);
+    let known = registers(kind);
+    // До проверки `purged`: тумбстоун неизвестного вида тоже откладывается,
+    // и после обновления повтор в порядке HLC применит создание, затем стирание.
+    if known.is_empty() {
+        return Ok(Outcome::Deferred(journal::DEFER_ENTITY_KIND));
     }
+    *unknown_register = env.clocks.keys().any(|reg| !known.contains(&reg.as_str()));
     if is_purged(conn, kind, &row.entity_id)? {
         return Ok(Outcome::Purged);
     }
@@ -373,6 +456,13 @@ fn apply_card(
 ) -> Result<Outcome, WorkspaceError> {
     let id = row.entity_id.as_str();
     let state = &env.state;
+    // Строковый, но незнакомый вид — карточка новой сборки; отсутствующий
+    // или не строковый `kind` — битый образ, его отвергает `card_kind` ниже.
+    if let Some(kind) = state.get("kind").and_then(Value::as_str) {
+        if kind.parse::<CardKind>().is_err() {
+            return Ok(Outcome::Deferred(journal::DEFER_CARD_KIND));
+        }
+    }
     let local = load_clocks(conn, ENTITY_CARD, id)?;
     let stored_kind: Option<String> = conn
         .query_row("SELECT kind FROM cards WHERE id = ?1", [id], |r| r.get(0))

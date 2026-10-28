@@ -209,7 +209,9 @@ pub fn run() {
                     std::thread::sleep(STARTUP_MAINTENANCE_DELAY);
                     // Rows parked before this start (migration 0027 queues the
                     // connector rows an older build rejected) apply now, not
-                    // only when a peer next sends a non-empty page.
+                    // only when a peer next sends a non-empty page. Rows deferred
+                    // for a newer build are retried here once the build's sync
+                    // capabilities changed (an update).
                     if let Err(error) = sync::retry_pending_blocking(&workspace) {
                         tracing::warn!(%error, error_code = "sync_retry_pending_failed", "sync: retrying parked rows at startup failed");
                     }

@@ -181,7 +181,8 @@ Implementation:
 Consequences: one nullable column, one more write only when a drop crosses a border,
 nothing for sync beyond the image key; the geometric helpers shrink to the drop rule.
 A 0.2.6 build ignores the unknown `group_id` key (`apply_card` reads named fields), so
-rows apply and are relayed with the key intact; but every `place` write made on the old
-device arrives without the key and applies as NULL, so moving a member on a 0.2.6 device
-ungroups it everywhere. The next release after this one has the column everywhere.
+rows apply and are relayed with the key intact. A `place` write made on the old device
+arrives without the key; since the ADR-0011 amendment of 2026-10-28 an absent key leaves
+the stored membership untouched (it used to apply as NULL and ungroup the card
+everywhere), and compaction never lets such a row dominate the one carrying the key.
 

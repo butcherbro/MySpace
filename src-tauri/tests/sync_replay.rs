@@ -85,6 +85,14 @@ impl Replica {
             .unwrap()
     }
 
+    /// `SELECT COUNT(*)` with no parameters.
+    fn count(&self, sql: &str) -> i64 {
+        let sql = sql.to_string();
+        self.ws
+            .read_blocking(move |c| Ok(c.query_row(&sql, [], |r| r.get(0))?))
+            .unwrap()
+    }
+
     fn note_text(&self, card: &str) -> Option<String> {
         self.scalar("SELECT plain_text FROM note_cards WHERE card_id = ?1", card)
     }
@@ -575,9 +583,7 @@ fn reapplying_a_batch_is_a_no_op() {
     let rows = a.export_for(&b);
     b.apply_rows(rows.clone());
     let before = (b.board(&fx.board), b.revision(&fx.note), b.cursors());
-    let changes_before: i64 = b
-        .scalar("SELECT COUNT(*) FROM changes WHERE ?1 = ?1", "x")
-        .unwrap();
+    let changes_before: i64 = b.count("SELECT COUNT(*) FROM changes");
 
     let report = b.apply_rows(rows.clone());
     assert_eq!(report.duplicates, rows.len());
@@ -587,9 +593,7 @@ fn reapplying_a_batch_is_a_no_op() {
         (b.board(&fx.board), b.revision(&fx.note), b.cursors()),
         before
     );
-    let changes_after: i64 = b
-        .scalar("SELECT COUNT(*) FROM changes WHERE ?1 = ?1", "x")
-        .unwrap();
+    let changes_after: i64 = b.count("SELECT COUNT(*) FROM changes");
     assert_eq!(changes_after, changes_before);
 }
 
@@ -774,10 +778,7 @@ fn a_failed_mutation_leaves_no_journal_row() {
     let a = Replica::new("a");
     let home = a.home();
     let note = create_note(&a, &home, "v1");
-    let count = |r: &Replica| -> i64 {
-        r.scalar("SELECT COUNT(*) FROM changes WHERE ?1 = ?1", "x")
-            .unwrap()
-    };
+    let count = |r: &Replica| -> i64 { r.count("SELECT COUNT(*) FROM changes") };
     let before = count(&a);
     let stale = a.ws.apply_blocking(Mutation::UpdateNote(UpdateNoteInput {
         id: note.clone(),
@@ -980,9 +981,7 @@ fn a_late_connector_edit_never_resurrects_a_purged_cards_connector() {
             )
             .unwrap();
         assert_eq!(rows, 0);
-        let pending: i64 = r
-            .scalar("SELECT COUNT(*) FROM pending_changes WHERE ?1 = ?1", "x")
-            .unwrap();
+        let pending: i64 = r.count("SELECT COUNT(*) FROM pending_changes");
         assert_eq!(pending, 0, "nothing parked forever");
     }
     assert_eq!(a.board(&fx.board), b.board(&fx.board));
@@ -1273,9 +1272,10 @@ fn group_membership_replicates_with_the_card_image() {
     assert_eq!(a.board(&home), b.board(&b.home()));
 }
 
-/// Образ без ключа `group_id` (старая сборка) применяется как NULL.
+/// Образ без ключа `group_id` пишет сборка старше ADR-0013: она не знает о
+/// группах, и её перенос карточки не снимает членство.
 #[test]
-fn a_card_image_without_group_id_clears_the_membership() {
+fn a_card_image_without_group_id_keeps_the_membership() {
     let (a, b) = (Replica::new("a"), Replica::new("b"));
     let home = a.home();
     let n1 = create_note(&a, &home, "one");
@@ -1290,9 +1290,10 @@ fn a_card_image_without_group_id_clears_the_membership() {
         .as_object_mut()
         .unwrap()
         .remove("group_id");
+    envelope["state"]["x"] = serde_json::json!(500.0);
     let hlc = peer_hlc(60_000, 0);
     envelope["clocks"]["place"] = Value::String(hlc.clone());
-    b.apply_rows(vec![ChangeRow {
+    let report = b.apply_rows(vec![ChangeRow {
         origin_device_id: "peerx".into(),
         hlc,
         entity_kind: "card".into(),
@@ -1300,7 +1301,13 @@ fn a_card_image_without_group_id_clears_the_membership() {
         op: "card.move_many".into(),
         payload_json: envelope.to_string(),
     }]);
-    assert_eq!(stored_group(&b, &n1), None);
+    assert_eq!(report.applied, 1, "{report:?}");
+    assert!(stored_group(&b, &n1).is_some());
+    assert_eq!(
+        b.scalar::<f64>("SELECT x FROM cards WHERE id = ?1", &n1),
+        Some(500.0),
+        "the frame moved"
+    );
 }
 
 /// Стирание группы не пишет в участников: колонка остаётся, загрузчик её
@@ -1353,4 +1360,363 @@ fn joining_a_group_never_conflicts_with_a_concurrent_text_edit() {
         );
         assert_eq!(notes, Some(1), "no conflict copy");
     }
+}
+
+// ---- Строки для более новой сборки (откладываются, а не отвергаются) -------
+
+/// Строка журнала от `peerx` с произвольным видом сущности и payload.
+fn peer_row(kind: &str, id: &str, hlc: &str, payload: String) -> ChangeRow {
+    ChangeRow {
+        origin_device_id: "peerx".into(),
+        hlc: hlc.into(),
+        entity_kind: kind.into(),
+        entity_id: id.into(),
+        op: "test.write".into(),
+        payload_json: payload,
+    }
+}
+
+/// `(reason, attempts)` строки `hlc` в `pending_changes`.
+fn pending_entry(r: &Replica, hlc: &str) -> Option<(Option<String>, i64)> {
+    let hlc = hlc.to_string();
+    r.ws.read_blocking(move |c| {
+        use rusqlite::OptionalExtension;
+        Ok(c.query_row(
+            "SELECT reason, attempts FROM pending_changes WHERE hlc = ?1",
+            [&hlc],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+    })
+    .unwrap()
+}
+
+fn raw_connection(r: &Replica) -> rusqlite::Connection {
+    let raw = rusqlite::Connection::open(r.ws.paths().db_path()).unwrap();
+    raw.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    raw
+}
+
+/// Как после обновления приложения: сохранённые возможности сборки другие.
+fn simulate_upgrade(r: &Replica) {
+    raw_connection(r)
+        .execute(
+            "INSERT INTO local_meta (key, value) VALUES ('sync_capabilities', 'older-build')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .unwrap();
+}
+
+/// The newest journal image of `id` this replica holds.
+fn latest_image(r: &Replica, id: &str) -> Value {
+    let text: String = r
+        .scalar(
+            "SELECT payload_json FROM changes WHERE entity_id = ?1 ORDER BY hlc DESC LIMIT 1",
+            id,
+        )
+        .unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+
+/// Неизвестный вид сущности откладывается: курсор уже сдвинут, и пир строку
+/// больше не пришлёт. В лимит попыток отложенная строка не идёт.
+#[test]
+fn a_row_of_an_unknown_entity_kind_is_deferred_not_rejected() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let hlc = peer_hlc(0, 0);
+    let row = peer_row(
+        "widget",
+        &new_id(),
+        &hlc,
+        serde_json::json!({ "v": 1, "clocks": { "body": hlc }, "state": { "size": 3 } })
+            .to_string(),
+    );
+    let report = a.apply_rows(vec![row]);
+    assert_eq!((report.deferred, report.rejected), (1, 0), "{report:?}");
+    assert_eq!(a.cursors().get("peerx"), Some(&hlc));
+    assert_eq!(
+        pending_entry(&a, &hlc),
+        Some((Some("entity_kind".into()), 1))
+    );
+
+    create_note(&b, &b.home(), "unrelated");
+    let report = sync(&b, &a);
+    assert_eq!((report.deferred, report.rejected), (0, 0), "{report:?}");
+    assert!(
+        myspace_lib::sync::retry_pending_blocking(&a.ws)
+            .unwrap()
+            .is_none(),
+        "only a deferred row and the same build: nothing to retry at startup"
+    );
+    assert_eq!(
+        pending_entry(&a, &hlc),
+        Some((Some("entity_kind".into()), 1)),
+        "never retried, attempts never bumped"
+    );
+
+    // Обновление, которое этот вид так и не принесло: строка снова отложена.
+    simulate_upgrade(&a);
+    let report = myspace_lib::sync::retry_pending_blocking(&a.ws)
+        .unwrap()
+        .expect("the capabilities changed");
+    assert_eq!((report.deferred, report.pending), (1, 1), "{report:?}");
+    assert_eq!(
+        pending_entry(&a, &hlc),
+        Some((Some("entity_kind".into()), 1)),
+        "re-deferred, attempts not bumped"
+    );
+}
+
+/// Отложенная строка применяется, когда сборка узнала её вид: при старте
+/// после обновления (сменились сохранённые возможности сборки).
+#[test]
+fn a_deferred_row_applies_once_the_build_knows_its_kind() {
+    let a = Replica::new("a");
+    let fx = populate(&a);
+    let id = new_id();
+    let hlc = peer_hlc(0, 0);
+    let row = peer_connector_row(
+        &id,
+        &hlc,
+        serde_json::json!({ "body": hlc, "life": hlc }),
+        live_connector_state(&fx, "green"),
+    );
+
+    // Как отложила бы сборка, ещё не знавшая коннекторов.
+    let raw = raw_connection(&a);
+    for table in ["changes", "pending_changes"] {
+        let (column, value) = if table == "changes" {
+            ("received_at", "0")
+        } else {
+            ("received_at, attempts, reason", "0, 1, 'entity_kind'")
+        };
+        raw.execute(
+            &format!(
+                "INSERT INTO {table}
+                    (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, {column})
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, {value})"
+            ),
+            rusqlite::params![
+                row.origin_device_id,
+                row.hlc,
+                row.entity_kind,
+                row.entity_id,
+                row.op,
+                row.payload_json
+            ],
+        )
+        .unwrap();
+    }
+    drop(raw);
+    simulate_upgrade(&a);
+    assert!(!shown_connectors(&a, &fx.board).contains(&id));
+
+    let report = myspace_lib::sync::retry_pending_blocking(&a.ws)
+        .unwrap()
+        .expect("there was a deferred row");
+    assert_eq!((report.applied, report.pending), (1, 0), "{report:?}");
+    assert!(shown_connectors(&a, &fx.board).contains(&id));
+    assert_eq!(
+        a.scalar::<String>(
+            "SELECT value FROM local_meta WHERE key = ?1",
+            "sync_capabilities"
+        ),
+        Some(myspace_lib::sync::capabilities())
+    );
+    assert!(
+        myspace_lib::sync::retry_pending_blocking(&a.ws)
+            .unwrap()
+            .is_none(),
+        "nothing left to retry"
+    );
+}
+
+#[test]
+fn an_invalid_payload_is_still_rejected() {
+    let a = Replica::new("a");
+    let hlc = peer_hlc(0, 0);
+    let report = a.apply_rows(vec![peer_row("card", &new_id(), &hlc, "not json".into())]);
+    assert_eq!((report.rejected, report.deferred), (1, 0), "{report:?}");
+    assert_eq!(a.count("SELECT COUNT(*) FROM pending_changes"), 0);
+}
+
+/// Версию старше текущей не прочтёт ни одна сборка: строка отвергается.
+#[test]
+fn an_older_payload_version_is_rejected() {
+    let a = Replica::new("a");
+    let hlc = peer_hlc(0, 0);
+    let payload = serde_json::json!({ "v": 0, "clocks": { "place": hlc }, "state": {} });
+    let report = a.apply_rows(vec![peer_row("card", &new_id(), &hlc, payload.to_string())]);
+    assert_eq!((report.rejected, report.deferred), (1, 0), "{report:?}");
+    assert_eq!(a.count("SELECT COUNT(*) FROM pending_changes"), 0);
+}
+
+#[test]
+fn a_newer_payload_version_is_deferred() {
+    let a = Replica::new("a");
+    let hlc = peer_hlc(0, 0);
+    // `clocks` не того вида: образ не разбирается как `Envelope` v1, но `v`
+    // читается.
+    let payload = serde_json::json!({ "v": 2, "clocks": "x", "state": {} });
+    let report = a.apply_rows(vec![peer_row("card", &new_id(), &hlc, payload.to_string())]);
+    assert_eq!((report.deferred, report.rejected), (1, 0), "{report:?}");
+    assert_eq!(
+        pending_entry(&a, &hlc),
+        Some((Some("payload_version".into()), 1))
+    );
+    assert_eq!(a.cursors().get("peerx"), Some(&hlc));
+}
+
+/// Карточка неизвестного вида откладывается; её стирание применяется сразу,
+/// и после обновления отложенное создание отбрасывается как стёртое, а не
+/// воскрешает карточку.
+#[test]
+fn a_card_of_an_unknown_kind_is_deferred_and_a_later_purge_still_wins() {
+    let a = Replica::new("a");
+    let template = create_note(&a, &a.home(), "template");
+    let mut envelope = latest_image(&a, &template);
+    envelope["state"]["kind"] = Value::String("widget".into());
+    let id = new_id();
+    let create = peer_hlc(0, 0);
+    for reg in ["place", "life", "body"] {
+        envelope["clocks"][reg] = Value::String(create.clone());
+    }
+    let report = a.apply_rows(vec![peer_row("card", &id, &create, envelope.to_string())]);
+    assert_eq!(report.deferred, 1, "{report:?}");
+    assert_eq!(
+        pending_entry(&a, &create),
+        Some((Some("card_kind".into()), 1))
+    );
+
+    let purge = peer_hlc(1_000, 0);
+    let tombstone = serde_json::json!({ "v": 1, "purge": true }).to_string();
+    let report = a.apply_rows(vec![peer_row("card", &id, &purge, tombstone)]);
+    assert_eq!(report.applied, 1, "{report:?}");
+
+    simulate_upgrade(&a);
+    let report = myspace_lib::sync::retry_pending_blocking(&a.ws)
+        .unwrap()
+        .expect("there was a deferred row");
+    assert_eq!(
+        (report.dropped_purged, report.pending),
+        (1, 0),
+        "{report:?}"
+    );
+    assert_eq!(
+        a.scalar::<String>("SELECT id FROM cards WHERE id = ?1", &id),
+        None
+    );
+}
+
+/// Неизвестный регистр не останавливает известные: перенос применяется, а
+/// строка остаётся отложенной, чтобы новый регистр лёг после обновления.
+#[test]
+fn a_row_with_an_unknown_register_applies_the_known_ones_and_is_deferred() {
+    let a = Replica::new("a");
+    let n1 = create_note(&a, &a.home(), "one");
+    let mut envelope = latest_image(&a, &n1);
+    let hlc = peer_hlc(60_000, 0);
+    envelope["state"]["x"] = serde_json::json!(500.0);
+    envelope["clocks"]["place"] = Value::String(hlc.clone());
+    envelope["clocks"]["tags"] = Value::String(hlc.clone());
+    let row = peer_row("card", &n1, &hlc, envelope.to_string());
+
+    let report = a.apply_rows(vec![row]);
+    assert_eq!((report.applied, report.deferred), (1, 1), "{report:?}");
+    assert_eq!(
+        a.scalar::<f64>("SELECT x FROM cards WHERE id = ?1", &n1),
+        Some(500.0)
+    );
+    assert_eq!(pending_entry(&a, &hlc), Some((Some("register".into()), 1)));
+
+    simulate_upgrade(&a);
+    let report = myspace_lib::sync::retry_pending_blocking(&a.ws)
+        .unwrap()
+        .expect("there was a deferred row");
+    assert_eq!((report.superseded, report.deferred), (1, 1), "{report:?}");
+    assert_eq!(
+        pending_entry(&a, &hlc),
+        Some((Some("register".into()), 1)),
+        "re-deferred, attempts not bumped"
+    );
+}
+
+/// Компакция не удаляет строку с членством ради более новой строки старой
+/// сборки без ключа `group_id`: реплика из сжатого журнала тоже видит группу.
+#[test]
+fn compaction_keeps_the_membership_row_an_old_build_row_would_dominate() {
+    let (a, c) = (Replica::new("a"), Replica::new("c"));
+    let home = a.home();
+    let n1 = create_note(&a, &home, "one");
+    create_group_with(&a, &[&n1]);
+    let (grouped_hlc, grouped): (String, String) = {
+        let id = n1.clone();
+        a.ws.read_blocking(move |c| {
+            Ok(c.query_row(
+                "SELECT hlc, payload_json FROM changes WHERE entity_id = ?1
+                 ORDER BY hlc DESC LIMIT 1",
+                [&id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap()
+    };
+    let mut envelope: Value = serde_json::from_str(&grouped).unwrap();
+    assert!(envelope["state"]["group_id"].is_string());
+
+    envelope["state"]
+        .as_object_mut()
+        .unwrap()
+        .remove("group_id");
+    envelope["state"]["x"] = serde_json::json!(500.0);
+    let hlc = peer_hlc(60_000, 0);
+    envelope["clocks"]["place"] = Value::String(hlc.clone());
+    let report = a.apply_rows(vec![peer_row("card", &n1, &hlc, envelope.to_string())]);
+    assert_eq!(report.applied, 1, "{report:?}");
+    assert!(stored_group(&a, &n1).is_some());
+
+    // Строка с членством перестаёт быть головой своего источника.
+    let n2 = create_note(&a, &home, "two");
+    for text in ["two, 1", "two, 2", "two, 3"] {
+        update_note(&a, &n2, text);
+    }
+    myspace_lib::sync::compact::run_blocking(&a.ws).unwrap();
+
+    let kept: bool = {
+        let (device, hlc) = (a.device(), grouped_hlc.clone());
+        a.ws.read_blocking(move |c| {
+            Ok(c.query_row(
+                "SELECT EXISTS (SELECT 1 FROM changes WHERE origin_device_id = ?1 AND hlc = ?2)",
+                [&device, &hlc],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap()
+    };
+    assert!(kept, "the membership row survived compaction");
+    sync(&a, &c);
+    assert!(stored_group(&c, &n1).is_some());
+}
+
+/// Карточка, созданная из образа старой сборки (без ключа `group_id`),
+/// создаётся без группы.
+#[test]
+fn a_card_created_from_an_image_without_group_id_has_no_group() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let n1 = create_note(&a, &a.home(), "one");
+    create_group_with(&a, &[&n1]);
+    let mut envelope = latest_image(&a, &n1);
+    assert!(envelope["state"]["group_id"].is_string());
+    envelope["state"]
+        .as_object_mut()
+        .unwrap()
+        .remove("group_id");
+    let hlc = peer_hlc(0, 0);
+    for reg in ["place", "life", "body"] {
+        envelope["clocks"][reg] = Value::String(hlc.clone());
+    }
+    let report = b.apply_rows(vec![peer_row("card", &n1, &hlc, envelope.to_string())]);
+    assert_eq!(report.applied, 1, "{report:?}");
+    assert_eq!(stored_group(&b, &n1), None);
 }

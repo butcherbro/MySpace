@@ -206,6 +206,12 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../../migrations/0029_card_group.sql"),
         after: None,
     },
+    Migration {
+        version: 30,
+        name: "pending_changes_reason",
+        sql: include_str!("../../migrations/0030_pending_changes_reason.sql"),
+        after: None,
+    },
 ];
 
 /// Rust step of migration 0027: queues every `connector` journal row this
@@ -274,7 +280,7 @@ pub enum SchemaStatus {
 }
 
 /// Highest version number known to this build (0 if `MIGRATIONS` is empty).
-fn max_app_version() -> i64 {
+pub fn max_app_version() -> i64 {
     MIGRATIONS.iter().map(|m| m.version).max().unwrap_or(0)
 }
 
