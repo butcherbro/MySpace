@@ -89,14 +89,14 @@ pub struct CompactReport {
     pub done: bool,
 }
 
-fn meta(conn: &Connection, key: &str) -> Result<Option<String>, WorkspaceError> {
+pub(crate) fn meta(conn: &Connection, key: &str) -> Result<Option<String>, WorkspaceError> {
     Ok(conn
         .prepare_cached("SELECT value FROM local_meta WHERE key = ?1")?
         .query_row([key], |r| r.get(0))
         .optional()?)
 }
 
-fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<(), WorkspaceError> {
+pub(crate) fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<(), WorkspaceError> {
     conn.prepare_cached(
         "INSERT INTO local_meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -167,6 +167,18 @@ struct StateHead {
     board_id: Option<String>,
     #[serde(default)]
     parent_board_id: Option<String>,
+    /// `None`: the image has no `group_id` key (a build older than
+    /// ADR-0013); `Some(None)`: no group.
+    #[serde(default, deserialize_with = "deserialize_some")]
+    group_id: Option<Option<String>>,
+}
+
+/// Tells a present `null` (`Some(None)`) from a missing key (`None`).
+fn deserialize_some<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// A card's board and a board's parent.
@@ -191,6 +203,13 @@ struct Row {
 
 /// True when `a` matches or beats `b` on every register `b` has.
 fn dominates(a: &Lineage, b: &Lineage) -> bool {
+    // Образ старой сборки без ключа `group_id` при реплее не трогает
+    // членство. Удали он строку, которая его несёт, — реплика, поднятая из
+    // сжатого журнала, создала бы карточку без группы, а прочие её сохранят.
+    let has_group = |l: &Lineage| l.state.as_ref().is_some_and(|s| s.group_id.is_some());
+    if has_group(b) && !has_group(a) {
+        return false;
+    }
     b.clocks
         .iter()
         .all(|(reg, clock)| a.clocks.get(reg).is_some_and(|mine| mine >= clock))

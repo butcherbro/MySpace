@@ -307,3 +307,101 @@ no resurrection after purge; boards nested deeper than the old retry cap.
   sync pass.
 - Replay refuses a board move into a cycle without advancing its clock,
   while compaction treats the move as applied (theoretical).
+
+## Amendment 2026-10-28: forward-compatible replay (accepted, implemented)
+
+**Problem.** Replay stores a received row in `changes` and advances the
+origin's cursor before applying it (Decision 3, steps 1–2), so the peer never
+sends it again. Until this amendment a row this build could not interpret —
+an entity kind without registers, a card kind the registry lacks, a payload
+version other than `IMAGE_VERSION` — was counted `rejected` together with
+genuinely broken payloads. The image stayed in `changes`, but nothing replayed
+it after an upgrade. ADR-0013 shipped with two one-off migration steps (0027,
+0028) that re-queue connector and group rows from `changes`; every new kind
+would have needed another such step, and in a mixed pair (one device on
+0.2.6, the other on the next release) the arrows and groups made on the new
+device reached the old one only through those steps.
+
+**Decision: defer what is unknown, reject only what is broken.**
+
+- `pending_changes.reason` (migration 0030, additive). `NULL` is the ordinary
+  park for a missing dependency: retried after every batch, `attempts`
+  counts. A non-`NULL` reason — `entity_kind`, `card_kind`, `register`,
+  `payload_version` — means "deferred for a newer build": not retried inside
+  a batch, `attempts` never moves, nothing ages the row out.
+- The rule in `apply_row`: a payload that does not decode, or a known kind
+  whose required fields are missing or malformed, is `Rejected`, and so is a
+  payload version OLDER than `IMAGE_VERSION` — a row that is broken on this
+  build is broken on every future build. A payload that decodes
+  but names something this build does not have is `Deferred`. A tombstone of
+  an unknown entity kind is deferred like its create, so the retry replays
+  create-then-purge in HLC order; a tombstone of a card of an unknown card
+  kind carries no state and purges at once, and the deferred create is
+  dropped as purged on retry.
+- Unknown register. An image from a newer build carries the clock of every
+  register of its entity, including the ones this build lacks. Parking such
+  rows whole would stall sync between versions entirely, so the known
+  registers apply as before and the row is additionally deferred with reason
+  `register`. On the retry after the upgrade the known registers are
+  equal-clock (superseded) and only the new one wins: LWW stays idempotent.
+- Retry trigger: a capabilities fingerprint — `IMAGE_VERSION`, every entity
+  kind with its registers, every card kind, the schema version — is kept in
+  `local_meta.sync_capabilities`. A replay that runs under a different
+  fingerprint first releases every deferred row (clears its reason); the rows
+  then take the normal passes in HLC order, and whatever is still unknown is
+  deferred again. Startup already replays `pending_changes` whenever it is
+  non-empty, so the retry happens at the first start of the new build, with
+  no peer page needed.
+- Migration steps 0027/0028 stay: they serve databases written by 0.2.6,
+  which rejected instead of deferring.
+
+**A column added to an existing register (`group_id`).** ADR-0013 put
+`group_id` into the card's `place` register without a new register or a new
+`IMAGE_VERSION`. A `place` written by 0.2.6 has no `group_id` key, and until
+now it applied as `NULL`: moving a member on the old device ungrouped it
+everywhere. Rule from now on: a key absent from an image means "the writer
+does not know this column", never "null". `card_place` keeps three states for
+`group_id` (absent / null / value); an absent key leaves the stored column
+untouched on update and writes `NULL` on insert. Compaction gets the matching
+clause in R1: a card row whose state lacks the `group_id` key never dominates
+a row that has it, so a device bootstrapped from a compacted journal still
+creates the card inside its group. Consequence accepted: a member moved on a
+0.2.6 device can sit outside its group's frame on the new device until it is
+moved again; the membership survives, which is what the stored-membership
+decision asks for (a frame never captures or releases a card by position).
+Any future column added to an existing register follows the same rule, or
+bumps `IMAGE_VERSION`, which an older build then defers with reason
+`payload_version`.
+
+**Known gaps.**
+
+- The compaction clause runs only where the new build compacts. A 0.2.6
+  device still deletes the row carrying `group_id` when its own newer
+  `place` row dominates it, so a device bootstrapped from a journal that the
+  0.2.6 device compacted creates the card outside its group. The window
+  closes when that device updates and moves the card once.
+- A known row that depends on a deferred one (a connector whose endpoint is
+  a card of an unknown kind) fails its foreign key and becomes an ordinary
+  parked row: retried after every batch, `attempts` growing, until the
+  update releases the row it waits for. `attempts` has no limit today, so
+  nothing is lost; the retries are wasted work only.
+- `pending_changes` is still not compacted. A long mixed-version period after
+  a release that adds a register leaves one deferred row per received change
+  on the old device until it updates. If that ever matters, R1 over
+  `pending_changes` per entity is the fix.
+- The dev build and the installed build share one database; the fingerprint
+  differs whenever the dev build knows a kind the release does not, so each
+  switch between them releases the deferred rows once. One pass over a small
+  table; harmless.
+- `report.pending` and the `pending_count` of `sync_status` include deferred
+  rows, so on the older device of a mixed pair the number does not reach
+  zero until it updates. The UI does not show it yet.
+
+**Tests** (`src-tauri/tests/sync_replay.rs`): an unknown entity kind is
+deferred, its cursor advances and its attempts stay at one across batches; a
+deferred row applies at the first start of a build that knows its kind; an
+invalid payload is still rejected; a newer payload version is deferred; an
+unknown card kind is deferred and its later tombstone still purges it; an
+unknown register applies the known ones and waits for the rest; a `place`
+without `group_id` keeps the membership; compaction keeps the row that carries
+the membership and a bootstrapped replica has it.

@@ -1139,11 +1139,60 @@ fn migration_0029_upgrades_a_version_28_database() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(latest, 29);
+    assert_eq!(latest, 30);
     let violations: i64 = conn
         .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
             r.get(0)
         })
         .unwrap();
     assert_eq!(violations, 0);
+}
+
+/// Migration 0030 adds `pending_changes.reason`; rows parked by an older
+/// build keep `reason IS NULL` (ordinary parked rows, retried as before).
+#[test]
+fn migration_0030_keeps_parked_rows_ordinary() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 30) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch(migration.sql).unwrap();
+        if let Some(step) = migration.after {
+            step(&tx).unwrap();
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(
+        "INSERT INTO pending_changes
+            (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at, attempts)
+             VALUES ('peer', '000000000000001-00000-peer', 'card', 'c1', 'card.create_note', '{\"v\":1}', 5, 3),
+                    ('peer', '000000000000002-00000-peer', 'board', 'b1', 'board.create', '{\"v\":1}', 5, 1);",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let rows: Vec<(String, i64, Option<String>)> = {
+        let mut stmt = conn
+            .prepare("SELECT entity_id, attempts, reason FROM pending_changes ORDER BY hlc")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(
+        rows,
+        [("c1".to_string(), 3, None), ("b1".to_string(), 1, None)]
+    );
 }

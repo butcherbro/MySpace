@@ -102,21 +102,57 @@ impl Envelope {
         }
     }
 
-    pub fn decode(text: &str) -> Result<Self, WorkspaceError> {
-        let envelope: Envelope = serde_json::from_str(text).map_err(|e| {
-            WorkspaceError::ConstraintViolation(format!("invalid change payload: {e}"))
-        })?;
-        if envelope.v != IMAGE_VERSION {
-            return Err(WorkspaceError::ConstraintViolation(format!(
-                "unsupported change payload version {}",
+    pub fn decode(text: &str) -> Result<Self, DecodeError> {
+        match serde_json::from_str::<Envelope>(text) {
+            Ok(envelope) if envelope.v == IMAGE_VERSION => Ok(envelope),
+            Ok(envelope) if envelope.v > IMAGE_VERSION => {
+                Err(DecodeError::UnsupportedVersion(envelope.v))
+            }
+            Ok(envelope) => Err(DecodeError::Invalid(format!(
+                "unknown payload version {}",
                 envelope.v
-            )));
+            ))),
+            Err(e) => {
+                // Образ более новой версии может не разбираться как `Envelope`
+                // v1, но его `v` читается: такую строку сборка откладывает.
+                // Версию старше текущей не прочтёт ни одна будущая сборка —
+                // её строка битая и отвергается.
+                #[derive(Deserialize)]
+                struct Version {
+                    v: u32,
+                }
+                match serde_json::from_str::<Version>(text) {
+                    Ok(Version { v }) if v > IMAGE_VERSION => {
+                        Err(DecodeError::UnsupportedVersion(v))
+                    }
+                    _ => Err(DecodeError::Invalid(e.to_string())),
+                }
+            }
         }
-        Ok(envelope)
     }
 
     pub fn encode(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
+    }
+}
+
+/// Why [`Envelope::decode`] refused a payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodeError {
+    /// A payload of a version newer than this build's.
+    UnsupportedVersion(u32),
+    /// Not a payload at all.
+    Invalid(String),
+}
+
+impl From<DecodeError> for WorkspaceError {
+    fn from(error: DecodeError) -> Self {
+        WorkspaceError::ConstraintViolation(match error {
+            DecodeError::UnsupportedVersion(v) => {
+                format!("unsupported change payload version {v}")
+            }
+            DecodeError::Invalid(e) => format!("invalid change payload: {e}"),
+        })
     }
 }
 
@@ -371,8 +407,28 @@ pub struct CardPlace {
     pub frame: Frame,
     pub z_index: i64,
     pub unsorted: bool,
-    /// `None` also when the image has no key (an older build).
-    pub group_id: Option<String>,
+    pub group_id: GroupField,
+}
+
+/// `group_id` of a card image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupField {
+    /// No key: the image was written by a build older than ADR-0013, which
+    /// knows nothing of groups. Stored membership stays as it is.
+    Unknown,
+    /// The key is present (`null` = no group).
+    Set(Option<String>),
+}
+
+impl GroupField {
+    /// The column value for a NEW row: `Unknown` becomes NULL (an update
+    /// leaves the column alone instead, see [`update_card_place`]).
+    pub fn for_insert(&self) -> Option<&str> {
+        match self {
+            GroupField::Set(group) => group.as_deref(),
+            GroupField::Unknown => None,
+        }
+    }
 }
 
 pub fn card_place(state: &Value, root: &str) -> Result<CardPlace, WorkspaceError> {
@@ -388,7 +444,10 @@ pub fn card_place(state: &Value, root: &str) -> Result<CardPlace, WorkspaceError
         frame,
         z_index: get_i64(state, "z_index")?,
         unsorted: get_bool(state, "unsorted")?,
-        group_id: get_opt_str(state, "group_id")?,
+        group_id: match state.get("group_id") {
+            None => GroupField::Unknown,
+            Some(_) => GroupField::Set(get_opt_str(state, "group_id")?),
+        },
     })
 }
 
@@ -434,7 +493,7 @@ pub fn insert_card(
             get_opt_i64(state, "deleted_at")?,
             get_opt_str(state, "trash_batch_id")?,
             i64::from(place.unsorted),
-            place.group_id,
+            place.group_id.for_insert(),
         ],
     )?;
     write_card_body(conn, id, kind, None, state, root)
@@ -445,9 +504,15 @@ pub fn update_card_place(
     id: &str,
     place: &CardPlace,
 ) -> Result<(), WorkspaceError> {
+    let (write_group, group) = match &place.group_id {
+        GroupField::Set(group) => (true, group.as_deref()),
+        GroupField::Unknown => (false, None),
+    };
+    // `CASE WHEN ?10`: образ без ключа `group_id` (старая сборка) оставляет
+    // хранимое членство как есть, а не затирает его NULL.
     conn.execute(
         "UPDATE cards SET board_id = ?2, x = ?3, y = ?4, width = ?5, height = ?6, z_index = ?7,
-                          unsorted = ?8, group_id = ?9
+                          unsorted = ?8, group_id = CASE WHEN ?10 THEN ?9 ELSE group_id END
          WHERE id = ?1",
         params![
             id,
@@ -458,7 +523,8 @@ pub fn update_card_place(
             place.frame.height,
             place.z_index,
             i64::from(place.unsorted),
-            place.group_id,
+            group,
+            write_group,
         ],
     )?;
     Ok(())
