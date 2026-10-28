@@ -103,6 +103,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
         frame: { x, y, width: noteWidthForText(plainText), height: 120 },
         zIndex: notes.length,
         revision: 1,
+        groupId: null,
         documentJson,
         plainText,
         colorToken: "default",
@@ -165,6 +166,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
         frame,
         zIndex: 0,
         revision: 1,
+        groupId: null,
         target: {
           id: boardId,
           boardRevision: 1,
@@ -215,6 +217,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
             : { x, y, width, height },
           zIndex: cardsRef.current.length,
           revision: 1,
+          groupId: null,
           asset,
           captionJson: plainTextToDocument(""),
           captionPlainText: "",

@@ -5,19 +5,22 @@ use tauri::State;
 
 use crate::app::Workspace;
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::{CardDto, CardReceipt, CreateGroupInput, UpdateGroupInput};
+use crate::domain::models::{CardReceipt, CreateGroupInput, GroupCreatedReceipt, UpdateGroupInput};
 use crate::domain::mutation::Mutation;
 use crate::telemetry::instrument_async;
 
-/// Создаёт группу (идемпотентно по id) и возвращает сохранённую карточку.
+/// Создаёт группу (идемпотентно по id) вместе с участниками `member_ids` и
+/// возвращает сохранённую карточку плюс ревизии участников.
 #[tauri::command]
 pub async fn create_group(
     ws: State<'_, Workspace>,
     input: CreateGroupInput,
-) -> Result<CardDto, WorkspaceError> {
+) -> Result<GroupCreatedReceipt, WorkspaceError> {
     let ws = ws.inner().clone();
     instrument_async("create_group", async move {
-        ws.apply(Mutation::CreateGroup(input)).await?.into_card()
+        ws.apply(Mutation::CreateGroup(input))
+            .await?
+            .into_group_created()
     })
     .await
 }

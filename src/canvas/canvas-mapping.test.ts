@@ -17,6 +17,7 @@ function card(overrides: Partial<CanvasCard> = {}): CanvasCard {
     frame: { x: 10, y: 20, width: 200, height: 80 },
     zIndex: 3,
     revision: 1,
+    groupId: null,
     ...overrides,
   };
 }

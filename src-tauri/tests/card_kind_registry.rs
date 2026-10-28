@@ -236,6 +236,8 @@ fn one_card_of_each_kind(conn: &mut Connection) -> Vec<(CardKind, String)> {
             z_index: 0,
             title: Some("Research".into()),
             color_token: Some("lavender".into()),
+            member_ids: Vec::new(),
+            group_id: None,
         },
     )
     .unwrap();
@@ -449,6 +451,8 @@ fn every_frame_writer_validates() {
                 z_index: 0,
                 title: None,
                 color_token: None,
+                member_ids: Vec::new(),
+                group_id: None,
             },
         )
         .map(|_| ())

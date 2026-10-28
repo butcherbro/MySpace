@@ -61,10 +61,11 @@ fn tracking_sql() -> String {
                 ('card', NEW.id, 'place'), ('card', NEW.id, 'life'), ('card', NEW.id, 'body');
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS sync_cards_au_place
-         AFTER UPDATE OF board_id, x, y, width, height, z_index, unsorted ON main.cards
+         AFTER UPDATE OF board_id, x, y, width, height, z_index, unsorted, group_id ON main.cards
          WHEN OLD.board_id IS NOT NEW.board_id OR OLD.x IS NOT NEW.x OR OLD.y IS NOT NEW.y
            OR OLD.width IS NOT NEW.width OR OLD.height IS NOT NEW.height
            OR OLD.z_index IS NOT NEW.z_index OR OLD.unsorted IS NOT NEW.unsorted
+           OR OLD.group_id IS NOT NEW.group_id
          BEGIN
             INSERT OR IGNORE INTO sync_dirty VALUES ('card', NEW.id, 'place');
          END;
@@ -471,6 +472,11 @@ mod tests {
         conn.execute("UPDATE cards SET x = 5 WHERE id = 'c'", [])
             .unwrap();
         conn.execute("UPDATE boards SET change_seq = change_seq + 1", [])
+            .unwrap();
+        assert_eq!(dirty(&conn), ["card:place"]);
+        clear(&conn).unwrap();
+        // Членство (ADR-0013) входит в регистр `place`.
+        conn.execute("UPDATE cards SET group_id = 'g' WHERE id = 'c'", [])
             .unwrap();
         assert_eq!(dirty(&conn), ["card:place"]);
         clear(&conn).unwrap();

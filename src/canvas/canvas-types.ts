@@ -31,6 +31,8 @@ export interface CanvasCard {
    * changes (which bump revision) and rebuild its node contents accordingly.
    */
   revision: number;
+  /** Группа, в которой карточка состоит (хранимый состав, ADR-0013); `null` — ни в какой. */
+  groupId: string | null;
   /** For board portals, the id of the board they lead to. */
   targetBoardId?: string;
   /** For board portals: the portal's display title (re-render key). */
@@ -78,6 +80,12 @@ export interface CanvasViewport {
 export interface CardMoved {
   id: string;
   frame: CanvasFrame;
+  /**
+   * Новое членство по правилу броска (ADR-0013): есть только у карточки,
+   * брошенной самостоятельно, когда её группа меняется; `groupId: null` —
+   * вышла из группы. Отсутствует — членство не меняется.
+   */
+  group?: { groupId: string | null };
 }
 
 /** A multi-card move reports every moved card's final frame. */

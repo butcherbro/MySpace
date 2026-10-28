@@ -34,6 +34,7 @@ function note(id: string, x = 0): NoteCardDto {
     frame: { x, y: 0, width: 200, height: 80 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     documentJson: { type: "doc" },
     plainText: "",
     colorToken: "default",
@@ -48,6 +49,7 @@ function embed(id: string): EmbedCardDto {
     frame: { x: 0, y: 0, width: 320, height: 180 },
     zIndex: 0,
     revision: 2,
+    groupId: null,
     sourceUrl: "https://example.com",
     displayUrl: "example.com",
     siteName: null,
@@ -72,6 +74,7 @@ function foreignAlias(id: string): FilesystemAliasDto {
     frame: { x: 10, y: 20, width: 300, height: 220 },
     zIndex: 3,
     revision: 4,
+    groupId: null,
     targetKind: "folder",
     pathHint: "/Users/me/Research",
     displayName: "Research",
@@ -153,6 +156,16 @@ describe("current board reducer", () => {
 
     expect(state.unsortedCards).toEqual([]);
     expect(state.cards).toEqual([{ ...unsorted, frame, revision: 2 }]);
+  });
+
+  it("a card placed from Unsorted leaves its group, as the backend clears it", () => {
+    const unsorted = { ...note("a"), groupId: "g" };
+    const frame = { x: 420, y: 240, width: 200, height: 80 };
+    const state = reducer(
+      { ...initialState, unsortedCards: [unsorted] },
+      { type: "unsortedCardPlaced", id: "a", frame, revision: 2 },
+    );
+    expect(state.cards[0].groupId).toBeNull();
   });
 
   it("moves a card to Unsorted using the revision carried by the action", () => {

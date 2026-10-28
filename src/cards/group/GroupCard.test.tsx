@@ -10,6 +10,7 @@ const group: GroupCardDto = {
   frame: { x: 0, y: 0, width: 640, height: 320 },
   zIndex: 0,
   revision: 1,
+  groupId: null,
   title: "Проект",
   colorToken: "pink",
 };

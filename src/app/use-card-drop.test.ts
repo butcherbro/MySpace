@@ -63,6 +63,7 @@ function note(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
     frame: { x: 0, y: 0, width: 240, height: 120 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     documentJson: { type: "doc", content: [] },
     plainText: "",
     colorToken: "default",
@@ -78,6 +79,7 @@ function portal(overrides: Partial<BoardPortalDto> = {}): BoardPortalDto {
     frame: { x: 0, y: 0, width: 120, height: 112 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     target: {
       id: "board-A",
       boardRevision: 1,
@@ -271,6 +273,37 @@ describe("useCardDrop", () => {
       });
       expect(test.dispatch).toHaveBeenCalledWith({ type: "cardMoved", id: "a", revision: 6, frame: afterA });
       expect(test.dispatch).toHaveBeenCalledWith({ type: "cardMoved", id: "b", revision: 8, frame: afterB });
+    });
+
+    it("carries a membership change as before/after groupId and applies the sent groupId locally", async () => {
+      const a = note({ id: "a", revision: 5, groupId: "g" });
+      const b = note({ id: "b", revision: 7 });
+      const frame = { x: 900, y: 900, width: 240, height: 120 };
+      const test = harness({
+        cards: [a, b],
+        execute: async () => ({
+          cards: [
+            { id: "a", revision: 6 },
+            { id: "b", revision: 8 },
+          ],
+        }),
+      });
+
+      await act(async () => {
+        test.result.current.handleCardsMoved({
+          cards: [
+            { id: "a", frame, group: { groupId: null } },
+            { id: "b", frame },
+          ],
+        });
+        await test.queueRef.current.flush();
+      });
+
+      const [command] = test.execute.mock.calls[0];
+      expect(command).toMatchObject({ moves: [{ id: "a", group: { before: "g", after: null } }, { id: "b" }] });
+      expect((command as unknown as { moves: Array<{ group?: unknown }> }).moves[1].group).toBeUndefined();
+      expect(test.dispatch).toHaveBeenCalledWith({ type: "cardMoved", id: "a", revision: 6, frame, groupId: null });
+      expect(test.dispatch).toHaveBeenCalledWith({ type: "cardMoved", id: "b", revision: 8, frame });
     });
 
     it("skips ids not found in cardsRef", async () => {

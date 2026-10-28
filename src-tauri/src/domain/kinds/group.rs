@@ -1,10 +1,13 @@
 //! `group` cards (ADR-0013): a named, coloured frame under other cards
-//! (`group_cards`). The group owns nothing: membership is geometric and
-//! lives only on the frontend, so the detail row is just title and colour.
+//! (`group_cards`). The group owns nothing: membership is stored on the
+//! member (`cards.group_id`, migration 0029), so the detail row is just
+//! title and colour.
 
 use rusqlite::{Connection, Row};
 
-use super::{card_frame, load_board_rows, load_one_row, DetailTable, AFTER_CARD, CARD_COLUMNS};
+use super::{
+    card_frame, card_group_id, load_board_rows, load_one_row, DetailTable, AFTER_CARD, CARD_COLUMNS,
+};
 use crate::domain::card_kind::{
     CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
 };
@@ -33,6 +36,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
         frame: card_frame(row)?,
         z_index: row.get(6)?,
         revision: row.get(7)?,
+        group_id: card_group_id(row)?,
         title: row.get(AFTER_CARD)?,
         color_token: row.get(AFTER_CARD + 1)?,
     }))

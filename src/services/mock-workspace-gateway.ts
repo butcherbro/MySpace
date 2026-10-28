@@ -19,6 +19,7 @@ import type {
   CreateConnectorInput,
   CreateGroupInput,
   GroupCardDto,
+  GroupCreatedReceipt,
   UpdateGroupInput,
   CreateFileCardInput,
   CreateFolderAliasInput,
@@ -263,7 +264,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   readCard(cardId: string): Promise<CardDto> {
     const card = this.snapshot.cards.find((c) => c.id === cardId);
     if (!card) return Promise.reject(new Error(`card not found: ${cardId}`));
-    return Promise.resolve({ ...card });
+    return Promise.resolve({ ...card, groupId: this.effectiveGroupId(card) });
   }
 
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot> {
@@ -286,6 +287,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         frame: { x: 40, y: 40, width: 280, height: 180 },
         zIndex: 0,
         revision: 1,
+        groupId: null,
         targetKind: "folder",
         pathHint: "/Users/me/Research",
         displayName: "Research",
@@ -377,7 +379,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         trashBatchId: null,
       });
     }
-    // Тестовая фикстура групп: группа «Проект» с двумя заметками внутри и одна
+    // Тестовая фикстура групп: группа «Проект» с двумя заметками-членами и одна
     // заметка снаружи. Один раз, чтобы перемещения переживали перезагрузку.
     if (boardId === "home" && !this.groupsFixtureSeeded && fixtureParam() === "groups") {
       this.groupsFixtureSeeded = true;
@@ -407,18 +409,64 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         boardId === this.board.id
           ? structuredClone(this.snapshot.viewport)
           : structuredClone(this.childViewports.get(boardId) ?? { x: 0, y: 0, zoom: 1, revision: 1 }),
-      cards: structuredClone(
-        this.snapshot.cards.filter(
-          (card) => card.boardId === boardId && !(card as { unsorted?: boolean }).unsorted,
-        ),
-      ),
-      unsortedCards: structuredClone(
-        this.snapshot.cards.filter(
-          (card) => card.boardId === boardId && (card as { unsorted?: boolean }).unsorted,
-        ),
-      ),
+      cards: this.snapshot.cards
+        .filter((card) => card.boardId === boardId && !(card as { unsorted?: boolean }).unsorted)
+        .map((card) => this.normalizedCard(card)),
+      unsortedCards: this.snapshot.cards
+        .filter((card) => card.boardId === boardId && (card as { unsorted?: boolean }).unsorted)
+        .map((card) => this.normalizedCard(card)),
       connectors: this.liveConnectors(boardId),
     });
+  }
+
+  /**
+   * Как загрузчик бэкенда: хранимый `groupId` действует, только пока группа —
+   * живая карточка-группа на холсте той же доски; иначе членство «спит» и
+   * наружу отдаётся `null` (корзина, Unsorted, другая доска, пропавшая группа).
+   */
+  private effectiveGroupId(card: CardDto): string | null {
+    if (card.groupId === null) return null;
+    const group = this.snapshot.cards.find((c) => c.id === card.groupId);
+    const live =
+      group !== undefined &&
+      group.kind === "group" &&
+      group.boardId === card.boardId &&
+      !(group as { unsorted?: boolean }).unsorted;
+    return live ? card.groupId : null;
+  }
+
+  private normalizedCard(card: CardDto): CardDto {
+    return { ...structuredClone(card), groupId: this.effectiveGroupId(card) };
+  }
+
+  /**
+   * Проверка назначения карточки `cardId` в группу `groupId` (как бэкенд): цель —
+   * живая группа той же доски, не сама карточка и не её потомок. Ошибка того же
+   * вида, что у связи с плохим концом.
+   */
+  private groupAssignmentError(cardId: string, groupId: string): ReturnType<typeof constraintViolation> | null {
+    const card = this.snapshot.cards.find((c) => c.id === cardId);
+    const group = this.snapshot.cards.find((c) => c.id === groupId);
+    if (
+      !card ||
+      !group ||
+      group.kind !== "group" ||
+      (group as { unsorted?: boolean }).unsorted ||
+      group.boardId !== card.boardId ||
+      group.id === card.id
+    ) {
+      return constraintViolation(`group is not a live group of the card's board: ${groupId}`);
+    }
+    // Вверх по хранимой цепочке группы-цели; встретили саму карточку — цикл.
+    // visited: цепочка может быть битой или уже зацикленной (синк), обход должен кончиться.
+    const visited = new Set<string>();
+    let current: string | null = group.groupId;
+    while (current !== null && !visited.has(current)) {
+      if (current === card.id) return constraintViolation(`group assignment makes a cycle: ${cardId} -> ${groupId}`);
+      visited.add(current);
+      current = this.snapshot.cards.find((c) => c.id === current)?.groupId ?? null;
+    }
+    return null;
   }
 
   /** Как загрузчик бэкенда: не удалена, и оба конца — живые карточки на холсте этой доски. */
@@ -564,6 +612,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       documentJson: input.documentJson,
       plainText,
       colorToken: "default",
@@ -624,11 +673,27 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(staleRevision(item.expectedRevision, card.revision));
       }
     }
+    // Как бэкенд: элементы применяются по очереди, и назначение группы
+    // проверяется с учётом уже применённых (G1→G2, затем G2→G1 — цикл). Ошибка
+    // откатывает весь пакет, как транзакция.
+    const touched = input.cards.map((item) => this.snapshot.cards.find((c) => c.id === item.id)!);
+    const saved = touched.map((card) => ({ card, revision: card.revision, frame: card.frame, groupId: card.groupId }));
     const receipts: CardReceipt[] = [];
-    for (const item of input.cards) {
-      const card = this.snapshot.cards.find((c) => c.id === item.id)!;
+    for (const [index, item] of input.cards.entries()) {
+      const card = touched[index];
+      const groupId = item.group?.groupId ?? null;
+      const invalid = groupId === null ? null : this.groupAssignmentError(item.id, groupId);
+      if (invalid) {
+        for (const entry of saved.reverse()) {
+          entry.card.revision = entry.revision;
+          entry.card.frame = entry.frame;
+          entry.card.groupId = entry.groupId;
+        }
+        return Promise.reject(invalid);
+      }
       card.revision += 1;
       card.frame = { ...item.frame };
+      if (item.group) card.groupId = item.group.groupId;
       receipts.push({ id: card.id, revision: card.revision });
     }
     return Promise.resolve({ cards: receipts });
@@ -722,6 +787,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: 0,
       revision: 1,
+      groupId: null,
       target: {
         id: input.boardId,
         boardRevision: 1,
@@ -772,13 +838,18 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     });
 
     const sourceCards = this.snapshot.cards.filter((c) => c.boardId === sourceBoardId);
+    // Как бэкенд: членство копии указывает на копию группы, если та скопирована
+    // в той же пачке, иначе обнуляется.
+    const idMap = new Map<string, string>();
+    const copies: CardDto[] = [];
     for (const card of sourceCards) {
       const newCardId = `dup-card-${this.duplicateSequence++}`;
+      idMap.set(card.id, newCardId);
       if (card.kind === "board_portal") {
         const nestedNewBoardId = `dup-board-${this.duplicateSequence++}`;
         this.copyBoardSubtree(card.target.id, nestedNewBoardId, newBoardId, card.target.title);
         const nested = this.boards.get(nestedNewBoardId)!;
-        this.snapshot.cards.push({
+        copies.push({
           ...structuredClone(card),
           id: newCardId,
           boardId: newBoardId,
@@ -793,13 +864,17 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         });
         void nested;
       } else {
-        this.snapshot.cards.push({
+        copies.push({
           ...structuredClone(card),
           id: newCardId,
           boardId: newBoardId,
           revision: 1,
         });
       }
+    }
+    for (const copy of copies) {
+      copy.groupId = copy.groupId === null ? null : (idMap.get(copy.groupId) ?? null);
+      this.snapshot.cards.push(copy);
     }
   }
 
@@ -828,6 +903,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: 0,
       revision: 1,
+      groupId: null,
       target: {
         id: input.newBoardId,
         boardRevision: 1,
@@ -919,6 +995,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       asset: {
         id: input.assetId,
         fileName: "",
@@ -946,6 +1023,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       targetBoardId: input.targetBoardId,
       target: {
         id: target.id,
@@ -960,12 +1038,12 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve(structuredClone(card));
   }
 
-  createGroup(input: CreateGroupInput): Promise<GroupCardDto> {
-    // Как бэкенд: повтор с тем же id возвращает сохранённую карточку.
+  createGroup(input: CreateGroupInput): Promise<GroupCreatedReceipt> {
+    // Как бэкенд: повтор с тем же id возвращает сохранённую карточку и пустой список членов.
     const existing = this.snapshot.cards.find((c) => c.id === input.id);
     if (existing) {
       if (existing.kind !== "group") return Promise.reject(constraintViolation(`card ${input.id} is not a group`));
-      return Promise.resolve(structuredClone(existing));
+      return Promise.resolve({ group: this.normalizedCard(existing) as GroupCardDto, members: [] });
     }
     if (!this.boards.has(input.boardId)) {
       return Promise.reject({ code: "not_found", message: `board ${input.boardId}` });
@@ -985,11 +1063,52 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       title: input.title ?? "",
       colorToken,
     };
+    const memberIds = [...new Set(input.memberIds ?? [])];
+    // Проверка до записи: неизвестный или чужой член — ошибка, ничего не создано.
+    for (const memberId of memberIds) {
+      const member = this.snapshot.cards.find((c) => c.id === memberId);
+      if (!member || (member as { unsorted?: boolean }).unsorted || member.boardId !== input.boardId) {
+        return Promise.reject(constraintViolation(`group member is not a live card of the board: ${memberId}`));
+      }
+      if (memberId === input.id) {
+        return Promise.reject(constraintViolation("a group cannot be its own member"));
+      }
+    }
+    const parentId = input.groupId ?? null;
+    if (parentId !== null) {
+      const parent = this.snapshot.cards.find((c) => c.id === parentId);
+      if (
+        !parent ||
+        parent.kind !== "group" ||
+        (parent as { unsorted?: boolean }).unsorted ||
+        parent.boardId !== input.boardId
+      ) {
+        return Promise.reject(constraintViolation(`group is not a live group of the card's board: ${parentId}`));
+      }
+      // Цикл: родитель или кто-то выше по его цепочке становится членом новой группы.
+      const visited = new Set<string>();
+      let current: string | null = parentId;
+      while (current !== null && !visited.has(current)) {
+        if (memberIds.includes(current)) {
+          return Promise.reject(constraintViolation(`group assignment makes a cycle: ${input.id} -> ${parentId}`));
+        }
+        visited.add(current);
+        current = this.snapshot.cards.find((c) => c.id === current)?.groupId ?? null;
+      }
+    }
+    card.groupId = parentId;
     this.snapshot.cards.push(card);
-    return Promise.resolve(structuredClone(card));
+    const members: CardReceipt[] = memberIds.map((memberId) => {
+      const member = this.snapshot.cards.find((c) => c.id === memberId)!;
+      member.groupId = card.id;
+      member.revision += 1;
+      return { id: member.id, revision: member.revision };
+    });
+    return Promise.resolve({ group: structuredClone(card), members });
   }
 
   updateGroup(input: UpdateGroupInput): Promise<CardReceipt> {
@@ -1024,6 +1143,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       targetKind: "folder",
       pathHint: input.sourcePath,
       displayName,
@@ -1170,6 +1290,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       asset: {
         id: `asset-${input.id}`,
         fileName,
@@ -1263,6 +1384,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...note.frame },
       zIndex: note.zIndex,
       revision: note.revision + 1,
+      groupId: null,
       sourceUrl: input.sourceUrl,
       displayUrl: input.displayUrl,
       siteName: null,
@@ -1874,6 +1996,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     (card as { unsorted?: boolean }).unsorted = false;
+    // Как бэкенд: размещённая из Unsorted карточка ни в какой группе не состоит.
+    card.groupId = null;
     card.frame = { ...input.frame };
     return Promise.resolve({ id: card.id, revision: card.revision });
   }
@@ -2101,6 +2225,7 @@ function foreignShortcutFixtureCards(thisDeviceName: string): CardDto[] {
     frame: { x, y: 60, width: 300, height: 220 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     targetKind: "folder",
     pathHint,
     displayName,
@@ -2132,6 +2257,7 @@ function staleCardFixtureNote(revision: number, text: string): CardDto {
     frame: { x: 120, y: 120, width: 240, height: 120 },
     zIndex: 0,
     revision,
+    groupId: null,
     documentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
     plainText: text,
     colorToken: "default",
@@ -2147,6 +2273,7 @@ function connectorsFixtureCards(): CardDto[] {
     frame: { x, y, width: 240, height: 120 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     documentJson: plainTextToDocument(text),
     plainText: text,
     colorToken: "default",
@@ -2154,15 +2281,16 @@ function connectorsFixtureCards(): CardDto[] {
   return [note("connector-note-a", 80, 120, "Note A"), note("connector-note-b", 560, 200, "Note B")];
 }
 
-/** Доска `?fixture=groups`: группа «Проект», две заметки в ней и одна снаружи. */
+/** Доска `?fixture=groups`: группа «Проект», две заметки-члена в ней и одна снаружи. */
 function groupsFixtureCards(): CardDto[] {
-  const note = (id: string, x: number, y: number, text: string): CardDto => ({
+  const note = (id: string, x: number, y: number, text: string, groupId: string | null): CardDto => ({
     kind: "note",
     id,
     boardId: "home",
     frame: { x, y, width: 240, height: 120 },
     zIndex: 1,
     revision: 1,
+    groupId,
     documentJson: plainTextToDocument(text),
     plainText: text,
     colorToken: "default",
@@ -2174,14 +2302,15 @@ function groupsFixtureCards(): CardDto[] {
     frame: { x: 60, y: 80, width: 640, height: 320 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     title: "Проект",
     colorToken: "pink",
   };
   return [
     group,
-    note("group-note-a", 100, 150, "Inside A"),
-    note("group-note-b", 420, 200, "Inside B"),
-    note("group-note-outside", 820, 160, "Outside"),
+    note("group-note-a", 100, 150, "Inside A", "group-project"),
+    note("group-note-b", 420, 200, "Inside B", "group-project"),
+    note("group-note-outside", 820, 160, "Outside", null),
   ];
 }
 
@@ -2194,6 +2323,7 @@ function corruptNoteFixtureCards(): CardDto[] {
     frame: { x, y: 60, width: 240, height: 120 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     documentJson: corrupt
       ? { type: "doc", content: [] }
       : { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },

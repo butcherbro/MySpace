@@ -21,7 +21,7 @@ async function groupOnHome(gateway: MockWorkspaceGateway): Promise<GroupCardDto 
 async function created() {
   const gateway = new MockWorkspaceGateway();
   const dispatcher = new CommandDispatcher(gateway);
-  const group = await dispatcher.execute(new CreateGroupCommand("create", input));
+  const { group } = await dispatcher.execute(new CreateGroupCommand("create", input));
   return { gateway, dispatcher, group };
 }
 
@@ -40,6 +40,46 @@ describe("group commands", () => {
 
     await dispatcher.redo();
     expect(await groupOnHome(gateway)).toMatchObject({ id: "g1", frame: input.frame });
+  });
+
+  it("CreateGroupCommand undo puts members back into their previous group, redo moves them in again", async () => {
+    const gateway = new MockWorkspaceGateway();
+    const dispatcher = new CommandDispatcher(gateway);
+    for (const id of ["n1", "n2"]) {
+      await gateway.createNote({
+        id,
+        boardId: "home",
+        frame: { x: 100, y: 100, width: 200, height: 80 },
+        zIndex: 0,
+        documentJson: { type: "doc", content: [] },
+      });
+    }
+    await gateway.createGroup({ ...input, id: "outer", memberIds: ["n1"] });
+    const groupIdOf = async (id: string) =>
+      (await gateway.loadBoardSnapshot("home")).cards.find((c) => c.id === id)?.groupId;
+
+    await dispatcher.execute(
+      new CreateGroupCommand(
+        "create",
+        { ...input, id: "inner", memberIds: ["n1", "n2"], groupId: "outer" },
+        [
+          { id: "n1", groupId: "outer" },
+          { id: "n2", groupId: null },
+        ],
+      ),
+    );
+    expect(await groupIdOf("inner")).toBe("outer");
+    expect(await groupIdOf("n1")).toBe("inner");
+
+    await dispatcher.undo();
+    expect(await groupIdOf("inner")).toBeUndefined();
+    expect(await groupIdOf("n1")).toBe("outer");
+    expect(await groupIdOf("n2")).toBeNull();
+
+    await dispatcher.redo();
+    expect(await groupIdOf("n1")).toBe("inner");
+    expect(await groupIdOf("n2")).toBe("inner");
+    expect((await gateway.readCard("n1")).frame).toEqual({ x: 100, y: 100, width: 200, height: 80 });
   });
 
   it("UpdateGroupCommand renames, and undo/redo chain the revision from each receipt", async () => {

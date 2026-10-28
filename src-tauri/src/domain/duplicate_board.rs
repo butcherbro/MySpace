@@ -84,6 +84,7 @@ struct SourceCard {
     height: f64,
     z_index: i64,
     unsorted: i64,
+    group_id: Option<String>,
 }
 
 /// Recursively copies `source_board_id`'s active (non-trashed) content into a
@@ -125,7 +126,7 @@ pub(crate) fn copy_board_subtree(
 
     let source_cards: Vec<SourceCard> = {
         let mut stmt = tx.prepare(
-            "SELECT id, kind, x, y, width, height, z_index, unsorted
+            "SELECT id, kind, x, y, width, height, z_index, unsorted, group_id
              FROM cards WHERE board_id = ?1 AND deleted_at IS NULL",
         )?;
         let rows = stmt.query_map([source_board_id], |row| {
@@ -138,6 +139,7 @@ pub(crate) fn copy_board_subtree(
                 height: row.get(5)?,
                 z_index: row.get(6)?,
                 unsorted: row.get(7)?,
+                group_id: row.get(8)?,
             })
         })?;
         let mut out = Vec::new();
@@ -185,6 +187,20 @@ pub(crate) fn copy_board_subtree(
         // duplicates its target board (see `kinds::board_portal`).
         handler(kind).copy_detail(tx, &card.id, &new_card_id, &ctx)?;
         copied_ids.insert(card.id.clone(), new_card_id);
+    }
+
+    // Членство (ADR-0013) переносится только на копию группы из этого же
+    // пакета; группа вне копии (в корзине, на другой доске) — NULL у копии.
+    for card in &source_cards {
+        let Some(group_id) = &card.group_id else {
+            continue;
+        };
+        if let Some(new_group_id) = copied_ids.get(group_id) {
+            tx.execute(
+                "UPDATE cards SET group_id = ?1 WHERE id = ?2",
+                params![new_group_id, copied_ids[&card.id]],
+            )?;
+        }
     }
 
     connectors::copy_board_connectors(tx, source_board_id, new_board_id, &copied_ids, now)?;

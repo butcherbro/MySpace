@@ -319,6 +319,7 @@ function App() {
     frame: c.frame,
     zIndex: c.zIndex,
     revision: c.revision,
+    groupId: c.groupId,
     targetBoardId: c.kind === "board_portal" ? c.target.id : undefined,
     portalTitle: c.kind === "board_portal" ? c.target.title : undefined,
     portalCoverAssetId: c.kind === "board_portal" ? c.target.coverAsset?.id ?? undefined : undefined,

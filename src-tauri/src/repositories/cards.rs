@@ -11,7 +11,7 @@ use crate::domain::kinds;
 use crate::domain::models::{
     ApplyEmbedMetadataInput, BatchItem, CardDto, CardReceipt, CardsReceipt,
     ConvertNoteToEmbedInput, CreateImageCardInput, CreateItemBatchInput, CreateLinkBatchInput,
-    CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata, Frame,
+    CreateLinkBatchResult, CreateNoteInput, EmbedCardDto, EmbedForMetadata, Frame, GroupAssignment,
     MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, PlaceUnsortedCardInput,
     SetNoteColorInput, TextReceipt, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
     UpdateImageCaptionInput, UpdateNoteInput,
@@ -346,9 +346,34 @@ pub fn move_cards(
     let mut cards = Vec::with_capacity(input.cards.len());
 
     for item in &input.cards {
+        // Членство меняется в том же UPDATE, что и рамка: одна ревизия на
+        // карточку. Проверка идёт по пунктам по порядку, так что следующий
+        // пункт видит group_id, записанный предыдущим, и цикл не собрать
+        // и внутри одного пакета. Пропавшую карточку проверка пропускает:
+        // её диагностирует UPDATE ниже (NotFound / StaleRevision).
+        if let Some(GroupAssignment {
+            group_id: Some(group_id),
+        }) = &item.group
+        {
+            let board_id: Option<String> = tx
+                .query_row(
+                    "SELECT board_id FROM cards WHERE id = ?1",
+                    [item.id.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(board_id) = board_id {
+                super::groups::validate_group_assignment(&tx, &item.id, &board_id, group_id)?;
+            }
+        }
+        let (set_group, group_id) = match &item.group {
+            Some(assignment) => (true, assignment.group_id.as_deref()),
+            None => (false, None),
+        };
         let changed = tx.execute(
             "UPDATE cards
-             SET x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
+             SET x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5,
+                 group_id = CASE WHEN ?8 THEN ?9 ELSE group_id END
              WHERE id = ?6 AND revision = ?7",
             params![
                 item.frame.x,
@@ -358,6 +383,8 @@ pub fn move_cards(
                 db::migrations::now_millis(),
                 item.id,
                 item.expected_revision,
+                set_group,
+                group_id,
             ],
         )?;
 
@@ -845,10 +872,13 @@ pub fn place_unsorted_card(
     // One IMMEDIATE transaction so the stale-revision diagnosis reads the same
     // state the guarded UPDATE saw.
     let tx = immediate_tx(conn)?;
+    // Карточка из Unsorted кладётся туда, куда её бросили, а не в «спящую»
+    // группу (ADR-0013): иначе членство ожило бы, где бы она ни легла.
     let changed = tx.execute(
         &format!(
             "UPDATE cards
-             SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5
+             SET unsorted = 0, x = ?1, y = ?2, width = ?3, height = ?4, revision = revision + 1, updated_at = ?5,
+                 group_id = NULL
              WHERE id = ?6 AND revision = ?7 AND kind IN {}",
             sql_in_list(CardKind::LEAF)
         ),

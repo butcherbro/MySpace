@@ -30,6 +30,7 @@ function corruptNote(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
     frame: { x: 0, y: 0, width: 200, height: 80 },
     zIndex: 0,
     revision: 3,
+    groupId: null,
     documentJson: { type: "doc", content: [] },
     plainText: "first line\nsecond line",
     colorToken: "default",

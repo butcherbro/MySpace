@@ -12,6 +12,7 @@ function note(id: string, text = "hello"): CardDto {
     frame: { x: 0, y: 0, width: 200, height: 80 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     documentJson: { type: "doc" },
     plainText: text,
     colorToken: "default",
@@ -26,6 +27,7 @@ function folder(id: string): CardDto {
     frame: { x: 0, y: 0, width: 360, height: 300 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     targetKind: "folder",
     pathHint: "/Volumes/Studio/Video project",
     displayName: "Video project",
@@ -62,6 +64,7 @@ describe("UnsortedPanel", () => {
       frame: { x: 0, y: 0, width: 640, height: 320 },
       zIndex: 0,
       revision: 1,
+      groupId: null,
       title,
       colorToken: "default",
     });

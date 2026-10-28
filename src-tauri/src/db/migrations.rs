@@ -200,6 +200,12 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../../migrations/0028_group_cards.sql"),
         after: Some(requeue_group_card_changes),
     },
+    Migration {
+        version: 29,
+        name: "card_group",
+        sql: include_str!("../../migrations/0029_card_group.sql"),
+        after: None,
+    },
 ];
 
 /// Rust step of migration 0027: queues every `connector` journal row this

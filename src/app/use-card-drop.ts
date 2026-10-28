@@ -2,11 +2,11 @@ import { useCallback, useEffect, type Dispatch, type RefObject } from "react";
 import { errorMessage } from "../services/error-message";
 import type { IdGenerator } from "../services/id-generator";
 import type { CommandDispatcher } from "../commands/command-dispatcher";
-import { MoveCardsCommand, MoveCardToBoardCommand } from "../commands/card-commands";
+import { MoveCardsCommand, MoveCardToBoardCommand, type MovedCard } from "../commands/card-commands";
 import { MoveBoardCommand } from "../commands/board-commands";
 import { moveSelectionOntoBoard } from "../canvas/move-selection-onto-board";
 import type { useCrossBoardDragSession } from "../canvas/use-cross-board-drag";
-import type { CanvasCard } from "../canvas/canvas-types";
+import type { CardsMoved } from "../canvas/canvas-types";
 import type { MutationQueue } from "../persistence/entity-write-queue";
 import type { BoardPortalDto, BoardSummary, CardDto, WorkspaceGateway } from "../services/workspace-gateway";
 import type { BoardViewAction } from "../state/current-board-store";
@@ -56,25 +56,19 @@ export function useCardDrop(deps: CardDropDeps) {
   } = deps;
 
   const handleCardsMoved = useCallback(
-    (e: { cards: Array<{ id: string; frame: CanvasCard["frame"] }> }) => {
+    (e: CardsMoved) => {
       void queueRef.current
         .run(async () => {
           const moves = e.cards
-            .map((moved) => {
+            .map((moved): MovedCard | null => {
               const card = cardsRef.current.find((c) => c.id === moved.id);
-              return card
-                ? {
-                    id: moved.id,
-                    revision: card.revision,
-                    before: card.frame,
-                    after: moved.frame,
-                  }
-                : null;
+              if (!card) return null;
+              const move: MovedCard = { id: moved.id, revision: card.revision, before: card.frame, after: moved.frame };
+              // Членство пишется вместе с перемещением; undo вернёт прежнее.
+              if (moved.group) move.group = { before: card.groupId, after: moved.group.groupId };
+              return move;
             })
-            .filter(
-              (x): x is { id: string; revision: number; before: CanvasCard["frame"]; after: CanvasCard["frame"] } =>
-                x !== null,
-            );
+            .filter((x): x is MovedCard => x !== null);
 
           if (moves.length === 0) return;
 
@@ -92,6 +86,7 @@ export function useCardDrop(deps: CardDropDeps) {
               id: item.id,
               revision,
               frame: item.after,
+              ...(item.group ? { groupId: item.group.after } : {}),
             });
           }
         })

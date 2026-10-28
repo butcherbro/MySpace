@@ -17,13 +17,13 @@ MySpace has no z-order management beyond `cards.z_index`, no card kind that may 
 larger than 1600 px wide, and no notion of one card moving others. Two ways to
 model a group were considered:
 
-1. **Stored membership** — a `group_members(group_id, card_id)` table maintained on
-   every move. Rejected: it duplicates what the geometry already says, it needs a
-   write on every drag end for every card that crossed a border, and it creates a
-   second truth that sync replay would have to reconcile with positions.
+1. **Stored membership** — the card remembers its group. Initially rejected (a
+   write per border crossing, a second truth next to positions). **Chosen on
+   2026-10-28** after the first user check — see «Revision 2026-10-28» below.
 2. **Geometric membership** — the group is an ordinary card of a new kind; a card
    is a member if and only if its frame lies inside the group frame at the moment
-   the question is asked. Chosen.
+   the question is asked. Chosen first, rejected after the first user check: a
+   frame dragged over foreign cards captured them.
 
 ## Decision
 
@@ -67,37 +67,13 @@ model a group were considered:
   than 1600 px; keeping a per-kind limit would put the kind into `Frame`, which
   today knows nothing about kinds. `MAX_HEIGHT` stays 10000.
 
-### Membership and movement (frontend only, no persistence)
+### Membership and movement
 
-- `isInsideGroup(card: Frame, group: Frame): boolean` — the card's whole frame is
-  inside the group frame (all four edges, no tolerance). A group inside another
-  group is a member of the outer group. A group is never a member of itself.
-- Dragging a group: at drag start the frontend computes the member set once,
-  moves members visually with the frame during the drag, and on drag end issues
-  **one** `MoveCardsCommand` with the group and every member (atomic, one undo
-  step; a `stale_revision` on any card rolls back all of them, as `move_cards`
-  already guarantees). Members are not auto-selected; selection stays as it was.
-- Dragging a card: nothing group-specific happens. Crossing the border changes
-  membership for the next computation; no write.
-- Dragging a group into another group's area moves only the dragged group and
-  its own members.
-- **Overlapping groups (rule added 2026-10-28 after the first user check).** A
-  card whose frame lies inside two groups belongs to *both* only when one of the
-  groups is nested in the other (its whole frame inside the other's); then the
-  outer group moves the inner one together with its cards, and the inner group
-  moves its own cards alone. When the two group frames overlap only partially
-  (neither contains the other), a card inside both is *contested* and moves with
-  neither group: it stays where it is when either frame is dragged. Without this
-  rule a group dragged over another one carried away every card it happened to
-  cover. The alternative — give the card to the smaller (or topmost) group —
-  was rejected because it reproduces exactly that: the dragged, usually smaller,
-  group would still take the cards of the one underneath. Two groups with
-  identical frames count as nested in both directions. `groupMembers` in
-  `group-membership.ts` implements this; nothing is stored.
-- Resizing a group (corner handles, same `ResizeCardCommand` path as images,
-  wired through a new `use-group-edits.ts` hook rather than `use-card-edits.ts`)
-  never moves cards; shrinking the frame simply drops members. Auto-expansion
-  when a member is dragged beyond the border is explicitly out of v1.
+Superseded on 2026-10-28; the current rules are in «Revision 2026-10-28: stored
+membership» below. Kept for the record: v1 as first implemented computed members
+geometrically (`isInsideGroup`, every card whose frame lay inside the frame at drag
+start), then added a «contested card» exception for partially overlapping frames
+(commit b4adaca). Both are gone.
 
 ### Z-order and hit-testing
 
@@ -151,3 +127,61 @@ may start or end on a group frame. No special casing.
 - Group title in full-text search.
 - Floating selection toolbar.
 - Collapsing a group.
+
+## Revision 2026-10-28: stored membership
+
+The first user check (Евгений, verbatim): «если группу на заметку сверху поставить,
+то она эту заметку затягивает в себе. Не ту, которую туда положил, а любую другую, на
+которую эта выделенная область ляжет.» Earlier the same day a group dragged over
+another group had carried that group's cards away. Both are the same flaw of geometric
+membership: moving the *frame* changed *who belongs*, and no geometric refinement
+(smallest frame, topmost frame, «contested» cards) fixes it, because the frame that was
+just dragged is usually the one that now contains the card.
+
+Product rule: **membership changes only by an action on the card itself.** A card joins
+a group when the user makes a group out of a selection that contains it («Group»,
+Cmd/Ctrl+G) or drops the card inside a frame; it leaves when the user drops it outside
+its frame. Moving or resizing a group moves its members and never changes the member
+set.
+
+Implementation:
+
+- `cards.group_id TEXT NULL` (migration 0029), no foreign key — sync replay may apply a
+  member before its group. The column is part of the card's sync image and moves the
+  `place` register (with the frame), not `body`: a membership change happens in the
+  same gesture as a frame change, and `body` on notes takes part in the text-conflict
+  check, so a text edit on one device plus a drop into a group on another would
+  otherwise produce a conflict copy. The `place` trigger watches the column.
+- A stored value is *dormant* while the group is trashed, unsorted or on another board,
+  and *effective* otherwise; the loaders return `group_id` normalized (NULL when
+  dormant). Trash+restore and undo of a board move therefore revive membership without
+  a write. Nothing clears the column on purge; dangling values are normalized away.
+- Only two mutations touch it: `MoveCards` (each item may carry `group: {groupId}`;
+  absent = unchanged; one revision bump) and `CreateGroup` (`memberIds`, set in the same
+  transaction, returns the group plus a receipt per member). Validation: the target is
+  a live group on the same board, not the card itself, not a descendant of the card.
+- Drop rule (frontend, `groupForDrop`): when a card is dropped, the smallest group frame
+  that contains the card's whole frame (inclusive, no tolerance) becomes its group;
+  none → it leaves its group. Only independently dragged cards are evaluated; members
+  carried along by their group are not. A dragged group is evaluated like a card, so a
+  small group dropped inside a bigger frame nests, and nested groups move with the outer
+  frame (`groupMembers` is transitive).
+- «Group» from a selection: every selected card becomes a member except cards whose
+  group (or an ancestor group) is itself selected — a selected group keeps its own.
+- Ungroup / Delete still just trash the frame. Undo of «Group» trashes the frame and
+  writes back the members' previous membership (one `MoveCards` with unchanged frames).
+- «Group» on cards that all belong to the same group G creates the new frame as a
+  member of G (`CreateGroupInput.groupId`), so the cards stay nested; members with
+  different (or no) groups give a top-level frame. Geometry is not consulted: a frame
+  that merely covers the selected cards must not become their parent.
+- A card placed back from Unsorted drops its stored membership (it is a drop outside
+  any frame by definition); a cross-board move keeps the dormant value.
+- A conflict copy made by sync replay is a new card outside any group.
+
+Consequences: one nullable column, one more write only when a drop crosses a border,
+nothing for sync beyond the image key; the geometric helpers shrink to the drop rule.
+A 0.2.6 build ignores the unknown `group_id` key (`apply_card` reads named fields), so
+rows apply and are relayed with the key intact; but every `place` write made on the old
+device arrives without the key and applies as NULL, so moving a member on a 0.2.6 device
+ungroups it everywhere. The next release after this one has the column everywhere.
+

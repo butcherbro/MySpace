@@ -4,7 +4,7 @@ import type {
   ConnectorDto,
   CreateConnectorInput,
   CreateGroupInput,
-  GroupCardDto,
+  GroupCreatedReceipt,
   UpdateGroupInput,
   RemoveConnectorInput,
   UpdateConnectorInput,
@@ -319,8 +319,8 @@ export class TauriWorkspaceGateway implements WorkspaceGateway {
     return invoke<void>("remove_connector", { connectorId: input.connectorId });
   }
 
-  createGroup(input: CreateGroupInput): Promise<GroupCardDto> {
-    return invoke<GroupCardDto>("create_group", { input });
+  createGroup(input: CreateGroupInput): Promise<GroupCreatedReceipt> {
+    return invoke<GroupCreatedReceipt>("create_group", { input });
   }
 
   updateGroup(input: UpdateGroupInput): Promise<CardReceipt> {

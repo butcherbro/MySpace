@@ -519,6 +519,7 @@ fn move_cards_moves_multiple_atomically() {
                         width: 200.0,
                         height: 80.0,
                     },
+                    group: None,
                 },
                 MoveCardItem {
                     id: "n2".to_string(),
@@ -529,6 +530,7 @@ fn move_cards_moves_multiple_atomically() {
                         width: 200.0,
                         height: 80.0,
                     },
+                    group: None,
                 },
             ],
         },
@@ -601,6 +603,7 @@ fn move_cards_rolls_back_whole_batch_on_stale_revision() {
                         width: 200.0,
                         height: 80.0,
                     },
+                    group: None,
                 },
                 MoveCardItem {
                     id: "n2".to_string(),
@@ -611,6 +614,7 @@ fn move_cards_rolls_back_whole_batch_on_stale_revision() {
                         width: 200.0,
                         height: 80.0,
                     },
+                    group: None,
                 },
             ],
         },

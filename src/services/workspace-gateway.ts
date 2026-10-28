@@ -53,6 +53,8 @@ export interface NoteCardDto {
   frame: Frame;
   zIndex: number;
   revision: number;
+  /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
+  groupId: string | null;
   documentJson: unknown;
   plainText: string;
   /** Semantic background-color preset id (`default`, `yellow`, …). */
@@ -73,6 +75,8 @@ export interface BoardPortalDto {
   frame: Frame;
   zIndex: number;
   revision: number;
+  /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
+  groupId: string | null;
   target: {
     id: string;
     boardRevision: number;
@@ -100,6 +104,8 @@ export interface BoardShortcutDto {
   frame: Frame;
   zIndex: number;
   revision: number;
+  /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
+  groupId: string | null;
   targetBoardId: string;
   target: {
     id: string;
@@ -113,8 +119,8 @@ export interface BoardShortcutDto {
 
 /**
  * Группа (ADR-0013): именованная цветная рамка под другими карточками. Состав
- * нигде не хранится — карточка входит в группу, пока её рамка лежит внутри
- * рамки группы (считает фронт, `canvas/group-membership.ts`).
+ * хранится у членов (`groupId`) и меняется только действием над самой
+ * карточкой: «Группировать» или бросок карточки в рамку / за рамку.
  */
 export interface GroupCardDto {
   kind: "group";
@@ -123,6 +129,8 @@ export interface GroupCardDto {
   frame: Frame;
   zIndex: number;
   revision: number;
+  /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
+  groupId: string | null;
   /** '' допустим: UI показывает «Группа без названия». */
   title: string;
   /** Id пресета цвета заметки ('default' | 'yellow' | 'pink' | …). */
@@ -139,6 +147,16 @@ export interface CreateGroupInput {
   title?: string;
   /** По умолчанию 'default'. */
   colorToken?: string;
+  /** Карточки, которые сразу становятся членами группы. По умолчанию []. */
+  memberIds?: string[];
+  /** Группа, в которую сразу вкладывается новая (проверяется как назначение в MoveCards). */
+  groupId?: string | null;
+}
+
+/** Ответ `createGroup`: группа и новая ревизия каждого члена. Повтор по `id` — `members: []`. */
+export interface GroupCreatedReceipt {
+  group: GroupCardDto;
+  members: CardReceipt[];
 }
 
 /** Хотя бы одно из полей `title`/`colorToken`; `stale_revision` при расхождении ревизии. */
@@ -178,6 +196,8 @@ export interface ImageCardDto {
   frame: Frame;
   zIndex: number;
   revision: number;
+  /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
+  groupId: string | null;
   asset: AssetDto;
   captionJson: unknown;
   captionPlainText: string;
@@ -203,6 +223,8 @@ export interface EmbedCardDto {
   frame: Frame;
   zIndex: number;
   revision: number;
+  /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
+  groupId: string | null;
   sourceUrl: string;
   displayUrl: string;
   siteName: string | null;
@@ -233,6 +255,8 @@ export interface FilesystemAliasDto {
   frame: Frame;
   zIndex: number;
   revision: number;
+  /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
+  groupId: string | null;
   targetKind: "folder" | "file";
   /**
    * Display path only, as written by the origin device; bookmark bytes remain
@@ -266,6 +290,8 @@ export interface FileCardDto {
   frame: Frame;
   zIndex: number;
   revision: number;
+  /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
+  groupId: string | null;
   asset: AssetDto;
   previewText: string;
   /** Generated thumbnail (PDF/office/HTML) when available. */
@@ -410,6 +436,8 @@ export interface MoveCardItemInput {
   id: string;
   expectedRevision: number;
   frame: Frame;
+  /** Новый состав: отсутствует — членство не меняется; `groupId: null` — выйти из группы. */
+  group?: { groupId: string | null };
 }
 
 export interface MoveCardsInput {
@@ -742,7 +770,7 @@ export interface WorkspaceGateway {
   /** Мягкое удаление с сохранением ревизии; отсутствующий id — no-op, чтобы цепочки undo/redo не падали с not_found. */
   removeConnector(input: RemoveConnectorInput): Promise<void>;
   /** Идемпотентно по id; constraint_violation на неизвестный цвет или плохую рамку. */
-  createGroup(input: CreateGroupInput): Promise<GroupCardDto>;
+  createGroup(input: CreateGroupInput): Promise<GroupCreatedReceipt>;
   /** Меняет название и/или цвет группы; возвращает новую ревизию. */
   updateGroup(input: UpdateGroupInput): Promise<CardReceipt>;
   /** Lists backup snapshots under `backups/`, newest first. */

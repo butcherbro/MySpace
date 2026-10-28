@@ -5,7 +5,7 @@
 import type {
   CardReceipt,
   CreateGroupInput,
-  GroupCardDto,
+  GroupCreatedReceipt,
   UpdateGroupInput,
   WorkspaceGateway,
 } from "../services/workspace-gateway";
@@ -14,27 +14,40 @@ import { CommandConflictError, type WorkspaceCommand } from "./workspace-command
 /** Поля группы, которые меняет update. */
 export type GroupPatch = Pick<UpdateGroupInput, "title" | "colorToken">;
 
-/** Создаёт группу. `undo` отправляет её в корзину, redo восстанавливает ту же партию. */
-export class CreateGroupCommand implements WorkspaceCommand<GroupCardDto> {
+/** Член новой группы и группа, в которой он состоял до создания. */
+export interface GroupMemberBefore {
+  id: string;
+  groupId: string | null;
+}
+
+/**
+ * Создаёт группу вместе с членами (`memberIds`). `undo` отправляет рамку в
+ * корзину — членство членов «засыпает»; тех, кто до создания состоял в другой
+ * группе, undo возвращает туда (иначе они выпали бы и из неё). Redo
+ * восстанавливает ту же партию и снова переводит их в новую группу.
+ */
+export class CreateGroupCommand implements WorkspaceCommand<GroupCreatedReceipt> {
   id: string;
   label = "Group";
   private trashBatchId: string | null = null;
-  private created: GroupCardDto | null = null;
+  private created: GroupCreatedReceipt | null = null;
 
   constructor(
     id: string,
     private input: CreateGroupInput,
+    private membersBefore: readonly GroupMemberBefore[] = [],
   ) {
     this.id = id;
   }
 
-  async execute(gateway: WorkspaceGateway): Promise<GroupCardDto> {
+  async execute(gateway: WorkspaceGateway): Promise<GroupCreatedReceipt> {
     if (this.trashBatchId) {
       await gateway.restoreTrashBatch(this.trashBatchId);
       this.trashBatchId = null;
       if (!this.created) {
         throw new Error("create group redo ran before its first execute");
       }
+      await this.reassign(gateway, () => this.input.id);
       return this.created;
     }
     this.created = await gateway.createGroup(this.input);
@@ -46,6 +59,29 @@ export class CreateGroupCommand implements WorkspaceCommand<GroupCardDto> {
       throw new Error("create group cannot be undone before it ran");
     }
     this.trashBatchId = await gateway.trashNote(this.input.id);
+    await this.reassign(gateway, (member) => member.groupId);
+  }
+
+  /**
+   * Одна запись MoveCards без сдвига: членам, у которых до создания была своя
+   * группа, ставит `groupId` из `target`. Ревизии и рамки читаются заново
+   * прямо перед записью (как `UpdateGroupCommand`).
+   */
+  private async reassign(
+    gateway: WorkspaceGateway,
+    target: (member: GroupMemberBefore) => string | null,
+  ): Promise<void> {
+    const members = this.membersBefore.filter((m) => m.groupId !== null);
+    if (members.length === 0) return;
+    const current = await Promise.all(members.map((m) => gateway.readCard(m.id)));
+    await gateway.moveCards({
+      cards: members.map((m, i) => ({
+        id: m.id,
+        expectedRevision: current[i].revision,
+        frame: current[i].frame,
+        group: { groupId: target(m) },
+      })),
+    });
   }
 }
 

@@ -31,11 +31,12 @@ import {
   staleNodeIds,
 } from "./canvas-mapping";
 import { connectorsToEdgeLikes } from "./connector-mapping";
-import { groupMembers } from "./group-membership";
+import { descendantGroupIds, groupForDrop, groupMembers } from "./group-membership";
 import { ConnectorEdge, type ConnectorEdgeType } from "./ConnectorEdge";
 import type {
   CanvasCard,
   CanvasConnector,
+  CardMoved,
   CanvasEvents,
   CanvasViewport,
 } from "./canvas-types";
@@ -359,7 +360,7 @@ export function CanvasAdapter({
   const windowDragMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
   const windowDragUpRef = useRef<(() => void) | null>(null);
   const draggingCardIdRef = useRef<string | null>(null);
-  // Перетаскивание с группой: члены групп (по геометрии на старте жеста), которых
+  // Перетаскивание с группой: члены групп (хранимый состав на старте жеста), которых
   // React Flow сам не двигает, и их стартовые позиции; `anchor` — узел под
   // указателем, по его смещению двигаются члены.
   const groupDragRef = useRef<{
@@ -630,7 +631,7 @@ export function CanvasAdapter({
       return { id: card.id, frame: card.frame };
     });
 
-    const valid = moved.filter((m): m is { id: string; frame: CanvasCard["frame"] } => m !== null);
+    const valid = moved.filter((m): m is CardMoved => m !== null);
     // Члены группы едут тем же смещением, что и узел под указателем, — одной
     // записью вместе с самой группой (один MoveCardsCommand, один шаг undo).
     const anchor = groupDrag ? nodesRef.current.find((n) => n.id === groupDrag.anchorId) : undefined;
@@ -645,8 +646,47 @@ export function CanvasAdapter({
       }
     }
     if (valid.length > 0) {
-      events.onCardsMoved?.({ cards: valid });
+      events.onCardsMoved?.({ cards: withDropMembership(valid, new Set(ids)) });
     }
+  };
+
+  // Правило броска (ADR-0013): состав меняет только карточка, брошенная сама
+  // (`independent`: узел под указателем, выделение, сами группы). Члены, которых
+  // везла рамка, его не меняют — иначе рамка, наехавшая на чужую заметку,
+  // забирала бы её. По той же причине в жесте, где ехала группа, её члены не
+  // пересчитываются (они едут вместе с ней), а сдвинутые группы не принимают
+  // карточек: выделение «рамка + чужая заметка под ней» — это перенос рамки,
+  // а не бросок заметки в неё. Рамки неподвижных групп берём с живых узлов:
+  // `cards` обновится только после ответа MoveCards, и только что сдвинутая
+  // прошлым жестом группа проверялась бы на старом месте.
+  const withDropMembership = (moved: CardMoved[], independent: ReadonlySet<string>): CardMoved[] => {
+    const movedIds = new Set(moved.map((m) => m.id));
+    const nodeById = new Map(nodesRef.current.map((n) => [n.id, n]));
+    const candidates = cards.flatMap((card) => {
+      if (card.kind !== "group" || movedIds.has(card.id)) return [];
+      const node = nodeById.get(card.id);
+      if (!node) return [card];
+      return [
+        {
+          ...card,
+          frame: {
+            x: node.position.x,
+            y: node.position.y,
+            width: node.width ?? card.frame.width,
+            height: node.height ?? card.frame.height,
+          },
+        },
+      ];
+    });
+    return moved.map((m) => {
+      if (!independent.has(m.id)) return m;
+      const source = cards.find((c) => c.id === m.id);
+      if (!source) return m;
+      if (source.groupId !== null && movedIds.has(source.groupId)) return m;
+      const excluded = source.kind === "group" ? descendantGroupIds(source.id, cards) : new Set([source.id]);
+      const next = groupForDrop(m.frame, candidates, excluded);
+      return next === source.groupId ? m : { ...m, group: { groupId: next } };
+    });
   };
 
   const handleNodeClick = (
@@ -706,8 +746,9 @@ export function CanvasAdapter({
   const handleNodeDragStart = (event: React.MouseEvent | MouseEvent | TouchEvent, node: Node<CardNodeData>) => {
     draggingCardIdRef.current = node.id;
 
-    // Состав групп считается один раз на старте (ADR-0013). Члены, которые уже
-    // в перетаскиваемом наборе, React Flow двигает сам — их не дублируем.
+    // Члены групп — по хранимому составу на старте жеста (ADR-0013), без
+    // геометрии. Члены, которые уже в перетаскиваемом наборе, React Flow двигает
+    // сам — их не дублируем.
     const selected = selectedIdsRef.current;
     const draggedIds = selected.has(node.id) && selected.size > 1 ? [...selected] : [node.id];
     const dragged = new Set(draggedIds);

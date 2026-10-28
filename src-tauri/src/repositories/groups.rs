@@ -1,12 +1,17 @@
 //! Группы на холсте (ADR-0013): создание и правка карточки вида `group`.
 //! Перемещение, ресайз, корзина, перенос и копирование идут общими путями
-//! карточек; здесь только то, что специфично для группы, — имя и цвет.
+//! карточек; здесь то, что специфично для группы, — имя, цвет и проверка
+//! членства (`cards.group_id`), общая для `create_group` и `move_cards`.
+
+use std::collections::HashSet;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::card_kind::{handler, CardKind};
 use crate::domain::errors::WorkspaceError;
-use crate::domain::models::{CardDto, CardReceipt, CreateGroupInput, UpdateGroupInput};
+use crate::domain::models::{
+    CardDto, CardReceipt, CreateGroupInput, GroupCreatedReceipt, UpdateGroupInput,
+};
 
 use super::super::db;
 use super::cards::card_receipt;
@@ -41,18 +46,72 @@ fn validate_title(title: &str) -> Result<(), WorkspaceError> {
     Ok(())
 }
 
+/// Проверяет, что карточка `card_id` с доски `card_board_id` может войти в
+/// группу `group_id`: группа существует, живая (не в корзине и не в
+/// Unsorted), вида `group`, на той же доске, это не сама карточка и карточка
+/// не предок группы. Ошибка — `ConstraintViolation`, как у коннектора с
+/// плохим концом.
+pub(super) fn validate_group_assignment(
+    tx: &Connection,
+    card_id: &str,
+    card_board_id: &str,
+    group_id: &str,
+) -> Result<(), WorkspaceError> {
+    if card_id == group_id {
+        return Err(WorkspaceError::ConstraintViolation(format!(
+            "card {card_id} cannot be its own group"
+        )));
+    }
+    let on_board: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM cards
+         WHERE id = ?1 AND kind = ?2 AND board_id = ?3 AND deleted_at IS NULL AND unsorted = 0",
+        params![group_id, CardKind::Group.as_str(), card_board_id],
+        |r| r.get(0),
+    )?;
+    if on_board == 0 {
+        return Err(WorkspaceError::ConstraintViolation(format!(
+            "card {group_id} is not a live group on the board of card {card_id}"
+        )));
+    }
+    // Подъём по хранимой цепочке group_id от цели: встретили саму карточку —
+    // цикл. Хранимые данные могут быть битыми (висячая ссылка, цикл после
+    // реплея), поэтому обход останавливается на NULL, на пропавшей строке и
+    // на уже посещённом id.
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut current = Some(group_id.to_string());
+    while let Some(id) = current {
+        if id == card_id {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "card {card_id} is an ancestor of group {group_id}"
+            )));
+        }
+        if !visited.insert(id.clone()) {
+            break;
+        }
+        current = tx
+            .query_row("SELECT group_id FROM cards WHERE id = ?1", [&id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .optional()?
+            .flatten();
+    }
+    Ok(())
+}
+
 fn load_group_card(conn: &Connection, card_id: &str) -> Result<CardDto, WorkspaceError> {
     handler(CardKind::Group)
         .load_one(conn, card_id)?
         .ok_or_else(|| WorkspaceError::NotFound(card_id.to_string()))
 }
 
-/// Создаёт группу. Идемпотентно по id (как `create_board_shortcut`):
-/// повтор возвращает сохранённую карточку, а не ошибку.
+/// Создаёт группу и в той же транзакции записывает её в `group_id` каждой
+/// карточке из `member_ids` (с подъёмом ревизии). Идемпотентно по id (как
+/// `create_board_shortcut`): повтор возвращает сохранённую карточку и пустой
+/// список участников, а не ошибку.
 pub fn create_group(
     conn: &mut Connection,
     input: &CreateGroupInput,
-) -> Result<CardDto, WorkspaceError> {
+) -> Result<GroupCreatedReceipt, WorkspaceError> {
     input.frame.validate()?;
     let title = input.title.as_deref().unwrap_or("");
     let color_token = input.color_token.as_deref().unwrap_or("default");
@@ -81,7 +140,10 @@ pub fn create_group(
         .optional()?;
     if let Some(kind) = existing_kind {
         if kind == CardKind::Group.as_str() {
-            return load_group_card(&tx, &input.id);
+            return Ok(GroupCreatedReceipt {
+                group: load_group_card(&tx, &input.id)?,
+                members: Vec::new(),
+            });
         }
         return Err(WorkspaceError::ConstraintViolation(format!(
             "card {} already exists with a different kind",
@@ -89,9 +151,14 @@ pub fn create_group(
         )));
     }
 
+    // Своя группа новой рамки (вложенная группа). Цикл для нового id
+    // невозможен, но проверка общая с `move_cards`.
+    if let Some(group_id) = &input.group_id {
+        validate_group_assignment(&tx, &input.id, &input.board_id, group_id)?;
+    }
     tx.execute(
-        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9)",
+        "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at, group_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9, ?10)",
         params![
             input.id,
             input.board_id,
@@ -102,15 +169,51 @@ pub fn create_group(
             input.frame.height,
             input.z_index,
             now,
+            input.group_id,
         ],
     )?;
     tx.execute(
         "INSERT INTO group_cards (card_id, title, color_token) VALUES (?1, ?2, ?3)",
         params![input.id, title, color_token],
     )?;
+
+    // Участники проверяются после вставки группы: проверка цели видит её
+    // живой. Любая ошибка откатывает транзакцию — группа не создаётся.
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut members = Vec::new();
+    for member_id in &input.member_ids {
+        if !seen.insert(member_id.as_str()) {
+            continue;
+        }
+        if member_id == &input.id {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "group {member_id} cannot be its own member"
+            )));
+        }
+        let on_board: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM cards
+             WHERE id = ?1 AND board_id = ?2 AND deleted_at IS NULL AND unsorted = 0",
+            params![member_id, input.board_id],
+            |r| r.get(0),
+        )?;
+        if on_board == 0 {
+            return Err(WorkspaceError::ConstraintViolation(format!(
+                "card {member_id} is not a live card on the group's board"
+            )));
+        }
+        validate_group_assignment(&tx, member_id, &input.board_id, &input.id)?;
+        tx.execute(
+            "UPDATE cards SET group_id = ?1, revision = revision + 1, updated_at = ?2 WHERE id = ?3",
+            params![input.id, now, member_id],
+        )?;
+        members.push(card_receipt(&tx, member_id)?);
+    }
     tx.commit()?;
 
-    load_group_card(conn, &input.id)
+    Ok(GroupCreatedReceipt {
+        group: load_group_card(conn, &input.id)?,
+        members,
+    })
 }
 
 /// Меняет имя и/или цвет живой группы под проверкой `expected_revision`

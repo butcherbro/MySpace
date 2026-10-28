@@ -10,7 +10,8 @@ use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::domain::models::{
     AssetDto, CardDto, CreateBoardShortcutInput, CreateConnectorInput, CreateFilesystemAliasInput,
     CreateGroupInput, CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame,
-    LinkBatchItem, UpdateCardFrameInput, UpdateConnectorInput, UpdateNoteInput,
+    GroupAssignment, LinkBatchItem, MoveCardItem, MoveCardsInput, UpdateCardFrameInput,
+    UpdateConnectorInput, UpdateNoteInput,
 };
 use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::domain::plain_text::plain_text_to_document;
@@ -284,6 +285,8 @@ fn populate(a: &Replica) -> Fixture {
         z_index: 0,
         title: Some("Sources".into()),
         color_token: Some("green".into()),
+        member_ids: Vec::new(),
+        group_id: None,
     }));
     let connector = new_id();
     a.apply(Mutation::CreateConnector(CreateConnectorInput {
@@ -1130,6 +1133,8 @@ fn a_purged_group_rejected_by_an_old_build_stays_purged_after_the_upgrade() {
         z_index: 0,
         title: Some("Doomed".into()),
         color_token: None,
+        member_ids: Vec::new(),
+        group_id: None,
     }));
     a.apply(Mutation::TrashNote {
         card_id: group.clone(),
@@ -1185,4 +1190,167 @@ fn a_purged_group_rejected_by_an_old_build_stays_purged_after_the_upgrade() {
         .scalar("SELECT COUNT(*) FROM purged WHERE entity_id = ?1", &group)
         .unwrap();
     assert_eq!(purged, 1);
+}
+
+// ---- Хранимое членство в группе (ADR-0013, ревизия 2026-10-28) -------------
+
+fn create_group_with(r: &Replica, members: &[&str]) -> String {
+    let id = new_id();
+    r.apply(Mutation::CreateGroup(CreateGroupInput {
+        id: id.clone(),
+        board_id: r.home(),
+        frame: Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 2400.0,
+            height: 900.0,
+        },
+        z_index: 0,
+        title: None,
+        color_token: None,
+        member_ids: members.iter().map(|m| m.to_string()).collect(),
+        group_id: None,
+    }));
+    id
+}
+
+fn set_group(r: &Replica, card: &str, group: Option<&str>) {
+    let x: f64 = r.scalar("SELECT x FROM cards WHERE id = ?1", card).unwrap();
+    r.apply(Mutation::MoveCards(MoveCardsInput {
+        cards: vec![MoveCardItem {
+            id: card.to_string(),
+            expected_revision: r.revision(card),
+            frame: frame(x + 1.0),
+            group: Some(GroupAssignment {
+                group_id: group.map(String::from),
+            }),
+        }],
+    }));
+}
+
+fn stored_group(r: &Replica, card: &str) -> Option<String> {
+    r.scalar::<Option<String>>("SELECT group_id FROM cards WHERE id = ?1", card)
+        .flatten()
+}
+
+fn loaded_group(r: &Replica, card: &str) -> Option<String> {
+    let id = card.to_string();
+    let dto =
+        r.ws.read_blocking(move |c| repo::load_card(c, &id))
+            .unwrap();
+    serde_json::to_value(dto).unwrap()["groupId"]
+        .as_str()
+        .map(String::from)
+}
+
+#[test]
+fn group_membership_replicates_with_the_card_image() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let home = a.home();
+    let n1 = create_note(&a, &home, "one");
+    let n2 = create_note(&a, &home, "two");
+    let group = create_group_with(&a, &[&n1]);
+    sync(&a, &b);
+    assert_eq!(loaded_group(&b, &n1), Some(group.clone()));
+    assert_eq!(loaded_group(&b, &n2), None);
+
+    set_group(&a, &n1, None);
+    set_group(&a, &n2, Some(&group));
+    let rows = a.export_for(&b);
+    let image: Value = serde_json::from_str(
+        &rows
+            .iter()
+            .rev()
+            .find(|r| r.entity_id == n2)
+            .unwrap()
+            .payload_json,
+    )
+    .unwrap();
+    assert_eq!(image["state"]["group_id"], Value::String(group.clone()));
+    b.apply_rows(rows);
+    assert_eq!(stored_group(&b, &n1), None);
+    assert_eq!(loaded_group(&b, &n2), Some(group));
+    assert_eq!(a.board(&home), b.board(&b.home()));
+}
+
+/// Образ без ключа `group_id` (старая сборка) применяется как NULL.
+#[test]
+fn a_card_image_without_group_id_clears_the_membership() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let home = a.home();
+    let n1 = create_note(&a, &home, "one");
+    create_group_with(&a, &[&n1]);
+    let rows = a.export_for(&b);
+    b.apply_rows(rows.clone());
+    assert!(stored_group(&b, &n1).is_some());
+
+    let latest = rows.iter().rev().find(|r| r.entity_id == n1).unwrap();
+    let mut envelope: Value = serde_json::from_str(&latest.payload_json).unwrap();
+    envelope["state"]
+        .as_object_mut()
+        .unwrap()
+        .remove("group_id");
+    let hlc = peer_hlc(60_000, 0);
+    envelope["clocks"]["place"] = Value::String(hlc.clone());
+    b.apply_rows(vec![ChangeRow {
+        origin_device_id: "peerx".into(),
+        hlc,
+        entity_kind: "card".into(),
+        entity_id: n1.clone(),
+        op: "card.move_many".into(),
+        payload_json: envelope.to_string(),
+    }]);
+    assert_eq!(stored_group(&b, &n1), None);
+}
+
+/// Стирание группы не пишет в участников: колонка остаётся, загрузчик её
+/// прячет.
+#[test]
+fn a_purged_group_leaves_its_members_rows_untouched() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let home = a.home();
+    let n1 = create_note(&a, &home, "one");
+    let group = create_group_with(&a, &[&n1]);
+    sync(&a, &b);
+    let revision = b.revision(&n1);
+
+    a.apply(Mutation::TrashNote {
+        card_id: group.clone(),
+    });
+    a.apply(Mutation::EmptyTrash {
+        confirmation: "EMPTY".into(),
+    });
+    sync(&a, &b);
+    assert_eq!(
+        b.scalar::<String>("SELECT id FROM cards WHERE id = ?1", &group),
+        None
+    );
+    assert_eq!(stored_group(&b, &n1), Some(group));
+    assert_eq!(loaded_group(&b, &n1), None);
+    assert_eq!(b.revision(&n1), revision, "the member was not written");
+}
+
+/// Членство едет в регистре `place`: перенос в группу на одном устройстве и
+/// правка текста на другом не конфликтуют и оба сохраняются.
+#[test]
+fn joining_a_group_never_conflicts_with_a_concurrent_text_edit() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let home = a.home();
+    let n1 = create_note(&a, &home, "one");
+    let group = create_group_with(&a, &[]);
+    sync(&a, &b);
+
+    update_note(&a, &n1, "one, edited");
+    set_group(&b, &n1, Some(&group));
+    converge(&a, &b);
+
+    for r in [&a, &b] {
+        assert_eq!(r.note_text(&n1).as_deref(), Some("one, edited"));
+        assert_eq!(loaded_group(r, &n1), Some(group.clone()));
+        let notes: Option<i64> = r.scalar(
+            "SELECT COUNT(*) FROM cards WHERE board_id = ?1 AND kind = 'note'",
+            &r.home(),
+        );
+        assert_eq!(notes, Some(1), "no conflict copy");
+    }
 }

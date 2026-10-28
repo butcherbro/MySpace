@@ -3,7 +3,7 @@ import { connectorsToEdgeLikes } from "./connector-mapping";
 import type { CanvasCard, CanvasConnector } from "./canvas-types";
 
 function card(id: string): CanvasCard {
-  return { id, boardId: "home", kind: "note", frame: { x: 0, y: 0, width: 200, height: 80 }, zIndex: 0, revision: 1 };
+  return { id, boardId: "home", kind: "note", frame: { x: 0, y: 0, width: 200, height: 80 }, zIndex: 0, revision: 1, groupId: null };
 }
 
 function connector(id: string, fromCardId: string, toCardId: string): CanvasConnector {

@@ -83,7 +83,10 @@ export type CurrentBoardAction =
   | { type: "filesystemAliasUpdated"; alias: FilesystemAliasDto }
   | { type: "unsortedCardPlaced"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardMovedToUnsorted"; id: string; revision: number }
-  | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
+  /** `groupId`: членство, отправленное вместе с перемещением; отсутствует — не менялось. */
+  | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"]; groupId?: string | null }
+  /** Карточка стала членом новой группы (ответ `createGroup`). */
+  | { type: "cardGrouped"; id: string; revision: number; groupId: string }
   /** A portal's board was reparented and the portal stayed on the open board. */
   | { type: "portalMoved"; id: string; revision: number; boardRevision: number; frame: CardDto["frame"] }
   | { type: "noteColorChanged"; id: string; colorToken: string }
@@ -139,6 +142,7 @@ export type CardChangeAction = Extract<
       | "cardReplaced"
       | "cardStored"
       | "cardMoved"
+      | "cardGrouped"
       | "portalMoved"
       | "cardMovedToUnsorted"
       | "unsortedCardPlaced"
@@ -407,8 +411,14 @@ export function reducer(
       const card = state.unsortedCards.find((c) => c.id === action.id);
       if (!card) return state;
       // Ревизия — max (не откатываем, см. applyCardWrite), а frame — всегда из
-      // ответа: у карточки в Unsorted своего места на холсте нет.
-      const placed = { ...card, frame: action.frame, revision: Math.max(card.revision, action.revision) };
+      // ответа: у карточки в Unsorted своего места на холсте нет. Членство
+      // бэкенд при размещении сбрасывает — иначе карточка ездила бы за старой группой.
+      const placed = {
+        ...card,
+        frame: action.frame,
+        revision: Math.max(card.revision, action.revision),
+        groupId: null,
+      };
       return {
         ...state,
         unsortedCards: state.unsortedCards.filter((c) => c.id !== action.id),
@@ -436,6 +446,17 @@ export function reducer(
           ...c,
           revision: action.revision,
           frame: action.frame,
+          groupId: action.groupId === undefined ? c.groupId : action.groupId,
+        })),
+      };
+
+    case "cardGrouped":
+      return {
+        ...state,
+        cards: applyCardWrite(state.cards, action.id, action.revision, (c) => ({
+          ...c,
+          revision: action.revision,
+          groupId: action.groupId,
         })),
       };
 

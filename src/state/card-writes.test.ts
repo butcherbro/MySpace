@@ -13,6 +13,7 @@ function note(id: string, revision: number): NoteCardDto {
     frame: { x: 0, y: 0, width: 200, height: 80 },
     zIndex: 0,
     revision,
+    groupId: null,
     documentJson: { type: "doc" },
     plainText: "",
     colorToken: "default",

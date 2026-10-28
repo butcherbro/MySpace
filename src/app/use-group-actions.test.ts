@@ -8,7 +8,13 @@ import { MockWorkspaceGateway } from "../services/mock-workspace-gateway";
 import type { BoardSummary, CardDto, GroupCardDto } from "../services/workspace-gateway";
 import type { CurrentBoardAction } from "../state/current-board-store";
 import { loadedCardWrites } from "../state/card-writes-fixture";
-import { GROUP_TOO_LARGE_MESSAGE, groupFrameAround, useGroupActions } from "./use-group-actions";
+import {
+  GROUP_TOO_LARGE_MESSAGE,
+  commonGroupId,
+  groupFrameAround,
+  groupSelectionMemberIds,
+  useGroupActions,
+} from "./use-group-actions";
 
 const home: BoardSummary = {
   id: "home",
@@ -25,7 +31,7 @@ function idGeneratorFixture(): IdGenerator {
   return { nextId: vi.fn(() => `id-${counter++}`) };
 }
 
-async function setup(options: { selection?: string[]; group?: boolean } = {}) {
+async function setup(options: { selection?: string[]; group?: boolean; groupMembers?: string[] } = {}) {
   const gateway = new MockWorkspaceGateway();
   await gateway.createNote({
     id: "a",
@@ -42,7 +48,13 @@ async function setup(options: { selection?: string[]; group?: boolean } = {}) {
     documentJson: plainTextToDocument("b"),
   });
   if (options.group) {
-    await gateway.createGroup({ id: "g", boardId: "home", frame: { x: 76, y: 140, width: 648, height: 264 }, zIndex: 0 });
+    await gateway.createGroup({
+      id: "g",
+      boardId: "home",
+      frame: { x: 76, y: 140, width: 648, height: 264 },
+      zIndex: 0,
+      memberIds: options.groupMembers ?? [],
+    });
   }
   const cardsRef = { current: (await gateway.loadBoardSnapshot("home")).cards as CardDto[] };
   const dispatcher = new CommandDispatcher(gateway);
@@ -93,6 +105,37 @@ describe("groupFrameAround", () => {
   });
 });
 
+describe("groupSelectionMemberIds", () => {
+  const card = (id: string, kind: CardDto["kind"], groupId: string | null) =>
+    ({ id, kind, groupId }) as unknown as CardDto;
+  const cards = [
+    card("outer", "group", null),
+    card("inner", "group", "outer"),
+    card("in-outer", "note", "outer"),
+    card("in-inner", "note", "inner"),
+    card("loose", "note", null),
+    card("elsewhere", "group", null),
+    card("in-elsewhere", "note", "elsewhere"),
+  ];
+
+  it("takes every selected card whose group chain has no selected group, in cards order", () => {
+    expect(groupSelectionMemberIds(["loose", "in-elsewhere"], cards)).toEqual(["loose", "in-elsewhere"]);
+  });
+
+  it("a selected group keeps its members, nested ones included", () => {
+    expect(groupSelectionMemberIds(["in-inner", "outer", "in-outer", "inner", "loose"], cards)).toEqual([
+      "outer",
+      "loose",
+    ]);
+    expect(groupSelectionMemberIds(["inner", "in-inner", "in-outer"], cards)).toEqual(["inner", "in-outer"]);
+  });
+
+  it("terminates on a cyclic group chain", () => {
+    const cyclic = [card("a", "group", "b"), card("b", "group", "a"), card("n", "note", "a")];
+    expect(groupSelectionMemberIds(["n"], cyclic)).toEqual(["n"]);
+  });
+});
+
 describe("useGroupActions", () => {
   it("groups the selection into an undoable, untitled default-colour frame at z 0", async () => {
     const { gateway, dispatcher, dispatched, hook } = await setup({ selection: ["a", "b"] });
@@ -113,6 +156,63 @@ describe("useGroupActions", () => {
 
     await dispatcher.undo();
     expect(groupOf((await gateway.loadBoardSnapshot("home")).cards)).toBeUndefined();
+  });
+
+  it("makes the selected cards members in the same call and stores their groupId and new revisions", async () => {
+    const { gateway, dispatched, cardsRef, hook } = await setup({ selection: ["a", "b"] });
+    const createGroup = vi.spyOn(gateway, "createGroup");
+    await act(() => hook.result.current.groupSelection());
+
+    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({ memberIds: ["a", "b"] }));
+    const group = groupOf(cardsRef.current)!;
+    expect(dispatched.filter((a) => a.type === "cardGrouped")).toEqual([
+      { type: "cardGrouped", id: "a", revision: 2, groupId: group.id },
+      { type: "cardGrouped", id: "b", revision: 2, groupId: group.id },
+    ]);
+    expect(cardsRef.current.find((c) => c.id === "a")).toMatchObject({ groupId: group.id, revision: 2 });
+    expect((await gateway.readCard("b")).groupId).toBe(group.id);
+  });
+
+  it("nests the new frame in the members' common group", async () => {
+    const { gateway, cardsRef, hook } = await setup({ group: true, groupMembers: ["a", "b"], selection: ["a", "b"] });
+    const createGroup = vi.spyOn(gateway, "createGroup");
+    await act(() => hook.result.current.groupSelection());
+
+    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({ groupId: "g", memberIds: ["a", "b"] }));
+    const created = cardsRef.current.find((c) => c.kind === "group" && c.id !== "g");
+    expect(created?.groupId).toBe("g");
+  });
+
+  it("members under a foreign frame do not join it", async () => {
+    // g лежит поверх a и b (рамка новой группы совпадает с её рамкой), но ими не владеет.
+    const { gateway, cardsRef, hook } = await setup({ group: true, selection: ["a", "b"] });
+    const createGroup = vi.spyOn(gateway, "createGroup");
+    await act(() => hook.result.current.groupSelection());
+
+    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({ groupId: null }));
+    expect(cardsRef.current.find((c) => c.kind === "group" && c.id !== "g")?.groupId).toBeNull();
+  });
+
+  it("members with different groups → null", async () => {
+    const { gateway, hook } = await setup({ group: true, groupMembers: ["a"], selection: ["a", "b"] });
+    const createGroup = vi.spyOn(gateway, "createGroup");
+    await act(() => hook.result.current.groupSelection());
+    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({ groupId: null }));
+
+    const cards = [
+      { id: "x", groupId: "g1" },
+      { id: "y", groupId: "g2" },
+      { id: "z", groupId: "g1" },
+    ] as unknown as CardDto[];
+    expect(commonGroupId(["x", "y"], cards)).toBeNull();
+    expect(commonGroupId(["x", "z"], cards)).toBe("g1");
+  });
+
+  it("a selected group keeps its members, and the new frame takes that group's own parent", async () => {
+    const { gateway, hook } = await setup({ group: true, groupMembers: ["a", "b"], selection: ["a", "b", "g"] });
+    const createGroup = vi.spyOn(gateway, "createGroup");
+    await act(() => hook.result.current.groupSelection());
+    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({ memberIds: ["g"], groupId: null }));
   });
 
   it("refuses a frame larger than 8000 × 10000 with a banner and never calls the gateway", async () => {

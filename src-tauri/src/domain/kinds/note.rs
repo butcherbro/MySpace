@@ -3,7 +3,10 @@
 
 use rusqlite::{Connection, Row};
 
-use super::{card_frame, document_at, load_board_rows, load_one_row, DetailTable, AFTER_CARD};
+use super::{
+    card_frame, card_group_id, document_at, load_board_rows, load_one_row, DetailTable, AFTER_CARD,
+    CARD_COLUMNS,
+};
 use crate::domain::card_kind::{
     CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
 };
@@ -18,11 +21,13 @@ const DETAIL: DetailTable = DetailTable {
     columns: &["document_json", "plain_text", "color_token"],
 };
 
-const SELECT_FROM: &str =
-    "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-        n.document_json, n.plain_text, n.color_token
- FROM cards c
- JOIN note_cards n ON n.card_id = c.id";
+fn select_from() -> String {
+    format!(
+        "SELECT {CARD_COLUMNS}, n.document_json, n.plain_text, n.color_token
+         FROM cards c
+         JOIN note_cards n ON n.card_id = c.id"
+    )
+}
 
 fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
     let document = document_at(row, AFTER_CARD)?;
@@ -32,6 +37,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
         frame: card_frame(row)?,
         z_index: row.get(6)?,
         revision: row.get(7)?,
+        group_id: card_group_id(row)?,
         document_json: document.json,
         plain_text: row.get(AFTER_CARD + 1)?,
         color_token: row.get(AFTER_CARD + 2)?,
@@ -50,11 +56,11 @@ impl CardKindHandler for NoteHandler {
         board_id: &str,
         unsorted: bool,
     ) -> Result<Vec<CardDto>, WorkspaceError> {
-        load_board_rows(conn, SELECT_FROM, board_id, unsorted, map_row)
+        load_board_rows(conn, &select_from(), board_id, unsorted, map_row)
     }
 
     fn load_one(&self, conn: &Connection, id: &str) -> Result<Option<CardDto>, WorkspaceError> {
-        load_one_row(conn, SELECT_FROM, id, map_row)
+        load_one_row(conn, &select_from(), id, map_row)
     }
 
     fn copy_detail(

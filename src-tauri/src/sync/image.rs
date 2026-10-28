@@ -6,7 +6,8 @@
 //!
 //! | entity        | register | columns                                              |
 //! |---------------|----------|------------------------------------------------------|
-//! | `card`        | `place`  | board_id, x, y, width, height, z_index, unsorted     |
+//! | `card`        | `place`  | board_id, x, y, width, height, z_index, unsorted,    |
+//! |               |          | group_id                                             |
 //! | `card`        | `life`   | deleted_at, trash_batch_id                           |
 //! | `card`        | `body`   | kind + the kind's detail row (`to_payload`)          |
 //! | `board`       | `meta`   | title, color_token, symbol, cover_asset_id           |
@@ -158,7 +159,7 @@ fn read_card(conn: &Connection, id: &str, root: &str) -> Result<Option<Value>, W
     let row = conn
         .query_row(
             "SELECT board_id, kind, x, y, width, height, z_index, unsorted, created_at,
-                    deleted_at, trash_batch_id
+                    deleted_at, trash_batch_id, group_id
              FROM cards WHERE id = ?1",
             [id],
             |r| {
@@ -175,6 +176,9 @@ fn read_card(conn: &Connection, id: &str, root: &str) -> Result<Option<Value>, W
                         "created_at": r.get::<_, i64>(8)?,
                         "deleted_at": r.get::<_, Option<i64>>(9)?,
                         "trash_batch_id": r.get::<_, Option<String>>(10)?,
+                        // Хранимое значение, не нормализованное: «спящее»
+                        // членство тоже должно доехать до другой реплики.
+                        "group_id": r.get::<_, Option<String>>(11)?,
                     }),
                 ))
             },
@@ -358,11 +362,17 @@ fn get_bool(state: &Value, key: &str) -> Result<bool, WorkspaceError> {
 // ---- writing registers (replay) ---------------------------------------------
 
 /// A card's `place` register, validated.
+///
+/// `group_id` (ADR-0013) живёт в `place`, а не в `body`: членство меняется
+/// тем же жестом, что и рамка, и в `body` параллельная правка текста заметки
+/// и перенос её в группу на другом устройстве давали бы conflict copy.
 pub struct CardPlace {
     pub board_id: String,
     pub frame: Frame,
     pub z_index: i64,
     pub unsorted: bool,
+    /// `None` also when the image has no key (an older build).
+    pub group_id: Option<String>,
 }
 
 pub fn card_place(state: &Value, root: &str) -> Result<CardPlace, WorkspaceError> {
@@ -378,6 +388,7 @@ pub fn card_place(state: &Value, root: &str) -> Result<CardPlace, WorkspaceError
         frame,
         z_index: get_i64(state, "z_index")?,
         unsorted: get_bool(state, "unsorted")?,
+        group_id: get_opt_str(state, "group_id")?,
     })
 }
 
@@ -406,8 +417,9 @@ pub fn insert_card(
     let kind = card_kind(state)?;
     conn.execute(
         "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision,
-                            created_at, updated_at, deleted_at, trash_batch_id, unsorted)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?13)",
+                            created_at, updated_at, deleted_at, trash_batch_id, unsorted,
+                            group_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             id,
             place.board_id,
@@ -422,6 +434,7 @@ pub fn insert_card(
             get_opt_i64(state, "deleted_at")?,
             get_opt_str(state, "trash_batch_id")?,
             i64::from(place.unsorted),
+            place.group_id,
         ],
     )?;
     write_card_body(conn, id, kind, None, state, root)
@@ -434,7 +447,7 @@ pub fn update_card_place(
 ) -> Result<(), WorkspaceError> {
     conn.execute(
         "UPDATE cards SET board_id = ?2, x = ?3, y = ?4, width = ?5, height = ?6, z_index = ?7,
-                          unsorted = ?8
+                          unsorted = ?8, group_id = ?9
          WHERE id = ?1",
         params![
             id,
@@ -444,7 +457,8 @@ pub fn update_card_place(
             place.frame.width,
             place.frame.height,
             place.z_index,
-            i64::from(place.unsorted)
+            i64::from(place.unsorted),
+            place.group_id,
         ],
     )?;
     Ok(())

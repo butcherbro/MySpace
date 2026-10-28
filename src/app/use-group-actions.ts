@@ -35,6 +35,39 @@ export function groupFrameAround(frames: readonly Frame[]): Frame | null {
   return { x, y, width: maxX + GROUP_PADDING - x, height: maxY + GROUP_PADDING - y };
 }
 
+/**
+ * Члены новой группы из выделения `selection`: каждая выделенная карточка, кроме
+ * тех, чья группа (или любая группа выше по цепочке) сама выделена, — выделенная
+ * группа сохраняет своих членов и входит в новую целиком.
+ */
+export function groupSelectionMemberIds(selection: readonly string[], cards: readonly CardDto[]): string[] {
+  const selected = new Set(selection);
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  const hasSelectedAncestor = (card: CardDto): boolean => {
+    // visited: хранимая цепочка может быть зациклена (синк), обход обязан кончиться.
+    const visited = new Set<string>([card.id]);
+    let groupId = card.groupId;
+    while (groupId !== null && !visited.has(groupId)) {
+      if (selected.has(groupId)) return true;
+      visited.add(groupId);
+      groupId = byId.get(groupId)?.groupId ?? null;
+    }
+    return false;
+  };
+  return cards.filter((c) => selected.has(c.id) && !hasSelectedAncestor(c)).map((c) => c.id);
+}
+
+/**
+ * Группа, в которую вкладывается новая: общая группа всех членов, если она у
+ * них одна и та же, иначе `null`. Не по геометрии: рамка, лишь лежащая поверх
+ * карточек, ими не владеет, и группировка не должна отдавать их ей.
+ */
+export function commonGroupId(memberIds: readonly string[], cards: readonly CardDto[]): string | null {
+  const groups = new Set(memberIds.map((id) => cards.find((c) => c.id === id)?.groupId ?? null));
+  const [only] = groups;
+  return groups.size === 1 ? (only ?? null) : null;
+}
+
 /** Баннер, когда рамка вокруг выделения больше допустимой. */
 export const GROUP_TOO_LARGE_MESSAGE =
   `The group would be too large (at most ${GROUP_MAX_WIDTH} × ${GROUP_MAX_HEIGHT} px). Select fewer or closer cards.`;
@@ -78,25 +111,49 @@ export function useGroupActions(deps: GroupActionsDeps): GroupActionsController 
 
   const fail = useCallback((e: unknown) => dispatch({ type: "failed", message: errorMessage(e) }), [dispatch]);
 
-  const groupSelection = useCallback(async () => {
-    if (!board) return;
-    const selected = new Set(selection);
-    const frame = groupFrameAround(cards.filter((c) => selected.has(c.id)).map((c) => c.frame));
-    if (!frame) return;
-    // Бэкенд отверг бы такую рамку как constraint_violation с техническим
-    // текстом; говорим пользователю понятнее и не зовём шлюз.
-    if (frame.width > GROUP_MAX_WIDTH || frame.height > GROUP_MAX_HEIGHT) {
-      dispatch({ type: "failed", message: GROUP_TOO_LARGE_MESSAGE });
-      return;
-    }
-    const input = { id: idGenerator.nextId(), boardId: board.id, frame, zIndex: 0, title: "", colorToken: "default" };
-    try {
-      const group = await dispatcher.execute(new CreateGroupCommand(idGenerator.nextId(), input));
-      cardWrites.apply({ type: "cardAdded", card: group });
-    } catch (e) {
-      fail(e);
-    }
-  }, [board, cards, selection, dispatcher, idGenerator, cardWrites, dispatch, fail]);
+  // Через общую очередь мутаций: создание поднимает ревизии членов, и запись,
+  // уже стоящая в очереди с прежней ревизией, не должна упереться в stale_revision.
+  const groupSelection = useCallback(
+    () =>
+      queueRef.current
+        .run(async () => {
+          if (!board) return;
+          const current = cardsRef.current;
+          const selected = new Set(selection);
+          const frame = groupFrameAround(current.filter((c) => selected.has(c.id)).map((c) => c.frame));
+          if (!frame) return;
+          // Бэкенд отверг бы такую рамку как constraint_violation с техническим
+          // текстом; говорим пользователю понятнее и не зовём шлюз.
+          if (frame.width > GROUP_MAX_WIDTH || frame.height > GROUP_MAX_HEIGHT) {
+            dispatch({ type: "failed", message: GROUP_TOO_LARGE_MESSAGE });
+            return;
+          }
+          const memberIds = groupSelectionMemberIds(selection, current);
+          const input = {
+            id: idGenerator.nextId(),
+            boardId: board.id,
+            frame,
+            zIndex: 0,
+            title: "",
+            colorToken: "default",
+            memberIds,
+            groupId: commonGroupId(memberIds, current),
+          };
+          const membersBefore = memberIds.map((id) => ({
+            id,
+            groupId: current.find((c) => c.id === id)?.groupId ?? null,
+          }));
+          const receipt = await dispatcher.execute(
+            new CreateGroupCommand(idGenerator.nextId(), input, membersBefore),
+          );
+          cardWrites.apply({ type: "cardAdded", card: receipt.group });
+          for (const member of receipt.members) {
+            cardWrites.apply({ type: "cardGrouped", id: member.id, revision: member.revision, groupId: receipt.group.id });
+          }
+        })
+        .catch(fail),
+    [board, selection, queueRef, cardsRef, dispatcher, idGenerator, cardWrites, dispatch, fail],
+  );
 
   const ungroup = useCallback(
     async (groupIds: string[]) => {

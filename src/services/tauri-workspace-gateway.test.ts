@@ -487,7 +487,7 @@ describe("TauriWorkspaceGateway", () => {
     expect(invokeMock).toHaveBeenCalledWith("remove_connector", { connectorId: "c1" });
   });
 
-  it("calls create_group with a wrapped input payload and returns the group card", async () => {
+  it("calls create_group with a wrapped input payload and returns the group with member receipts", async () => {
     const dto = {
       kind: "group",
       id: "g1",
@@ -495,17 +495,17 @@ describe("TauriWorkspaceGateway", () => {
       frame: { x: 0, y: 0, width: 400, height: 300 },
       zIndex: 0,
       revision: 1,
-      createdAt: 1,
-      updatedAt: 1,
+      groupId: null,
       title: "",
       colorToken: "default",
     };
-    invokeMock.mockResolvedValue(dto);
+    const receipt = { group: dto, members: [{ id: "n1", revision: 4 }] };
+    invokeMock.mockResolvedValue(receipt);
     const gw = new TauriWorkspaceGateway();
-    const input = { id: "g1", boardId: "home", frame: dto.frame, zIndex: 0 };
+    const input = { id: "g1", boardId: "home", frame: dto.frame, zIndex: 0, memberIds: ["n1"] };
     const result = await gw.createGroup(input);
     expect(invokeMock).toHaveBeenCalledWith("create_group", { input });
-    expect(result).toEqual(dto);
+    expect(result).toEqual(receipt);
   });
 
   it("calls update_group with a wrapped input payload and returns the receipt", async () => {

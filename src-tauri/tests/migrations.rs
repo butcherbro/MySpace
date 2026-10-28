@@ -554,6 +554,8 @@ fn migration_0021_drops_the_kind_check_and_keeps_every_cards_index() {
     assert_eq!(
         indexes,
         vec![
+            // 0029 (после 0021): частичный индекс членства в группе.
+            ("cards_group_id".to_string(), true),
             ("idx_cards_board_active".to_string(), false),
             ("idx_cards_trash_batch".to_string(), false),
             ("idx_cards_trashed".to_string(), true),
@@ -1057,4 +1059,91 @@ fn migration_0028_requeues_group_card_changes_an_old_build_rejected() {
     migrations::requeue_group_card_changes(&tx).unwrap();
     tx.commit().unwrap();
     assert_eq!(pending(&conn).len(), 2, "a second run adds no duplicate");
+}
+
+/// Migration 0029 adds `cards.group_id` (nullable, no FK) and its partial
+/// index on a fresh database.
+#[test]
+fn migration_0029_adds_card_group_id_on_a_fresh_database() {
+    let conn = open_in_memory().unwrap();
+    assert!(
+        migrations::MIGRATIONS
+            .iter()
+            .any(|m| m.version == 29 && m.name == "card_group" && m.after.is_none()),
+        "migration 0029 is registered"
+    );
+    let (notnull, default): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT \"notnull\", dflt_value FROM pragma_table_info('cards') WHERE name = 'group_id'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((notnull, default), (0, None));
+    assert!(index_names(&conn).contains(&"cards_group_id".to_string()));
+    let fks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_foreign_key_list('cards') WHERE \"from\" = 'group_id'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fks, 0, "no foreign key: replay may apply a member first");
+}
+
+/// На базе версии 28 с карточками миграция 0029 добавляет колонку, не трогая
+/// строки: у старых карточек `group_id` NULL, внешние ключи чисты.
+#[test]
+fn migration_0029_upgrades_a_version_28_database() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 29) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch(migration.sql).unwrap();
+        if let Some(step) = migration.after {
+            step(&tx).unwrap();
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('w', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, revision, created_at, updated_at)
+             VALUES ('home', 'w', NULL, 'Home', 'default', 1, 0, 0);
+         INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
+             VALUES ('n', 'home', 'note', 0, 0, 200, 80, 0, 3, 0, 0);",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let (group_id, revision): (Option<String>, i64) = conn
+        .query_row(
+            "SELECT group_id, revision FROM cards WHERE id = 'n'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((group_id, revision), (None, 3));
+    let latest: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(latest, 29);
+    let violations: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(violations, 0);
 }

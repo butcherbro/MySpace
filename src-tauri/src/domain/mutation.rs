@@ -40,12 +40,13 @@ use crate::domain::models::{
     ConvertNoteToEmbedInput, CreateBoardShortcutInput, CreateChildBoardInput, CreateConnectorInput,
     CreateFileCardInput, CreateFilesystemAliasInput, CreateGroupInput, CreateImageCardInput,
     CreateItemBatchInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
-    DuplicateBoardInput, DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult, MoveBoardInput,
-    MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, MoveSelectionToBoardInput,
-    MoveSelectionToBoardReceipt, PlaceUnsortedCardInput, ReorderQuickBoardsInput,
-    SetNoteColorInput, TextReceipt, TrashSelectionInput, UpdateCardFrameInput,
-    UpdateConnectorInput, UpdateEmbedDescriptionInput, UpdateGroupInput, UpdateImageCaptionInput,
-    UpdateNoteInput, UpdateViewportInput, ViewportReceipt,
+    DuplicateBoardInput, DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult,
+    GroupCreatedReceipt, MoveBoardInput, MoveCardToBoardInput, MoveCardsInput,
+    MoveCardsToUnsortedInput, MoveSelectionToBoardInput, MoveSelectionToBoardReceipt,
+    PlaceUnsortedCardInput, ReorderQuickBoardsInput, SetNoteColorInput, TextReceipt,
+    TrashSelectionInput, UpdateCardFrameInput, UpdateConnectorInput, UpdateEmbedDescriptionInput,
+    UpdateGroupInput, UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput,
+    ViewportReceipt,
 };
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::devices;
@@ -364,6 +365,8 @@ pub enum MutationOutcome {
     SyncReport(ApplyReport),
     SyncPeers(PeerOutcome),
     Compaction(CompactReport),
+    /// `group.create`: the group plus a receipt per member that joined it.
+    GroupCreated(GroupCreatedReceipt),
 }
 
 fn unexpected(what: &str) -> WorkspaceError {
@@ -479,6 +482,12 @@ impl MutationOutcome {
         match self {
             Self::Compaction(r) => Ok(r),
             _ => Err(unexpected("compaction report")),
+        }
+    }
+    pub fn into_group_created(self) -> Result<GroupCreatedReceipt, WorkspaceError> {
+        match self {
+            Self::GroupCreated(r) => Ok(r),
+            _ => Err(unexpected("group-created receipt")),
         }
     }
 }
@@ -806,7 +815,7 @@ impl Mutation {
             Self::RemoveConnector { connector_id } => {
                 repo::remove_connector(conn, connector_id).map(|_| Out::Unit)
             }
-            Self::CreateGroup(input) => repo::create_group(conn, input).map(Out::Card),
+            Self::CreateGroup(input) => repo::create_group(conn, input).map(Out::GroupCreated),
             Self::UpdateGroup(input) => repo::update_group(conn, input).map(Out::CardReceipt),
 
             Self::InsertAsset(asset) => {

@@ -11,7 +11,9 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, Row};
 
-use super::{card_frame, load_board_rows, load_one_row, DetailTable, AFTER_CARD};
+use super::{
+    card_frame, card_group_id, load_board_rows, load_one_row, DetailTable, AFTER_CARD, CARD_COLUMNS,
+};
 use crate::domain::card_kind::{
     CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
 };
@@ -31,17 +33,20 @@ const DETAIL: DetailTable = DetailTable {
     ],
 };
 
-const SELECT_FROM: &str =
-    "SELECT c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
-        a.target_kind, a.path_hint, a.display_name, COALESCE(a.origin_device_id, ''), d.name,
-        EXISTS (
-            SELECT 1 FROM filesystem_alias_locators l
-            WHERE l.card_id = c.id
-              AND l.device_id = (SELECT value FROM local_meta WHERE key = 'device_id')
-        )
- FROM cards c
- JOIN filesystem_aliases a ON a.card_id = c.id
- LEFT JOIN known_devices d ON d.device_id = a.origin_device_id";
+fn select_from() -> String {
+    format!(
+        "SELECT {CARD_COLUMNS},
+            a.target_kind, a.path_hint, a.display_name, COALESCE(a.origin_device_id, ''), d.name,
+            EXISTS (
+                SELECT 1 FROM filesystem_alias_locators l
+                WHERE l.card_id = c.id
+                  AND l.device_id = (SELECT value FROM local_meta WHERE key = 'device_id')
+            )
+         FROM cards c
+         JOIN filesystem_aliases a ON a.card_id = c.id
+         LEFT JOIN known_devices d ON d.device_id = a.origin_device_id"
+    )
+}
 
 fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
     Ok(CardDto::FilesystemAlias(FilesystemAliasDto {
@@ -50,6 +55,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
         frame: card_frame(row)?,
         z_index: row.get(6)?,
         revision: row.get(7)?,
+        group_id: card_group_id(row)?,
         target_kind: row.get(AFTER_CARD)?,
         path_hint: row.get(AFTER_CARD + 1)?,
         display_name: row.get(AFTER_CARD + 2)?,
@@ -70,11 +76,11 @@ impl CardKindHandler for FilesystemAliasHandler {
         board_id: &str,
         unsorted: bool,
     ) -> Result<Vec<CardDto>, WorkspaceError> {
-        load_board_rows(conn, SELECT_FROM, board_id, unsorted, map_row)
+        load_board_rows(conn, &select_from(), board_id, unsorted, map_row)
     }
 
     fn load_one(&self, conn: &Connection, id: &str) -> Result<Option<CardDto>, WorkspaceError> {
-        load_one_row(conn, SELECT_FROM, id, map_row)
+        load_one_row(conn, &select_from(), id, map_row)
     }
 
     fn copy_detail(

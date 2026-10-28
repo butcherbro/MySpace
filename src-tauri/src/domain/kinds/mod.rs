@@ -44,13 +44,25 @@ pub fn handler(kind: CardKind) -> &'static dyn CardKindHandler {
     }
 }
 
-/// The eight `cards` columns every projection starts with (indices 0..=7);
-/// read back by [`card_frame`] and the `id/board_id/z_index/revision` getters.
+/// The nine `cards` columns every projection starts with (indices 0..=8);
+/// read back by [`card_frame`], [`card_group_id`] and the
+/// `id/board_id/z_index/revision` getters.
+///
+/// Колонка 8 — `group_id` в нормализованном виде (ADR-0013): хранимое значение
+/// отдаётся, только пока сама карточка на холсте (не в Unsorted) и оно
+/// указывает на живую, не Unsorted карточку вида `group` на той же доске.
+/// Иначе членство «спит» (карточка в Unsorted, группа в корзине, на другой
+/// доске или стёрта) и наружу идёт NULL; сама колонка не трогается,
+/// поэтому восстановление группы из корзины возвращает членство без записи.
+/// Подзапрос по первичному ключу, а не отдельный запрос на карточку.
 pub(crate) const CARD_COLUMNS: &str =
-    "c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision";
+    "c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
+     (SELECT grp.id FROM cards grp
+      WHERE c.unsorted = 0 AND grp.id = c.group_id AND grp.kind = 'group'
+        AND grp.board_id = c.board_id AND grp.deleted_at IS NULL AND grp.unsorted = 0) AS group_id";
 
 /// Index of the first column after [`CARD_COLUMNS`].
-pub(crate) const AFTER_CARD: usize = 8;
+pub(crate) const AFTER_CARD: usize = 9;
 
 /// Row filter for a board's cards (`?1` board id, `?2` unsorted flag).
 const BOARD_FILTER: &str =
@@ -67,6 +79,11 @@ pub(crate) fn card_frame(row: &Row<'_>) -> rusqlite::Result<Frame> {
         width: row.get(4)?,
         height: row.get(5)?,
     })
+}
+
+/// The normalized `group_id` at [`CARD_COLUMNS`] position 8.
+pub(crate) fn card_group_id(row: &Row<'_>) -> rusqlite::Result<Option<String>> {
+    row.get(8)
 }
 
 /// Eight asset columns for the joined `assets` alias, in the order

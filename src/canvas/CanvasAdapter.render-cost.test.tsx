@@ -22,6 +22,7 @@ function makeCards(overrides: Partial<Record<string, Partial<CanvasCard>>> = {})
       frame: { x: (i % 40) * 260, y: Math.floor(i / 40) * 140, width: 240, height: 120 },
       zIndex: 0,
       revision: 1,
+      groupId: null,
       ...overrides[id],
     } satisfies CanvasCard;
   });

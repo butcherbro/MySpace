@@ -112,6 +112,9 @@ pub struct NoteCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub document_json: Value,
     pub plain_text: String,
     /// Semantic background-color preset id (`default`, `yellow`, …).
@@ -132,6 +135,9 @@ pub struct BoardPortalDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub target: PortalTarget,
 }
 
@@ -144,6 +150,9 @@ pub struct ImageCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub asset: AssetDto,
     pub caption_json: Value,
     pub caption_plain_text: String,
@@ -164,6 +173,9 @@ pub struct EmbedCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub source_url: String,
     pub display_url: String,
     pub site_name: Option<String>,
@@ -200,6 +212,9 @@ pub struct FilesystemAliasDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub target_kind: String,
     pub path_hint: String,
     pub display_name: String,
@@ -237,6 +252,9 @@ pub struct BoardShortcutDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub target_board_id: String,
     pub target: Option<BoardShortcutTarget>,
 }
@@ -255,7 +273,7 @@ pub struct CreateBoardShortcutInput {
 }
 
 /// A group card (ADR-0013): a named, coloured frame drawn under other cards.
-/// Membership is geometric and computed by the frontend; nothing is stored.
+/// Membership is stored on the member (`group_id`), not on the group.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupCardDto {
@@ -264,6 +282,9 @@ pub struct GroupCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     /// `''` is a valid, untitled group; the UI renders the fallback label.
     pub title: String,
     /// Note palette preset id (`default`, `yellow`, …).
@@ -284,6 +305,21 @@ pub struct CreateGroupInput {
     /// Defaults to `default`.
     #[serde(default)]
     pub color_token: Option<String>,
+    /// Cards that join the group in the same transaction.
+    #[serde(default)]
+    pub member_ids: Vec<String>,
+    /// The new group's own group (a frame nested in another frame).
+    #[serde(default)]
+    pub group_id: Option<String>,
+}
+
+/// Receipt of `create_group`: the stored group plus a receipt per member
+/// whose `group_id` was set (empty on an idempotent repeat).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupCreatedReceipt {
+    pub group: CardDto,
+    pub members: Vec<CardReceipt>,
 }
 
 /// Input for renaming / recolouring a group; absent fields are unchanged,
@@ -361,6 +397,9 @@ pub struct FileCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub asset: AssetDto,
     pub preview_text: String,
     /// Generated thumbnail (PDF/office/HTML) when available.
@@ -589,6 +628,16 @@ pub struct MoveCardItem {
     pub id: String,
     pub expected_revision: i64,
     pub frame: Frame,
+    /// Absent = membership unchanged.
+    #[serde(default)]
+    pub group: Option<GroupAssignment>,
+}
+
+/// A card's new group in a [`MoveCardItem`]; `None` takes it out of its group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupAssignment {
+    pub group_id: Option<String>,
 }
 
 /// A transactional multi-card move (one gesture = one transaction/undo entry).

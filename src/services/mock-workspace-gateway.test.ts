@@ -474,11 +474,20 @@ describe("MockWorkspaceGateway", () => {
     it("creates a group with defaults, idempotently by id, wider than the old 1600 px limit", async () => {
       const gateway = new MockWorkspaceGateway();
       const created = await gateway.createGroup({ id: "g1", boardId: "home", frame, zIndex: 0 });
-      expect(created).toMatchObject({ kind: "group", id: "g1", frame, title: "", colorToken: "default", revision: 1 });
+      expect(created.group).toMatchObject({
+        kind: "group",
+        id: "g1",
+        frame,
+        title: "",
+        colorToken: "default",
+        revision: 1,
+        groupId: null,
+      });
+      expect(created.members).toEqual([]);
 
       const again = await gateway.createGroup({ id: "g1", boardId: "home", frame, zIndex: 0, title: "other" });
       expect(again).toEqual(created);
-      expect((await gateway.loadBoardSnapshot("home")).cards).toEqual([created]);
+      expect((await gateway.loadBoardSnapshot("home")).cards).toEqual([created.group]);
     });
 
     it("refuses an unknown colour, an out-of-range frame and a missing board", async () => {
@@ -551,15 +560,198 @@ describe("MockWorkspaceGateway", () => {
       try {
         const cards = (await new MockWorkspaceGateway().loadBoardSnapshot("home")).cards;
         const group = cards.find((c) => c.kind === "group");
-        expect(group).toMatchObject({ id: "group-project", title: "Проект" });
-        expect(cards.filter((c) => c.kind === "note").map((c) => c.id)).toEqual([
-          "group-note-a",
-          "group-note-b",
-          "group-note-outside",
+        expect(group).toMatchObject({ id: "group-project", title: "Проект", groupId: null });
+        expect(cards.filter((c) => c.kind === "note").map((c) => [c.id, c.groupId])).toEqual([
+          ["group-note-a", "group-project"],
+          ["group-note-b", "group-project"],
+          ["group-note-outside", null],
         ]);
       } finally {
         window.history.replaceState(null, "", previous);
       }
+    });
+  });
+
+  describe("stored group membership", () => {
+    const groupFrame = { x: 0, y: 0, width: 1000, height: 800 };
+
+    async function boardWithNotes() {
+      const gateway = new MockWorkspaceGateway();
+      for (const id of ["n1", "n2"]) {
+        await gateway.createNote({
+          id,
+          boardId: "home",
+          frame: { x: 100, y: 100, width: 200, height: 80 },
+          zIndex: 0,
+          documentJson: { type: "doc", content: [] },
+        });
+      }
+      return gateway;
+    }
+
+    const groupIdOf = async (gateway: MockWorkspaceGateway, id: string) =>
+      (await gateway.loadBoardSnapshot("home")).cards.find((c) => c.id === id)?.groupId;
+
+    it("createGroup sets the members in the same call, deduped, and bumps their revisions once", async () => {
+      const gateway = await boardWithNotes();
+      const receipt = await gateway.createGroup({
+        id: "g",
+        boardId: "home",
+        frame: groupFrame,
+        zIndex: 0,
+        memberIds: ["n1", "n2", "n1"],
+      });
+      expect(receipt.members).toEqual([
+        { id: "n1", revision: 2 },
+        { id: "n2", revision: 2 },
+      ]);
+      expect(await groupIdOf(gateway, "n1")).toBe("g");
+      expect(await groupIdOf(gateway, "n2")).toBe("g");
+    });
+
+    it("createGroup with an unknown or foreign member fails and creates nothing", async () => {
+      const gateway = await boardWithNotes();
+      await gateway.createChildBoard({
+        boardId: "child",
+        parentBoardId: "home",
+        portalCardId: "portal",
+        title: "Child",
+        frame: { x: 0, y: 0, width: 200, height: 160 },
+      });
+      await gateway.createNote({
+        id: "far",
+        boardId: "child",
+        frame: { x: 0, y: 0, width: 200, height: 80 },
+        zIndex: 0,
+        documentJson: { type: "doc", content: [] },
+      });
+      for (const memberIds of [["n1", "missing"], ["n1", "far"], ["g"]]) {
+        await expect(
+          gateway.createGroup({ id: "g", boardId: "home", frame: groupFrame, zIndex: 0, memberIds }),
+        ).rejects.toMatchObject({ code: "constraint_violation" });
+      }
+      const cards = (await gateway.loadBoardSnapshot("home")).cards;
+      expect(cards.some((c) => c.id === "g")).toBe(false);
+      expect(cards.find((c) => c.id === "n1")).toMatchObject({ groupId: null, revision: 1 });
+    });
+
+    it("moveCards applies `group` with one revision bump; absent `group` keeps membership", async () => {
+      const gateway = await boardWithNotes();
+      await gateway.createGroup({ id: "g", boardId: "home", frame: groupFrame, zIndex: 0 });
+      const frame = { x: 120, y: 120, width: 200, height: 80 };
+
+      expect(
+        await gateway.moveCards({ cards: [{ id: "n1", expectedRevision: 1, frame, group: { groupId: "g" } }] }),
+      ).toEqual({ cards: [{ id: "n1", revision: 2 }] });
+      expect(await groupIdOf(gateway, "n1")).toBe("g");
+
+      await gateway.moveCards({ cards: [{ id: "n1", expectedRevision: 2, frame }] });
+      expect(await groupIdOf(gateway, "n1")).toBe("g");
+
+      await gateway.moveCards({ cards: [{ id: "n1", expectedRevision: 3, frame, group: { groupId: null } }] });
+      expect(await groupIdOf(gateway, "n1")).toBeNull();
+    });
+
+    it("moveCards refuses a target that is not a live group, the card itself, or a descendant — writing nothing", async () => {
+      const gateway = await boardWithNotes();
+      await gateway.createGroup({ id: "outer", boardId: "home", frame: groupFrame, zIndex: 0 });
+      await gateway.createGroup({ id: "inner", boardId: "home", frame: groupFrame, zIndex: 0 });
+      await gateway.moveCards({
+        cards: [{ id: "inner", expectedRevision: 1, frame: groupFrame, group: { groupId: "outer" } }],
+      });
+      const frame = { x: 120, y: 120, width: 200, height: 80 };
+      const refused = [
+        { id: "n1", expectedRevision: 1, frame, group: { groupId: "missing" } },
+        { id: "n1", expectedRevision: 1, frame, group: { groupId: "n2" } },
+        { id: "outer", expectedRevision: 1, frame: groupFrame, group: { groupId: "outer" } },
+        // outer → inner → outer: цикл.
+        { id: "outer", expectedRevision: 1, frame: groupFrame, group: { groupId: "inner" } },
+      ];
+      for (const item of refused) {
+        await expect(
+          gateway.moveCards({ cards: [{ id: "n2", expectedRevision: 1, frame }, item] }),
+        ).rejects.toMatchObject({ code: "constraint_violation" });
+      }
+      const cards = (await gateway.loadBoardSnapshot("home")).cards;
+      expect(cards.find((c) => c.id === "n2")).toMatchObject({ revision: 1 });
+      expect(cards.find((c) => c.id === "outer")).toMatchObject({ groupId: null, revision: 1 });
+    });
+
+    it("createGroup nests the new group in `groupId` and refuses a parent that would make a cycle", async () => {
+      const gateway = await boardWithNotes();
+      await gateway.createGroup({ id: "outer", boardId: "home", frame: groupFrame, zIndex: 0 });
+      const { group } = await gateway.createGroup({
+        id: "inner",
+        boardId: "home",
+        frame: groupFrame,
+        zIndex: 0,
+        groupId: "outer",
+      });
+      expect(group.groupId).toBe("outer");
+      expect(await groupIdOf(gateway, "inner")).toBe("outer");
+
+      await expect(
+        gateway.createGroup({ id: "x", boardId: "home", frame: groupFrame, zIndex: 0, groupId: "n1" }),
+      ).rejects.toMatchObject({ code: "constraint_violation" });
+      // Родитель inner сам стал бы членом новой группы: outer → x → inner → outer.
+      await expect(
+        gateway.createGroup({
+          id: "x",
+          boardId: "home",
+          frame: groupFrame,
+          zIndex: 0,
+          memberIds: ["outer"],
+          groupId: "inner",
+        }),
+      ).rejects.toMatchObject({ code: "constraint_violation" });
+      expect(await groupIdOf(gateway, "x")).toBeUndefined();
+    });
+
+    it("moveCards validates items in order against the earlier ones and rolls the batch back", async () => {
+      const gateway = await boardWithNotes();
+      await gateway.createGroup({ id: "g1", boardId: "home", frame: groupFrame, zIndex: 0 });
+      await gateway.createGroup({ id: "g2", boardId: "home", frame: groupFrame, zIndex: 0 });
+      const frame = { x: 5, y: 5, width: 200, height: 80 };
+
+      await expect(
+        gateway.moveCards({
+          cards: [
+            { id: "n1", expectedRevision: 1, frame },
+            { id: "g1", expectedRevision: 1, frame: groupFrame, group: { groupId: "g2" } },
+            { id: "g2", expectedRevision: 1, frame: groupFrame, group: { groupId: "g1" } },
+          ],
+        }),
+      ).rejects.toMatchObject({ code: "constraint_violation" });
+
+      const cards = (await gateway.loadBoardSnapshot("home")).cards;
+      expect(cards.find((c) => c.id === "n1")).toMatchObject({ revision: 1, frame: { x: 100, y: 100 } });
+      expect(cards.find((c) => c.id === "g1")).toMatchObject({ revision: 1, groupId: null });
+      expect(cards.find((c) => c.id === "g2")).toMatchObject({ revision: 1, groupId: null });
+    });
+
+    it("placing a card from Unsorted clears its membership even when the group is live", async () => {
+      const gateway = await boardWithNotes();
+      await gateway.createGroup({ id: "g", boardId: "home", frame: groupFrame, zIndex: 0, memberIds: ["n1"] });
+      await gateway.moveCardsToBoardUnsorted({ targetBoardId: "home", cards: [{ id: "n1", expectedRevision: 2 }] });
+      const held = (await gateway.loadBoardSnapshot("home")).unsortedCards.find((c) => c.id === "n1")!;
+      await gateway.placeUnsortedCard({
+        id: "n1",
+        expectedRevision: held.revision,
+        frame: { x: 120, y: 120, width: 200, height: 80 },
+      });
+      expect(await groupIdOf(gateway, "n1")).toBeNull();
+    });
+
+    it("loads membership as dormant while the group is in the Trash and revives it on restore", async () => {
+      const gateway = await boardWithNotes();
+      await gateway.createGroup({ id: "g", boardId: "home", frame: groupFrame, zIndex: 0, memberIds: ["n1"] });
+
+      const batchId = await gateway.trashSelection({ items: [{ id: "g", kind: "group" }] });
+      expect(await groupIdOf(gateway, "n1")).toBeNull();
+      expect((await gateway.readCard("n1")).groupId).toBeNull();
+
+      await gateway.restoreTrashBatch(batchId);
+      expect(await groupIdOf(gateway, "n1")).toBe("g");
     });
   });
 });
