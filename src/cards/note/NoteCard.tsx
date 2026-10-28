@@ -281,7 +281,7 @@ export const NoteCard = memo(function NoteCard({
               handleBlur();
             }}
             onFinalize={() => {
-              void handleFinalize();
+              void handleFinalize({ force: true });
             }}
             highlightQuery={highlightQuery}
             initialCaretPoint={caretPoint}

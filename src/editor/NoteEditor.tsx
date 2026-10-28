@@ -135,7 +135,9 @@ export function NoteEditor({
   // applies `editable` at creation time, so toggling it after mount requires an
   // explicit setEditable call.
   useEffect(() => {
-    editor?.setEditable(editable);
+    // emitUpdate=false: по умолчанию setEditable шлёт `update` с пустой транзакцией,
+    // и открытие заметки выглядело бы правкой (грязный черновик, запись без текста).
+    editor?.setEditable(editable, false);
     // Focus the editor the moment editing begins, mirroring the old textarea
     // autofocus, so that a subsequent click-outside fires a clean blur. The
     // caret lands where the user clicked; otherwise it goes to the end.

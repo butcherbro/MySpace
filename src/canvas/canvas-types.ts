@@ -42,6 +42,11 @@ export interface CanvasCard {
    * A re-render key: pointing a shortcut at a local folder bumps no revision.
    */
   aliasLocal?: boolean;
+  /**
+   * Для заметок: пресет фона. Ключ перерисовки: смена цвета не растит revision,
+   * и без него открытая заметка остаётся на экране прежнего цвета.
+   */
+  colorToken?: string;
 }
 
 /** A point in board-space coordinates. */
