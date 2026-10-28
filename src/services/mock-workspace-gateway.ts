@@ -10,10 +10,17 @@ import type {
   CardDto,
   CardReceipt,
   CardsReceipt,
+  ConnectorArrowEnds,
+  ConnectorDto,
   ConvertNoteToEmbedInput,
   CopyImageCardsInput,
   CreateBoardShortcutInput,
   CreateChildBoardInput,
+  CreateConnectorInput,
+  CreateGroupInput,
+  GroupCardDto,
+  GroupCreatedReceipt,
+  UpdateGroupInput,
   CreateFileCardInput,
   CreateFolderAliasInput,
   CreateImageCardInput,
@@ -39,6 +46,7 @@ import type {
   MoveCardsToUnsortedInput,
   PlaceUnsortedCardInput,
   QuickBoardDto,
+  RemoveConnectorInput,
   ReorderQuickBoardsInput,
   SaveViewportInput,
   SearchResultDto,
@@ -49,6 +57,7 @@ import type {
   TrashEntryDto,
   TrashSelectionInput,
   TrashSummaryDto,
+  UpdateConnectorInput,
   UpdateEmbedDescriptionInput,
   UpdateImageCaptionInput,
   UpdateNoteInput,
@@ -65,6 +74,8 @@ import type {
 import { denseBoardSnapshot } from "../test/dense-board-fixture";
 import { documentToPlainText, plainTextToDocument } from "../editor/document-codec";
 import { fileNameFromPath } from "./platform-path";
+import { NOTE_COLOR_OPTIONS } from "../cards/note/note-color";
+import { GROUP_TITLE_MAX_CHARS } from "../cards/group/group-title";
 
 /**
  * The rejection the Tauri gateway passes on for Rust's
@@ -79,9 +90,44 @@ function staleRevision(expected: number, actual: number) {
  * Mirrors Rust's `Frame::validate` size bounds (src-tauri/src/domain/models.rs),
  * so browser mode rejects the same out-of-range frame writes the app does.
  */
+/** `WorkspaceError::ConstraintViolation` из Rust в том виде, в каком его передаёт Tauri-шлюз. */
+function constraintViolation(message: string) {
+  return { code: "constraint_violation", message };
+}
+
+/** Связь, как её хранит мок: DTO плюс состояние удаления. */
+interface StoredConnector extends ConnectorDto {
+  deletedAt: number | null;
+  trashBatchId: string | null;
+}
+
+const CONNECTOR_ARROW_ENDS: readonly ConnectorArrowEnds[] = ["end", "both", "none"];
+
+function connectorDto(stored: StoredConnector): ConnectorDto {
+  return {
+    id: stored.id,
+    boardId: stored.boardId,
+    fromCardId: stored.fromCardId,
+    toCardId: stored.toCardId,
+    colorToken: stored.colorToken,
+    arrowEnds: stored.arrowEnds,
+    label: stored.label,
+    revision: stored.revision,
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt,
+  };
+}
+
 function frameBoundsError(frame: { width: number; height: number }): Error | null {
-  if (!(frame.width >= 120 && frame.width <= 1600)) return new Error("card width must be between 120 and 1600");
+  if (!(frame.width >= 120 && frame.width <= 8000)) return new Error("card width must be between 120 and 8000");
   if (!(frame.height >= 48 && frame.height <= 10000)) return new Error("card height must be between 48 and 10000");
+  return null;
+}
+
+function groupTitleError(title: string | undefined) {
+  if (title !== undefined && [...title].length > GROUP_TITLE_MAX_CHARS) {
+    return constraintViolation(`group title is longer than ${GROUP_TITLE_MAX_CHARS} characters`);
+  }
   return null;
 }
 
@@ -107,7 +153,11 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
     cards: [],
     unsortedCards: [],
+    connectors: [],
   };
+
+  /** Все связи всех досок, включая удалённые (`deletedAt`). */
+  private connectors = new Map<string, StoredConnector>();
 
   private quickBoards: QuickBoardDto[] = [];
   private trashBatches = new Map<
@@ -135,8 +185,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   private externalWriteFixtureSeeded = false;
   private externalWritePolls = 0;
 
+  /** Засевается один раз фикстурой `?fixture=connectors`. */
+  private connectorsFixtureSeeded = false;
+
   /** Seeded once by the `?fixture=foreign-shortcut` fixture (ADR-0012). */
   private foreignShortcutFixtureSeeded = false;
+
+  /** Засевается один раз фикстурой `?fixture=groups`. */
+  private groupsFixtureSeeded = false;
 
   /** This (mock) installation's identity (ADR-0012). */
   private device: DeviceIdentity = { deviceId: MOCK_DEVICE_ID, deviceName: "This Mac" };
@@ -186,6 +242,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     const fingerprint = JSON.stringify([
       board,
       this.snapshot.cards.filter((card) => card.boardId === boardId),
+      this.liveConnectors(boardId),
       [...this.boards.values()].filter((b) => b.parentBoardId === boardId),
     ]);
     const entry = this.changeSeqs.get(boardId);
@@ -207,7 +264,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   readCard(cardId: string): Promise<CardDto> {
     const card = this.snapshot.cards.find((c) => c.id === cardId);
     if (!card) return Promise.reject(new Error(`card not found: ${cardId}`));
-    return Promise.resolve({ ...card });
+    return Promise.resolve({ ...card, groupId: this.effectiveGroupId(card) });
   }
 
   loadBoardSnapshot(boardId: string): Promise<BoardSnapshot> {
@@ -230,6 +287,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         frame: { x: 40, y: 40, width: 280, height: 180 },
         zIndex: 0,
         revision: 1,
+        groupId: null,
         targetKind: "folder",
         pathHint: "/Users/me/Research",
         displayName: "Research",
@@ -244,6 +302,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
         cards: [structuredClone(alias)],
         unsortedCards: [],
+        connectors: [],
       });
     }
     // Test-only corrupt-note fixture (P1.7): one note whose stored document
@@ -299,6 +358,33 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       this.foreignShortcutFixtureSeeded = true;
       this.snapshot.cards = foreignShortcutFixtureCards(this.device.deviceName);
     }
+    // Тестовая фикстура связей: две заметки и одна стрелка между ними. Засевается
+    // один раз, чтобы правки и удаления переживали перезагрузку (undo/redo её делает).
+    if (boardId === "home" && !this.connectorsFixtureSeeded && fixtureParam() === "connectors") {
+      this.connectorsFixtureSeeded = true;
+      this.snapshot.cards = connectorsFixtureCards();
+      const now = Date.now();
+      this.connectors.set("connector-1", {
+        id: "connector-1",
+        boardId: "home",
+        fromCardId: "connector-note-a",
+        toCardId: "connector-note-b",
+        colorToken: "default",
+        arrowEnds: "end",
+        label: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+        trashBatchId: null,
+      });
+    }
+    // Тестовая фикстура групп: группа «Проект» с двумя заметками-членами и одна
+    // заметка снаружи. Один раз, чтобы перемещения переживали перезагрузку.
+    if (boardId === "home" && !this.groupsFixtureSeeded && fixtureParam() === "groups") {
+      this.groupsFixtureSeeded = true;
+      this.snapshot.cards = groupsFixtureCards();
+    }
     // Test-only dense fixture activated by a query parameter.
     if (
       boardId === "home" &&
@@ -323,17 +409,188 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         boardId === this.board.id
           ? structuredClone(this.snapshot.viewport)
           : structuredClone(this.childViewports.get(boardId) ?? { x: 0, y: 0, zoom: 1, revision: 1 }),
-      cards: structuredClone(
-        this.snapshot.cards.filter(
-          (card) => card.boardId === boardId && !(card as { unsorted?: boolean }).unsorted,
-        ),
-      ),
-      unsortedCards: structuredClone(
-        this.snapshot.cards.filter(
-          (card) => card.boardId === boardId && (card as { unsorted?: boolean }).unsorted,
-        ),
-      ),
+      cards: this.snapshot.cards
+        .filter((card) => card.boardId === boardId && !(card as { unsorted?: boolean }).unsorted)
+        .map((card) => this.normalizedCard(card)),
+      unsortedCards: this.snapshot.cards
+        .filter((card) => card.boardId === boardId && (card as { unsorted?: boolean }).unsorted)
+        .map((card) => this.normalizedCard(card)),
+      connectors: this.liveConnectors(boardId),
     });
+  }
+
+  /**
+   * Как загрузчик бэкенда: хранимый `groupId` действует, только пока группа —
+   * живая карточка-группа на холсте той же доски; иначе членство «спит» и
+   * наружу отдаётся `null` (корзина, Unsorted, другая доска, пропавшая группа).
+   */
+  private effectiveGroupId(card: CardDto): string | null {
+    if (card.groupId === null) return null;
+    const group = this.snapshot.cards.find((c) => c.id === card.groupId);
+    const live =
+      group !== undefined &&
+      group.kind === "group" &&
+      group.boardId === card.boardId &&
+      !(group as { unsorted?: boolean }).unsorted;
+    return live ? card.groupId : null;
+  }
+
+  private normalizedCard(card: CardDto): CardDto {
+    return { ...structuredClone(card), groupId: this.effectiveGroupId(card) };
+  }
+
+  /**
+   * Проверка назначения карточки `cardId` в группу `groupId` (как бэкенд): цель —
+   * живая группа той же доски, не сама карточка и не её потомок. Ошибка того же
+   * вида, что у связи с плохим концом.
+   */
+  private groupAssignmentError(cardId: string, groupId: string): ReturnType<typeof constraintViolation> | null {
+    const card = this.snapshot.cards.find((c) => c.id === cardId);
+    const group = this.snapshot.cards.find((c) => c.id === groupId);
+    if (
+      !card ||
+      !group ||
+      group.kind !== "group" ||
+      (group as { unsorted?: boolean }).unsorted ||
+      group.boardId !== card.boardId ||
+      group.id === card.id
+    ) {
+      return constraintViolation(`group is not a live group of the card's board: ${groupId}`);
+    }
+    // Вверх по хранимой цепочке группы-цели; встретили саму карточку — цикл.
+    // visited: цепочка может быть битой или уже зацикленной (синк), обход должен кончиться.
+    const visited = new Set<string>();
+    let current: string | null = group.groupId;
+    while (current !== null && !visited.has(current)) {
+      if (current === card.id) return constraintViolation(`group assignment makes a cycle: ${cardId} -> ${groupId}`);
+      visited.add(current);
+      current = this.snapshot.cards.find((c) => c.id === current)?.groupId ?? null;
+    }
+    return null;
+  }
+
+  /** Как загрузчик бэкенда: не удалена, и оба конца — живые карточки на холсте этой доски. */
+  private liveConnectors(boardId: string): ConnectorDto[] {
+    const onCanvas = new Set(
+      this.snapshot.cards
+        .filter((card) => card.boardId === boardId && !(card as { unsorted?: boolean }).unsorted)
+        .map((card) => card.id),
+    );
+    return [...this.connectors.values()]
+      .filter(
+        (c) =>
+          c.boardId === boardId &&
+          c.deletedAt === null &&
+          onCanvas.has(c.fromCardId) &&
+          onCanvas.has(c.toCardId),
+      )
+      .map(connectorDto);
+  }
+
+  /** Повторяет проверку концов и значений бэкенда для создания и изменения. */
+  private connectorInputError(
+    boardId: string,
+    fromCardId: string,
+    toCardId: string,
+    colorToken: string,
+    arrowEnds: ConnectorArrowEnds,
+  ): object | null {
+    if (fromCardId === toCardId) return constraintViolation("a connector cannot join a card to itself");
+    for (const id of [fromCardId, toCardId]) {
+      const card = this.snapshot.cards.find((c) => c.id === id);
+      if (!card || card.boardId !== boardId || (card as { unsorted?: boolean }).unsorted) {
+        return constraintViolation(`connector endpoint is not a live card of the board: ${id}`);
+      }
+    }
+    if (!NOTE_COLOR_OPTIONS.some((option) => option.id === colorToken)) {
+      return constraintViolation(`unknown connector color: ${colorToken}`);
+    }
+    if (!CONNECTOR_ARROW_ENDS.includes(arrowEnds)) {
+      return constraintViolation(`unknown connector arrow ends: ${arrowEnds}`);
+    }
+    return null;
+  }
+
+  createConnector(input: CreateConnectorInput): Promise<ConnectorDto> {
+    const existing = this.connectors.get(input.id);
+    if (existing) {
+      // Как бэкенд: мягко удалённая связь восстанавливается как хранилась (ревизия,
+      // цвет, концы и подпись — свои, поля запроса игнорируются); живая — без изменений.
+      if (existing.deletedAt !== null) {
+        existing.deletedAt = null;
+        existing.trashBatchId = null;
+      }
+      return Promise.resolve(connectorDto(existing));
+    }
+    if (!this.boards.has(input.boardId)) {
+      return Promise.reject({ code: "not_found", message: `board ${input.boardId}` });
+    }
+    const colorToken = input.colorToken ?? "default";
+    const arrowEnds = input.arrowEnds ?? "end";
+    const invalid = this.connectorInputError(input.boardId, input.fromCardId, input.toCardId, colorToken, arrowEnds);
+    if (invalid) return Promise.reject(invalid);
+    const now = Date.now();
+    const stored: StoredConnector = {
+      id: input.id,
+      boardId: input.boardId,
+      fromCardId: input.fromCardId,
+      toCardId: input.toCardId,
+      colorToken,
+      arrowEnds,
+      label: null,
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+      trashBatchId: null,
+    };
+    this.connectors.set(stored.id, stored);
+    return Promise.resolve(connectorDto(stored));
+  }
+
+  updateConnector(input: UpdateConnectorInput): Promise<ConnectorDto> {
+    const stored = this.connectors.get(input.connectorId);
+    if (!stored || stored.deletedAt !== null) {
+      return Promise.reject({ code: "not_found", message: `connector ${input.connectorId}` });
+    }
+    if (stored.revision !== input.expectedRevision) {
+      return Promise.reject(staleRevision(input.expectedRevision, stored.revision));
+    }
+    const next = {
+      fromCardId: input.fromCardId ?? stored.fromCardId,
+      toCardId: input.toCardId ?? stored.toCardId,
+      colorToken: input.colorToken ?? stored.colorToken,
+      arrowEnds: input.arrowEnds ?? stored.arrowEnds,
+      label: input.label === undefined ? stored.label : input.label,
+    };
+    const invalid = this.connectorInputError(stored.boardId, next.fromCardId, next.toCardId, next.colorToken, next.arrowEnds);
+    if (invalid) return Promise.reject(invalid);
+    Object.assign(stored, next, { revision: stored.revision + 1, updatedAt: Date.now() });
+    return Promise.resolve(connectorDto(stored));
+  }
+
+  removeConnector(input: RemoveConnectorInput): Promise<void> {
+    // Мягкое удаление без партии корзины; ревизия сохраняется, чтобы цепочка
+    // undo (перекраска → удаление) продолжала сходиться. Уже удалённая связь
+    // теряет партию корзины: восстановление партии её не вернёт. Нет id — no-op.
+    const stored = this.connectors.get(input.connectorId);
+    if (stored) {
+      stored.deletedAt ??= Date.now();
+      stored.trashBatchId = null;
+    }
+    return Promise.resolve();
+  }
+
+  /**
+   * Правило 4 контракта: карточка уходит с доски (или в Unsorted) — её связи
+   * мягко удаляются (без партии корзины, ревизия сохраняется). Физически строка
+   * исчезает только вместе с очищенной из корзины карточкой.
+   */
+  private softDeleteConnectorsTouching(cardIds: Set<string>): void {
+    const now = Date.now();
+    for (const c of this.connectors.values()) {
+      if ((cardIds.has(c.fromCardId) || cardIds.has(c.toCardId)) && c.deletedAt === null) c.deletedAt = now;
+    }
   }
 
   createNote(input: CreateNoteInput): Promise<CardReceipt> {
@@ -355,6 +612,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       documentJson: input.documentJson,
       plainText,
       colorToken: "default",
@@ -415,11 +673,27 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(staleRevision(item.expectedRevision, card.revision));
       }
     }
+    // Как бэкенд: элементы применяются по очереди, и назначение группы
+    // проверяется с учётом уже применённых (G1→G2, затем G2→G1 — цикл). Ошибка
+    // откатывает весь пакет, как транзакция.
+    const touched = input.cards.map((item) => this.snapshot.cards.find((c) => c.id === item.id)!);
+    const saved = touched.map((card) => ({ card, revision: card.revision, frame: card.frame, groupId: card.groupId }));
     const receipts: CardReceipt[] = [];
-    for (const item of input.cards) {
-      const card = this.snapshot.cards.find((c) => c.id === item.id)!;
+    for (const [index, item] of input.cards.entries()) {
+      const card = touched[index];
+      const groupId = item.group?.groupId ?? null;
+      const invalid = groupId === null ? null : this.groupAssignmentError(item.id, groupId);
+      if (invalid) {
+        for (const entry of saved.reverse()) {
+          entry.card.revision = entry.revision;
+          entry.card.frame = entry.frame;
+          entry.card.groupId = entry.groupId;
+        }
+        return Promise.reject(invalid);
+      }
       card.revision += 1;
       card.frame = { ...item.frame };
+      if (item.group) card.groupId = item.group.groupId;
       receipts.push({ id: card.id, revision: card.revision });
     }
     return Promise.resolve({ cards: receipts });
@@ -433,6 +707,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     if (card.revision !== input.expectedRevision) {
       return Promise.reject(staleRevision(input.expectedRevision, card.revision));
     }
+    if (card.boardId !== input.targetBoardId) this.softDeleteConnectorsTouching(new Set([card.id]));
     card.revision += 1;
     card.boardId = input.targetBoardId;
     card.frame = input.frame
@@ -460,6 +735,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     board.parentBoardId = input.targetParentBoardId;
     board.revision += 1;
+    if (portal.boardId !== input.targetParentBoardId) this.softDeleteConnectorsTouching(new Set([portal.id]));
     portal.boardId = input.targetParentBoardId;
     portal.frame = { ...input.frame };
     portal.revision += 1;
@@ -511,6 +787,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: 0,
       revision: 1,
+      groupId: null,
       target: {
         id: input.boardId,
         boardRevision: 1,
@@ -561,13 +838,18 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     });
 
     const sourceCards = this.snapshot.cards.filter((c) => c.boardId === sourceBoardId);
+    // Как бэкенд: членство копии указывает на копию группы, если та скопирована
+    // в той же пачке, иначе обнуляется.
+    const idMap = new Map<string, string>();
+    const copies: CardDto[] = [];
     for (const card of sourceCards) {
       const newCardId = `dup-card-${this.duplicateSequence++}`;
+      idMap.set(card.id, newCardId);
       if (card.kind === "board_portal") {
         const nestedNewBoardId = `dup-board-${this.duplicateSequence++}`;
         this.copyBoardSubtree(card.target.id, nestedNewBoardId, newBoardId, card.target.title);
         const nested = this.boards.get(nestedNewBoardId)!;
-        this.snapshot.cards.push({
+        copies.push({
           ...structuredClone(card),
           id: newCardId,
           boardId: newBoardId,
@@ -582,13 +864,17 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         });
         void nested;
       } else {
-        this.snapshot.cards.push({
+        copies.push({
           ...structuredClone(card),
           id: newCardId,
           boardId: newBoardId,
           revision: 1,
         });
       }
+    }
+    for (const copy of copies) {
+      copy.groupId = copy.groupId === null ? null : (idMap.get(copy.groupId) ?? null);
+      this.snapshot.cards.push(copy);
     }
   }
 
@@ -617,6 +903,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: 0,
       revision: 1,
+      groupId: null,
       target: {
         id: input.newBoardId,
         boardRevision: 1,
@@ -670,6 +957,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     this.snapshot.cards.push(
       ...structuredClone(batch.cards.filter((card) => !activeCardIds.has(card.id))),
     );
+    // Связь с концом, всё ещё лежащим в корзине, восстанавливается, но скрыта
+    // загрузчиком снимка, пока не вернётся и он (правило 2 контракта).
+    for (const c of this.connectors.values()) {
+      if (c.trashBatchId === batchId) {
+        c.deletedAt = null;
+        c.trashBatchId = null;
+      }
+    }
     this.trashBatches.delete(batchId);
     return Promise.resolve();
   }
@@ -700,6 +995,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       asset: {
         id: input.assetId,
         fileName: "",
@@ -727,6 +1023,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       targetBoardId: input.targetBoardId,
       target: {
         id: target.id,
@@ -741,6 +1038,102 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     return Promise.resolve(structuredClone(card));
   }
 
+  createGroup(input: CreateGroupInput): Promise<GroupCreatedReceipt> {
+    // Как бэкенд: повтор с тем же id возвращает сохранённую карточку и пустой список членов.
+    const existing = this.snapshot.cards.find((c) => c.id === input.id);
+    if (existing) {
+      if (existing.kind !== "group") return Promise.reject(constraintViolation(`card ${input.id} is not a group`));
+      return Promise.resolve({ group: this.normalizedCard(existing) as GroupCardDto, members: [] });
+    }
+    if (!this.boards.has(input.boardId)) {
+      return Promise.reject({ code: "not_found", message: `board ${input.boardId}` });
+    }
+    const colorToken = input.colorToken ?? "default";
+    if (!NOTE_COLOR_OPTIONS.some((o) => o.id === colorToken)) {
+      return Promise.reject(constraintViolation(`unknown group color: ${colorToken}`));
+    }
+    const titleInvalid = groupTitleError(input.title);
+    if (titleInvalid) return Promise.reject(titleInvalid);
+    const invalid = frameBoundsError(input.frame);
+    if (invalid) return Promise.reject(constraintViolation(invalid.message));
+    const card: GroupCardDto = {
+      kind: "group",
+      id: input.id,
+      boardId: input.boardId,
+      frame: { ...input.frame },
+      zIndex: input.zIndex,
+      revision: 1,
+      groupId: null,
+      title: input.title ?? "",
+      colorToken,
+    };
+    const memberIds = [...new Set(input.memberIds ?? [])];
+    // Проверка до записи: неизвестный или чужой член — ошибка, ничего не создано.
+    for (const memberId of memberIds) {
+      const member = this.snapshot.cards.find((c) => c.id === memberId);
+      if (!member || (member as { unsorted?: boolean }).unsorted || member.boardId !== input.boardId) {
+        return Promise.reject(constraintViolation(`group member is not a live card of the board: ${memberId}`));
+      }
+      if (memberId === input.id) {
+        return Promise.reject(constraintViolation("a group cannot be its own member"));
+      }
+    }
+    const parentId = input.groupId ?? null;
+    if (parentId !== null) {
+      const parent = this.snapshot.cards.find((c) => c.id === parentId);
+      if (
+        !parent ||
+        parent.kind !== "group" ||
+        (parent as { unsorted?: boolean }).unsorted ||
+        parent.boardId !== input.boardId
+      ) {
+        return Promise.reject(constraintViolation(`group is not a live group of the card's board: ${parentId}`));
+      }
+      // Цикл: родитель или кто-то выше по его цепочке становится членом новой группы.
+      const visited = new Set<string>();
+      let current: string | null = parentId;
+      while (current !== null && !visited.has(current)) {
+        if (memberIds.includes(current)) {
+          return Promise.reject(constraintViolation(`group assignment makes a cycle: ${input.id} -> ${parentId}`));
+        }
+        visited.add(current);
+        current = this.snapshot.cards.find((c) => c.id === current)?.groupId ?? null;
+      }
+    }
+    card.groupId = parentId;
+    this.snapshot.cards.push(card);
+    const members: CardReceipt[] = memberIds.map((memberId) => {
+      const member = this.snapshot.cards.find((c) => c.id === memberId)!;
+      member.groupId = card.id;
+      member.revision += 1;
+      return { id: member.id, revision: member.revision };
+    });
+    return Promise.resolve({ group: structuredClone(card), members });
+  }
+
+  updateGroup(input: UpdateGroupInput): Promise<CardReceipt> {
+    // Как бэкенд: сначала проверка самого запроса, потом поиск карточки.
+    if (input.title === undefined && input.colorToken === undefined) {
+      return Promise.reject(constraintViolation("update_group needs a title or a color"));
+    }
+    const titleInvalid = groupTitleError(input.title);
+    if (titleInvalid) return Promise.reject(titleInvalid);
+    if (input.colorToken !== undefined && !NOTE_COLOR_OPTIONS.some((o) => o.id === input.colorToken)) {
+      return Promise.reject(constraintViolation(`unknown group color: ${input.colorToken}`));
+    }
+    const card = this.snapshot.cards.find(
+      (c): c is GroupCardDto => c.kind === "group" && c.id === input.cardId,
+    );
+    if (!card) return Promise.reject({ code: "not_found", message: `group ${input.cardId}` });
+    if (card.revision !== input.expectedRevision) {
+      return Promise.reject(staleRevision(input.expectedRevision, card.revision));
+    }
+    if (input.title !== undefined) card.title = input.title;
+    if (input.colorToken !== undefined) card.colorToken = input.colorToken;
+    card.revision += 1;
+    return Promise.resolve({ id: card.id, revision: card.revision });
+  }
+
   createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {
     const displayName = fileNameFromPath(input.sourcePath);
     const card: FilesystemAliasDto = {
@@ -750,6 +1143,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       targetKind: "folder",
       pathHint: input.sourcePath,
       displayName,
@@ -896,6 +1290,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...input.frame },
       zIndex: input.zIndex,
       revision: 1,
+      groupId: null,
       asset: {
         id: `asset-${input.id}`,
         fileName,
@@ -989,6 +1384,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       frame: { ...note.frame },
       zIndex: note.zIndex,
       revision: note.revision + 1,
+      groupId: null,
       sourceUrl: input.sourceUrl,
       displayUrl: input.displayUrl,
       siteName: null,
@@ -1104,11 +1500,17 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     let boardCount = 0;
     let cardCount = 0;
+    const purgedCardIds = new Set<string>();
     for (const batch of this.trashBatches.values()) {
       boardCount += batch.boards.length;
       cardCount += batch.cards.length;
+      for (const card of batch.cards) purgedCardIds.add(card.id);
     }
     this.trashBatches.clear();
+    // Как каскад внешнего ключа в бэкенде: исчезают только связи очищенных карточек.
+    for (const [id, c] of this.connectors) {
+      if (purgedCardIds.has(c.fromCardId) || purgedCardIds.has(c.toCardId)) this.connectors.delete(id);
+    }
     return Promise.resolve({ boardCount, cardCount, orphanAssetCount: 0 });
   }
 
@@ -1284,11 +1686,19 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     this.snapshot.cards = this.snapshot.cards.filter((card) => !removedCardIds.has(card.id));
 
     const batchId = `batch-${++this.trashSequence}`;
+    const deletedAt = Date.now();
     this.trashBatches.set(batchId, {
       cards: structuredClone(removedCards),
       boards: structuredClone(removedBoards),
-      deletedAt: Date.now(),
+      deletedAt,
     });
+    // Связи удалённых карточек уходят в ту же партию корзины (правило 1 контракта).
+    for (const c of this.connectors.values()) {
+      if (c.deletedAt === null && (removedCardIds.has(c.fromCardId) || removedCardIds.has(c.toCardId))) {
+        c.deletedAt = deletedAt;
+        c.trashBatchId = batchId;
+      }
+    }
     return batchId;
   }
 
@@ -1412,6 +1822,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         return Promise.reject(staleRevision(item.expectedRevision, card.revision));
       }
     }
+    this.softDeleteConnectorsTouching(new Set(input.cards.map((item) => item.id)));
     const receipts: CardReceipt[] = [];
     for (const item of input.cards) {
       const card = this.snapshot.cards.find((c) => c.id === item.id)!;
@@ -1502,6 +1913,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         };
       });
 
+      this.softDeleteConnectorsTouching(
+        new Set([...cards.map((card) => card.id), ...boards.map(({ portal }) => portal.id)]),
+      );
       cards.forEach((card, index) => {
         card.revision = receiptCards[index].afterRevision;
         card.boardId = input.targetBoardId;
@@ -1582,6 +1996,8 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     }
     card.revision += 1;
     (card as { unsorted?: boolean }).unsorted = false;
+    // Как бэкенд: размещённая из Unsorted карточка ни в какой группе не состоит.
+    card.groupId = null;
     card.frame = { ...input.frame };
     return Promise.resolve({ id: card.id, revision: card.revision });
   }
@@ -1809,6 +2225,7 @@ function foreignShortcutFixtureCards(thisDeviceName: string): CardDto[] {
     frame: { x, y: 60, width: 300, height: 220 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     targetKind: "folder",
     pathHint,
     displayName,
@@ -1840,10 +2257,61 @@ function staleCardFixtureNote(revision: number, text: string): CardDto {
     frame: { x: 120, y: 120, width: 240, height: 120 },
     zIndex: 0,
     revision,
+    groupId: null,
     documentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
     plainText: text,
     colorToken: "default",
   };
+}
+
+/** Две заметки доски `?fixture=connectors`. */
+function connectorsFixtureCards(): CardDto[] {
+  const note = (id: string, x: number, y: number, text: string): CardDto => ({
+    kind: "note",
+    id,
+    boardId: "home",
+    frame: { x, y, width: 240, height: 120 },
+    zIndex: 0,
+    revision: 1,
+    groupId: null,
+    documentJson: plainTextToDocument(text),
+    plainText: text,
+    colorToken: "default",
+  });
+  return [note("connector-note-a", 80, 120, "Note A"), note("connector-note-b", 560, 200, "Note B")];
+}
+
+/** Доска `?fixture=groups`: группа «Проект», две заметки-члена в ней и одна снаружи. */
+function groupsFixtureCards(): CardDto[] {
+  const note = (id: string, x: number, y: number, text: string, groupId: string | null): CardDto => ({
+    kind: "note",
+    id,
+    boardId: "home",
+    frame: { x, y, width: 240, height: 120 },
+    zIndex: 1,
+    revision: 1,
+    groupId,
+    documentJson: plainTextToDocument(text),
+    plainText: text,
+    colorToken: "default",
+  });
+  const group: GroupCardDto = {
+    kind: "group",
+    id: "group-project",
+    boardId: "home",
+    frame: { x: 60, y: 80, width: 640, height: 320 },
+    zIndex: 0,
+    revision: 1,
+    groupId: null,
+    title: "Проект",
+    colorToken: "pink",
+  };
+  return [
+    group,
+    note("group-note-a", 100, 150, "Inside A", "group-project"),
+    note("group-note-b", 420, 200, "Inside B", "group-project"),
+    note("group-note-outside", 820, 160, "Outside", null),
+  ];
 }
 
 /** Cards of the `?fixture=corrupt-note` board (P1.7). */
@@ -1855,6 +2323,7 @@ function corruptNoteFixtureCards(): CardDto[] {
     frame: { x, y: 60, width: 240, height: 120 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     documentJson: corrupt
       ? { type: "doc", content: [] }
       : { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
@@ -1877,6 +2346,8 @@ function cardTitle(card: CardDto): string {
       return card.displayName;
     case "file":
       return card.asset.fileName;
+    case "group":
+      return card.title;
     default:
       return "";
   }

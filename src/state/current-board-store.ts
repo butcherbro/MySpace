@@ -12,6 +12,7 @@ import type {
   BoardSummary,
   CardDto,
   Breadcrumb,
+  ConnectorDto,
   FilesystemAliasDto,
 } from "../services/workspace-gateway";
 import type { CanvasViewport } from "../canvas/canvas-types";
@@ -25,6 +26,12 @@ export interface CurrentBoardState {
   cards: CardDto[];
   /** Cards in the board's Unsorted panel (hidden from canvas). */
   unsortedCards: CardDto[];
+  /**
+   * Связи доски — как загружены или записаны. Холст рисует только те, у которых
+   * оба конца есть в `cards`, поэтому стрелки удалённой локально карточки
+   * исчезают, не трогая этот список.
+   */
+  connectors: ConnectorDto[];
   selection: string[];
   editingCardId: string | null;
   loading: boolean;
@@ -53,6 +60,8 @@ export type CurrentBoardAction =
       viewportRevision: number;
       cards: CardDto[];
       unsortedCards: CardDto[];
+      /** Нет поля — у доски нет связей. */
+      connectors?: ConnectorDto[];
       /**
        * Local changes made after this snapshot was requested (`CardWrites`).
        * A same-board reload merges them in; for every other card the snapshot
@@ -74,11 +83,18 @@ export type CurrentBoardAction =
   | { type: "filesystemAliasUpdated"; alias: FilesystemAliasDto }
   | { type: "unsortedCardPlaced"; id: string; revision: number; frame: CardDto["frame"] }
   | { type: "cardMovedToUnsorted"; id: string; revision: number }
-  | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"] }
+  /** `groupId`: членство, отправленное вместе с перемещением; отсутствует — не менялось. */
+  | { type: "cardMoved"; id: string; revision: number; frame: CardDto["frame"]; groupId?: string | null }
+  /** Карточка стала членом новой группы (ответ `createGroup`). */
+  | { type: "cardGrouped"; id: string; revision: number; groupId: string }
   /** A portal's board was reparented and the portal stayed on the open board. */
   | { type: "portalMoved"; id: string; revision: number; boardRevision: number; frame: CardDto["frame"] }
   | { type: "noteColorChanged"; id: string; colorToken: string }
   | { type: "cardsRemoved"; ids: string[] }
+  | { type: "connectorCreated"; connector: ConnectorDto }
+  /** Несёт DTO из ответа изменения (с новой ревизией). */
+  | { type: "connectorUpdated"; connector: ConnectorDto }
+  | { type: "connectorsRemoved"; ids: string[] }
   | { type: "selectionChanged"; ids: string[] }
   | { type: "editingStarted"; id: string }
   | { type: "editingStopped" }
@@ -126,12 +142,16 @@ export type CardChangeAction = Extract<
       | "cardReplaced"
       | "cardStored"
       | "cardMoved"
+      | "cardGrouped"
       | "portalMoved"
       | "cardMovedToUnsorted"
       | "unsortedCardPlaced"
       | "noteColorChanged"
       | "boardCoverChanged"
-      | "filesystemAliasUpdated";
+      | "filesystemAliasUpdated"
+      | "connectorCreated"
+      | "connectorUpdated"
+      | "connectorsRemoved";
   }
 >;
 
@@ -146,6 +166,7 @@ export const initialState: CurrentBoardState = {
   boardOpenRevision: 0,
   cards: [],
   unsortedCards: [],
+  connectors: [],
   selection: [],
   editingCardId: null,
   loading: false,
@@ -211,6 +232,18 @@ export function reducer(
         };
         const cards = merge(action.cards, onCanvas);
         const unsortedCards = merge(action.unsortedCards, inUnsorted);
+        // Связи сливаются по тем же правилам, что и карточки (ledger штампует и их).
+        const ownConnectors = new Map(state.connectors.map((c) => [c.id, c]));
+        const freshConnectors = action.connectors ?? [];
+        const freshConnectorIds = new Set(freshConnectors.map((c) => c.id));
+        const connectors = [
+          ...freshConnectors.flatMap((c) => {
+            if (removed.has(c.id)) return [];
+            const own = ownConnectors.get(c.id);
+            return own && written.has(c.id) && own.revision > c.revision ? [own] : [c];
+          }),
+          ...state.connectors.filter((c) => !freshConnectorIds.has(c.id) && added.has(c.id)),
+        ];
         const ids = new Set([...cards, ...unsortedCards].map((c) => c.id));
         return {
           ...state,
@@ -220,6 +253,7 @@ export function reducer(
           viewportRevision: action.viewportRevision,
           cards,
           unsortedCards,
+          connectors,
           selection: state.selection.filter((id) => ids.has(id)),
           editingCardId:
             state.editingCardId !== null && ids.has(state.editingCardId)
@@ -252,6 +286,7 @@ export function reducer(
         boardOpenRevision: state.boardOpenRevision + 1,
         cards: action.cards,
         unsortedCards: action.unsortedCards,
+        connectors: action.connectors ?? [],
         selection: [],
         editingCardId: null,
         loading: false,
@@ -376,8 +411,14 @@ export function reducer(
       const card = state.unsortedCards.find((c) => c.id === action.id);
       if (!card) return state;
       // Ревизия — max (не откатываем, см. applyCardWrite), а frame — всегда из
-      // ответа: у карточки в Unsorted своего места на холсте нет.
-      const placed = { ...card, frame: action.frame, revision: Math.max(card.revision, action.revision) };
+      // ответа: у карточки в Unsorted своего места на холсте нет. Членство
+      // бэкенд при размещении сбрасывает — иначе карточка ездила бы за старой группой.
+      const placed = {
+        ...card,
+        frame: action.frame,
+        revision: Math.max(card.revision, action.revision),
+        groupId: null,
+      };
       return {
         ...state,
         unsortedCards: state.unsortedCards.filter((c) => c.id !== action.id),
@@ -405,6 +446,17 @@ export function reducer(
           ...c,
           revision: action.revision,
           frame: action.frame,
+          groupId: action.groupId === undefined ? c.groupId : action.groupId,
+        })),
+      };
+
+    case "cardGrouped":
+      return {
+        ...state,
+        cards: applyCardWrite(state.cards, action.id, action.revision, (c) => ({
+          ...c,
+          revision: action.revision,
+          groupId: action.groupId,
         })),
       };
 
@@ -440,6 +492,23 @@ export function reducer(
         selection: [],
         editingCardId: null,
       };
+
+    case "connectorCreated":
+      // Повторный ответ того же создания (идемпотентно по id) не дублирует связь.
+      return state.connectors.some((c) => c.id === action.connector.id)
+        ? state
+        : { ...state, connectors: [...state.connectors, action.connector] };
+
+    case "connectorUpdated":
+      return {
+        ...state,
+        connectors: state.connectors.map((c) =>
+          c.id === action.connector.id && c.revision <= action.connector.revision ? action.connector : c,
+        ),
+      };
+
+    case "connectorsRemoved":
+      return { ...state, connectors: state.connectors.filter((c) => !action.ids.includes(c.id)) };
 
     case "selectionChanged":
       return { ...state, selection: action.ids };

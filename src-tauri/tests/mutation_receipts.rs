@@ -227,11 +227,13 @@ fn move_cards_returns_one_receipt_per_card_in_input_order() {
                     id: "b".into(),
                     expected_revision: 2,
                     frame: frame(400.0),
+                    group: None,
                 },
                 MoveCardItem {
                     id: "a".into(),
                     expected_revision: 1,
                     frame: frame(20.0),
+                    group: None,
                 },
             ],
         },
@@ -365,6 +367,7 @@ fn receipts_travel_through_the_mutation_funnel() {
                 id: "n1".into(),
                 expected_revision: 2,
                 frame: frame(9.0),
+                group: None,
             }],
         }))
         .unwrap()

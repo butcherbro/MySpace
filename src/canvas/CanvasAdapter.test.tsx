@@ -3,13 +3,14 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CanvasAdapter } from "./CanvasAdapter";
 import { ImageCard } from "../cards/image/ImageCard";
-import type { CanvasCard } from "./canvas-types";
+import type { CanvasCard, CanvasConnector } from "./canvas-types";
 import type { ImageCardDto } from "../services/workspace-gateway";
 
 const setViewport = vi.fn();
 const setCenter = vi.fn();
 const getZoom = vi.fn(() => 1);
 const reactFlowProps: unknown[] = [];
+const reactFlowNodes: Array<Array<{ id: string; zIndex?: number; position: { x: number; y: number } }>> = [];
 const backgroundProps: Array<{
   variant?: string;
   gap?: number;
@@ -34,8 +35,29 @@ vi.mock("@xyflow/react", async () => {
       return null;
     },
     BackgroundVariant: { Dots: "dots" },
+    ConnectionLineType: { Straight: "straight" },
+    Position: { Top: "top", Right: "right" },
+    Handle: ({ className, ...props }: { className?: string; "data-testid"?: string }) => (
+      <div className={className} data-testid={props["data-testid"]} />
+    ),
     SelectionMode: { Partial: "partial" },
-    applyNodeChanges: (_changes: unknown, nodes: unknown) => nodes,
+    // Только выделение: остальные изменения тестам не нужны.
+    applyNodeChanges: (
+      changes: Array<{ type: string; id: string; selected?: boolean; position?: { x: number; y: number } }>,
+      nodes: Array<{ id: string; selected?: boolean; position?: { x: number; y: number } }>,
+    ) => {
+      const relevant = changes.filter((c) => c.type === "select" || c.type === "position");
+      if (relevant.length === 0) return nodes;
+      return nodes.map((n) => {
+        let next = n;
+        for (const change of relevant) {
+          if (change.id !== n.id) continue;
+          next =
+            change.type === "select" ? { ...next, selected: change.selected } : { ...next, position: change.position };
+        }
+        return next;
+      });
+    },
     ReactFlow: ({
       nodes,
       nodeTypes,
@@ -60,6 +82,7 @@ vi.mock("@xyflow/react", async () => {
     }) => {
       useEffect(() => {
         reactFlowProps.push(props);
+        reactFlowNodes.push(nodes as unknown as (typeof reactFlowNodes)[number]);
         onInit?.({
           setViewport,
           screenToFlowPosition: (point) => point,
@@ -81,8 +104,8 @@ vi.mock("@xyflow/react", async () => {
 });
 
 const cards: CanvasCard[] = [
-  { id: "a", boardId: "home", kind: "note", frame: { x: 0, y: 0, width: 200, height: 80 }, zIndex: 0, revision: 1 },
-  { id: "b", boardId: "home", kind: "note", frame: { x: 300, y: 0, width: 200, height: 80 }, zIndex: 1, revision: 1 },
+  { id: "a", boardId: "home", kind: "note", frame: { x: 0, y: 0, width: 200, height: 80 }, zIndex: 0, revision: 1, groupId: null },
+  { id: "b", boardId: "home", kind: "note", frame: { x: 300, y: 0, width: 200, height: 80 }, zIndex: 1, revision: 1, groupId: null },
 ];
 
 describe("CanvasAdapter", () => {
@@ -252,7 +275,7 @@ describe("CanvasAdapter", () => {
 
     const more = [
       ...cards,
-      { id: "c", boardId: "home", kind: "note" as const, frame: { x: 0, y: 200, width: 200, height: 80 }, zIndex: 2, revision: 1 },
+      { id: "c", boardId: "home", kind: "note" as const, frame: { x: 0, y: 200, width: 200, height: 80 }, zIndex: 2, revision: 1, groupId: null },
     ];
     rerender(
       <CanvasAdapter
@@ -521,6 +544,7 @@ describe("CanvasAdapter", () => {
       frame: { x: 0, y: 0, width: 300, height: 100 },
       zIndex: 0,
       revision: 1,
+      groupId: null,
     };
     const portalA: CanvasCard = {
       id: "pA",
@@ -529,6 +553,7 @@ describe("CanvasAdapter", () => {
       frame: { x: 250, y: 0, width: 100, height: 100 },
       zIndex: 1,
       revision: 1,
+      groupId: null,
       targetBoardId: "board-a",
     };
     const portalB: CanvasCard = {
@@ -538,6 +563,7 @@ describe("CanvasAdapter", () => {
       frame: { x: 0, y: 0, width: 100, height: 100 },
       zIndex: 1,
       revision: 1,
+      groupId: null,
       targetBoardId: "board-b",
     };
     // A second plain card, far from both portals, used only to prove group
@@ -550,6 +576,7 @@ describe("CanvasAdapter", () => {
       frame: { x: 800, y: 800, width: 50, height: 50 },
       zIndex: 0,
       revision: 1,
+      groupId: null,
     };
     const portalCards = [bigNote, farNote, portalA, portalB];
 
@@ -649,6 +676,220 @@ describe("CanvasAdapter", () => {
     });
   });
 
+  describe("groups (ADR-0013)", () => {
+    const group: CanvasCard = {
+      id: "g",
+      boardId: "home",
+      kind: "group",
+      frame: { x: 0, y: 0, width: 400, height: 300 },
+      zIndex: 5,
+      revision: 1,
+      groupId: null,
+    };
+    const inside: CanvasCard = {
+      ...cards[0],
+      id: "in",
+      frame: { x: 20, y: 40, width: 100, height: 60 },
+      zIndex: 0,
+      groupId: "g",
+    };
+    const alsoInside: CanvasCard = {
+      ...cards[0],
+      id: "in2",
+      frame: { x: 200, y: 100, width: 100, height: 60 },
+      zIndex: 0,
+      groupId: "g",
+    };
+    const outside: CanvasCard = { ...cards[0], id: "out", frame: { x: 500, y: 0, width: 100, height: 60 }, zIndex: 0 };
+    const portal: CanvasCard = {
+      id: "p",
+      boardId: "home",
+      kind: "board_portal",
+      frame: { x: 600, y: 400, width: 100, height: 100 },
+      zIndex: 1,
+      revision: 1,
+      groupId: null,
+      targetBoardId: "board-p",
+    };
+
+    type DragProps = {
+      onNodeDragStart?: (event: MouseEvent, node: { id: string; position: { x: number; y: number } }) => void;
+      onNodeDrag?: (event: MouseEvent, node: { id: string; position: { x: number; y: number } }) => void;
+      onNodeDragStop?: (event: MouseEvent, node?: { id: string; position: { x: number; y: number } }) => void;
+      onSelectionChange?: (params: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => void;
+    };
+
+    function renderGroupCanvas(events: Parameters<typeof CanvasAdapter>[0]["events"]) {
+      reactFlowProps.length = 0;
+      reactFlowNodes.length = 0;
+      render(
+        <CanvasAdapter
+          cards={[group, inside, alsoInside, outside, portal]}
+          viewport={{ x: 0, y: 0, zoom: 1 }}
+          viewportResetToken={1}
+          events={events}
+          renderCard={(card) => <span>{card.id}</span>}
+        />,
+      );
+      return () => reactFlowProps[reactFlowProps.length - 1] as DragProps;
+    }
+
+    it("puts group nodes in a z band below every other card and turns React Flow's own lift off", () => {
+      const props = renderGroupCanvas({});
+      const nodes = reactFlowNodes[reactFlowNodes.length - 1];
+      // 400×300 = 120 000 px² → −12.
+      expect(nodes.find((n) => n.id === "g")?.zIndex).toBe(-10012);
+      expect(nodes.find((n) => n.id === "in")?.zIndex).toBe(0);
+      expect((props() as { elevateNodesOnSelect?: boolean }).elevateNodesOnSelect).toBe(false);
+    });
+
+    it("lifts a selected card by 1000 but never a selected group", () => {
+      const props = renderGroupCanvas({});
+      act(() =>
+        (props() as { onNodesChange?: (changes: unknown[]) => void }).onNodesChange?.([
+          { type: "select", id: "g", selected: true },
+          { type: "select", id: "in", selected: true },
+        ]),
+      );
+      const nodes = reactFlowNodes[reactFlowNodes.length - 1];
+      expect(nodes.find((n) => n.id === "g")?.zIndex).toBe(-10012);
+      expect(nodes.find((n) => n.id === "in")?.zIndex).toBe(1000);
+      expect(nodes.find((n) => n.id === "out")?.zIndex).toBe(0);
+    });
+
+    it("moves the cards inside with the frame and persists them in one move, outside cards untouched", () => {
+      const onCardsMoved = vi.fn();
+      const onCardDragMove = vi.fn();
+      const onCardsDroppedOnPortal = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved, onCardDragMove, onCardsDroppedOnPortal });
+
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "g", position: { x: 0, y: 0 } }));
+      act(() =>
+        props().onNodeDrag?.({ clientX: 650, clientY: 450 } as unknown as MouseEvent, { id: "g", position: { x: 120, y: 80 } }),
+      );
+
+      // Во время жеста члены уже стоят со смещением рамки.
+      const live = reactFlowNodes[reactFlowNodes.length - 1];
+      expect(live.find((n) => n.id === "in")?.position).toEqual({ x: 140, y: 120 });
+      expect(live.find((n) => n.id === "out")?.position).toEqual({ x: 500, y: 0 });
+
+      // Отпущено над порталом: жест с группой — только перемещение по доске.
+      act(() =>
+        props().onNodeDragStop?.({ clientX: 650, clientY: 450 } as unknown as MouseEvent, { id: "g", position: { x: 120, y: 80 } }),
+      );
+
+      expect(onCardsDroppedOnPortal).not.toHaveBeenCalled();
+      expect(onCardDragMove).not.toHaveBeenCalled();
+      expect(onCardsMoved).toHaveBeenCalledTimes(1);
+      const moved = onCardsMoved.mock.calls[0][0] as { cards: Array<{ id: string; frame: CanvasCard["frame"] }> };
+      expect(moved.cards.map((c) => c.id)).toEqual(["g", "in", "in2"]);
+      expect(moved.cards.find((c) => c.id === "in")?.frame).toEqual({ x: 140, y: 120, width: 100, height: 60 });
+      expect(moved.cards.find((c) => c.id === "in2")?.frame).toEqual({ x: 320, y: 180, width: 100, height: 60 });
+    });
+
+    it("does not list a member twice when it is also selected", () => {
+      const onCardsMoved = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved });
+
+      act(() => props().onSelectionChange?.({ nodes: [{ id: "g" }, { id: "in" }], edges: [] }));
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "g", position: { x: 0, y: 0 } }));
+      act(() => props().onNodeDragStop?.(new MouseEvent("pointerup"), { id: "g", position: { x: 10, y: 10 } }));
+
+      const moved = onCardsMoved.mock.calls[0][0] as { cards: Array<{ id: string }> };
+      expect(moved.cards.map((c) => c.id).sort()).toEqual(["g", "in", "in2"]);
+    });
+
+    it("a plain card drag moves nothing else", () => {
+      const onCardsMoved = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved });
+
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "in", position: { x: 20, y: 40 } }));
+      act(() => props().onNodeDragStop?.(new MouseEvent("pointerup"), { id: "in", position: { x: 600, y: 40 } }));
+
+      const moved = onCardsMoved.mock.calls[0][0] as { cards: Array<{ id: string }> };
+      expect(moved.cards.map((c) => c.id)).toEqual(["in"]);
+    });
+
+    type Moved = { cards: Array<{ id: string; frame: CanvasCard["frame"]; group?: { groupId: string | null } }> };
+
+    it("a frame dropped over a foreign card does not take it: members come from groupId, not geometry", () => {
+      const onCardsMoved = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved });
+
+      // Рамка накрывает «out» (500..600 × 0..60) целиком.
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "g", position: { x: 0, y: 0 } }));
+      act(() => props().onNodeDragStop?.(new MouseEvent("pointerup"), { id: "g", position: { x: 300, y: 0 } }));
+
+      const moved = onCardsMoved.mock.calls[0][0] as Moved;
+      expect(moved.cards.map((c) => c.id)).toEqual(["g", "in", "in2"]);
+      // Ни рамка, ни члены, которых она везла, членство не меняют.
+      expect(moved.cards.every((c) => c.group === undefined)).toBe(true);
+    });
+
+    it("a card dropped inside a frame joins it; a member dropped outside leaves it", () => {
+      const onCardsMoved = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved });
+      // Узел ставим туда, куда его довёл бы React Flow, и отпускаем.
+      const drag = (id: string, from: { x: number; y: number }, to: { x: number; y: number }) => {
+        act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id, position: from }));
+        act(() =>
+          (props() as { onNodesChange?: (changes: unknown[]) => void }).onNodesChange?.([
+            { type: "position", id, position: to },
+          ]),
+        );
+        act(() => props().onNodeDragStop?.(new MouseEvent("pointerup"), { id, position: to }));
+      };
+
+      drag("out", { x: 500, y: 0 }, { x: 100, y: 200 });
+      expect((onCardsMoved.mock.calls[0][0] as Moved).cards).toEqual([
+        { id: "out", frame: { x: 100, y: 200, width: 100, height: 60 }, group: { groupId: "g" } },
+      ]);
+
+      drag("in", { x: 20, y: 40 }, { x: 1000, y: 40 });
+      expect((onCardsMoved.mock.calls[1][0] as Moved).cards).toEqual([
+        { id: "in", frame: { x: 1000, y: 40, width: 100, height: 60 }, group: { groupId: null } },
+      ]);
+
+      // Внутри своей же рамки — членство то же, поля нет.
+      drag("in2", { x: 200, y: 100 }, { x: 60, y: 60 });
+      expect((onCardsMoved.mock.calls[2][0] as Moved).cards[0].group).toBeUndefined();
+    });
+
+    it("a selection drag with a group neither re-evaluates its members nor lets the moved frame take cards", () => {
+      const onCardsMoved = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved });
+      act(() => props().onSelectionChange?.({ nodes: [{ id: "g" }, { id: "in" }, { id: "out" }], edges: [] }));
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "g", position: { x: 0, y: 0 } }));
+      // Рамка накрыла «out»; «in» (её член) оказался далеко за ней.
+      act(() =>
+        (props() as { onNodesChange?: (changes: unknown[]) => void }).onNodesChange?.([
+          { type: "position", id: "g", position: { x: 450, y: 0 } },
+          { type: "position", id: "out", position: { x: 500, y: 20 } },
+          { type: "position", id: "in", position: { x: 2000, y: 2000 } },
+        ]),
+      );
+      act(() => props().onNodeDragStop?.(new MouseEvent("pointerup"), { id: "g", position: { x: 450, y: 0 } }));
+
+      const moved = (onCardsMoved.mock.calls[0][0] as Moved).cards;
+      expect(moved.map((c) => c.id).sort()).toEqual(["g", "in", "in2", "out"]);
+      expect(moved.every((c) => c.group === undefined)).toBe(true);
+    });
+
+    it("tests the drop against the frame's live node, not the stale `cards` prop", () => {
+      const onCardsMoved = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved });
+      const onNodesChange = (changes: unknown[]) =>
+        act(() => (props() as { onNodesChange?: (changes: unknown[]) => void }).onNodesChange?.(changes));
+      // Рамка уже сдвинута на холсте (ответ MoveCards ещё не пришёл, `cards` старые).
+      onNodesChange([{ type: "position", id: "g", position: { x: 1000, y: 1000 } }]);
+
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "out", position: { x: 500, y: 0 } }));
+      onNodesChange([{ type: "position", id: "out", position: { x: 1100, y: 1100 } }]);
+      act(() => props().onNodeDragStop?.(new MouseEvent("pointerup"), { id: "out", position: { x: 1100, y: 1100 } }));
+      expect((onCardsMoved.mock.calls[0][0] as Moved).cards[0].group).toEqual({ groupId: "g" });
+    });
+  });
+
   /**
    * Regression for "ghost frame" during resize (backlog problem 7): the
    * `.canvas-card-frame` wrapper `nodeTypes.card` renders used to be forced
@@ -669,6 +910,7 @@ describe("CanvasAdapter", () => {
       frame: { x: 0, y: 0, width: 320, height: 240 },
       zIndex: 0,
       revision: 1,
+      groupId: null,
       asset: {
         id: "asset-1",
         fileName: "shot.png",
@@ -722,5 +964,36 @@ describe("CanvasAdapter", () => {
     // it: nothing pins it to the pre-drag 320x240 box.
     expect(frame.style.width).toBe("");
     expect(frame.style.height).toBe("");
+  });
+
+  it("drops a deleted connector from the edge selection and reports the pruned selection", () => {
+    reactFlowProps.length = 0;
+    const connector: CanvasConnector = { id: "c1", fromCardId: "a", toCardId: "b", colorToken: "default", arrowEnds: "end" };
+    const onConnectorSelectionChanged = vi.fn();
+    const events = { onConnectorSelectionChanged };
+    type EdgeProps = {
+      edges: Array<{ id: string; selected?: boolean }>;
+      onEdgesChange: (changes: Array<{ type: "select"; id: string; selected: boolean }>) => void;
+    };
+    const last = () => reactFlowProps[reactFlowProps.length - 1] as EdgeProps;
+    const view = (connectors: CanvasConnector[]) => (
+      <CanvasAdapter
+        cards={cards}
+        connectors={connectors}
+        viewport={{ x: 0, y: 0, zoom: 1 }}
+        events={events}
+        renderCard={(card) => <span>{card.id}</span>}
+      />
+    );
+    const { rerender } = render(view([connector]));
+    act(() => last().onEdgesChange([{ type: "select", id: "c1", selected: true }]));
+    expect(last().edges).toEqual([expect.objectContaining({ id: "c1", selected: true })]);
+
+    rerender(view([]));
+    expect(onConnectorSelectionChanged).toHaveBeenLastCalledWith({ ids: [] });
+
+    // Undo вернул связь: она приходит невыделенной.
+    rerender(view([connector]));
+    expect(last().edges).toEqual([expect.objectContaining({ id: "c1", selected: false })]);
   });
 });

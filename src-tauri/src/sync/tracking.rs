@@ -11,7 +11,9 @@
 //! old one, cannot forget to journal what it wrote.
 //!
 //! Tracked: `boards`, `cards`, every kind detail table ([`DETAIL_TABLES`]),
-//! `assets` (insert/update only: asset GC is per replica) and `quick_boards`.
+//! `assets` (insert/update only: asset GC is per replica), `quick_boards` and
+//! `connectors` (a delete, FK cascades included, records `life`: the image
+//! then says `present: false`).
 //! Not tracked (never journaled): `LOCAL_ONLY_TABLES`, the derived search
 //! index and `change_seq`, `favicon_cache` (a per-device fetch cache),
 //! idempotency receipts (`mutation_receipts`, `operation_receipts`) and
@@ -24,7 +26,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use super::hlc::{self, Hlc};
 use super::image::{registers, Cause, Envelope, IMAGE_VERSION};
 use super::{
-    board_to_wire, journal, ChangeRow, ENTITY_ASSET, ENTITY_BOARD, ENTITY_CARD, ENTITY_QUICK_BOARD,
+    board_to_wire, journal, ChangeRow, ENTITY_ASSET, ENTITY_BOARD, ENTITY_CARD, ENTITY_CONNECTOR,
+    ENTITY_QUICK_BOARD,
 };
 use crate::domain::errors::WorkspaceError;
 
@@ -38,6 +41,7 @@ pub const DETAIL_TABLES: &[&str] = &[
     "filesystem_aliases",
     "file_cards",
     "board_shortcut_cards",
+    "group_cards",
 ];
 
 /// Pseudo-register recorded by a hard delete.
@@ -57,10 +61,11 @@ fn tracking_sql() -> String {
                 ('card', NEW.id, 'place'), ('card', NEW.id, 'life'), ('card', NEW.id, 'body');
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS sync_cards_au_place
-         AFTER UPDATE OF board_id, x, y, width, height, z_index, unsorted ON main.cards
+         AFTER UPDATE OF board_id, x, y, width, height, z_index, unsorted, group_id ON main.cards
          WHEN OLD.board_id IS NOT NEW.board_id OR OLD.x IS NOT NEW.x OR OLD.y IS NOT NEW.y
            OR OLD.width IS NOT NEW.width OR OLD.height IS NOT NEW.height
            OR OLD.z_index IS NOT NEW.z_index OR OLD.unsorted IS NOT NEW.unsorted
+           OR OLD.group_id IS NOT NEW.group_id
          BEGIN
             INSERT OR IGNORE INTO sync_dirty VALUES ('card', NEW.id, 'place');
          END;
@@ -122,6 +127,29 @@ fn tracking_sql() -> String {
          CREATE TEMP TRIGGER IF NOT EXISTS sync_quick_boards_ad AFTER DELETE ON main.quick_boards BEGIN
             INSERT OR IGNORE INTO sync_dirty VALUES ('quick_board', OLD.board_id, 'body');
          END;
+
+         CREATE TEMP TRIGGER IF NOT EXISTS sync_connectors_ai AFTER INSERT ON main.connectors BEGIN
+            INSERT OR IGNORE INTO sync_dirty VALUES
+                ('connector', NEW.id, 'body'), ('connector', NEW.id, 'life');
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS sync_connectors_au_body
+         AFTER UPDATE OF board_id, from_card_id, to_card_id, color_token, arrow_ends, label
+         ON main.connectors
+         WHEN OLD.board_id IS NOT NEW.board_id OR OLD.from_card_id IS NOT NEW.from_card_id
+           OR OLD.to_card_id IS NOT NEW.to_card_id OR OLD.color_token IS NOT NEW.color_token
+           OR OLD.arrow_ends IS NOT NEW.arrow_ends OR OLD.label IS NOT NEW.label
+         BEGIN
+            INSERT OR IGNORE INTO sync_dirty VALUES ('connector', NEW.id, 'body');
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS sync_connectors_au_life
+         AFTER UPDATE OF deleted_at, trash_batch_id ON main.connectors
+         WHEN OLD.deleted_at IS NOT NEW.deleted_at OR OLD.trash_batch_id IS NOT NEW.trash_batch_id
+         BEGIN
+            INSERT OR IGNORE INTO sync_dirty VALUES ('connector', NEW.id, 'life');
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS sync_connectors_ad AFTER DELETE ON main.connectors BEGIN
+            INSERT OR IGNORE INTO sync_dirty VALUES ('connector', OLD.id, 'life');
+         END;
         ",
     );
     for table in DETAIL_TABLES {
@@ -171,7 +199,9 @@ pub fn mark_everything(conn: &Connection) -> Result<(), WorkspaceError> {
             UNION ALL SELECT 'card', id, 'place' FROM main.cards
             UNION ALL SELECT 'card', id, 'life' FROM main.cards
             UNION ALL SELECT 'card', id, 'body' FROM main.cards
-            UNION ALL SELECT 'quick_board', board_id, 'body' FROM main.quick_boards;",
+            UNION ALL SELECT 'quick_board', board_id, 'body' FROM main.quick_boards
+            UNION ALL SELECT 'connector', id, 'body' FROM main.connectors
+            UNION ALL SELECT 'connector', id, 'life' FROM main.connectors;",
     )?;
     Ok(())
 }
@@ -226,13 +256,14 @@ pub fn record_purge(
 }
 
 /// Emission order inside one flush: parents before children on create,
-/// children before parents on purge, assets before the cards that use them.
+/// children before parents on purge, assets before the cards that use them,
+/// connectors after the cards they join (and before a purge of those cards).
 fn rank(kind: &str, purge: bool) -> u8 {
     match (kind, purge) {
         (ENTITY_BOARD, false) => 0,
         (ENTITY_ASSET, _) => 1,
         (ENTITY_CARD, false) => 2,
-        (ENTITY_QUICK_BOARD, _) => 3,
+        (ENTITY_QUICK_BOARD, _) | (ENTITY_CONNECTOR, _) => 3,
         (ENTITY_CARD, true) => 4,
         (ENTITY_BOARD, true) => 5,
         _ => 6,
@@ -441,6 +472,11 @@ mod tests {
         conn.execute("UPDATE cards SET x = 5 WHERE id = 'c'", [])
             .unwrap();
         conn.execute("UPDATE boards SET change_seq = change_seq + 1", [])
+            .unwrap();
+        assert_eq!(dirty(&conn), ["card:place"]);
+        clear(&conn).unwrap();
+        // Членство (ADR-0013) входит в регистр `place`.
+        conn.execute("UPDATE cards SET group_id = 'g' WHERE id = 'c'", [])
             .unwrap();
         assert_eq!(dirty(&conn), ["card:place"]);
         clear(&conn).unwrap();

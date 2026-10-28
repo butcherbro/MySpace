@@ -41,6 +41,7 @@ function portal(overrides: Partial<BoardPortalDto["target"]> = {}): BoardPortalD
     frame: { x: 0, y: 0, width: 200, height: 200 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     target: {
       id: "child-board-1",
       boardRevision: 1,

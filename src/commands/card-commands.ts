@@ -11,11 +11,25 @@ import type {
 import type { NoteColorId } from "../cards/note/note-color";
 import { CommandConflictError, type WorkspaceCommand } from "./workspace-command";
 
-interface MovedCard {
+export interface MovedCard {
   id: string;
   revision: number;
   before: Frame;
   after: Frame;
+  /**
+   * Членство до и после жеста (ADR-0013). Отсутствует — жест членство не
+   * трогал; при `before === after` оно тоже не отправляется.
+   */
+  group?: { before: string | null; after: string | null };
+}
+
+/** Поле `group` элемента MoveCards: только для карточек, чьё членство меняется. */
+function groupAssignment(
+  move: MovedCard,
+  side: "before" | "after",
+): { group: { groupId: string | null } } | Record<string, never> {
+  if (!move.group || move.group.before === move.group.after) return {};
+  return { group: { groupId: move.group[side] } };
 }
 
 /**
@@ -25,7 +39,8 @@ interface MovedCard {
  * The command owns card POSITION only: undo/redo read each card fresh, refuse
  * with `CommandConflictError` if it is no longer where this command left it,
  * and otherwise keep the card's current size and revision (text edits bump the
- * revision without going through the dispatcher).
+ * revision without going through the dispatcher). A membership change made by
+ * the gesture (`group`) is written with the move and reversed by undo.
  */
 export class MoveCardsCommand implements WorkspaceCommand<CardsReceipt> {
   id: string;
@@ -51,7 +66,7 @@ export class MoveCardsCommand implements WorkspaceCommand<CardsReceipt> {
 
   async execute(gateway: WorkspaceGateway): Promise<CardsReceipt> {
     if (this.undone) {
-      const receipt = await this.moveFrom(gateway, "redo", (m) => m.before, (m) => m.after);
+      const receipt = await this.moveFrom(gateway, "redo", "before", "after");
       this.undone = false;
       return receipt;
     }
@@ -60,32 +75,34 @@ export class MoveCardsCommand implements WorkspaceCommand<CardsReceipt> {
         id: m.id,
         expectedRevision: m.revision,
         frame: m.after,
+        ...groupAssignment(m, "after"),
       })),
     });
     return this.applyReceipt(receipt);
   }
 
   async undo(gateway: WorkspaceGateway): Promise<void> {
-    await this.moveFrom(gateway, "undo", (m) => m.after, (m) => m.before);
+    await this.moveFrom(gateway, "undo", "after", "before");
     this.undone = true;
   }
 
   private async moveFrom(
     gateway: WorkspaceGateway,
     action: "undo" | "redo",
-    from: (move: MovedCard) => Frame,
-    to: (move: MovedCard) => Frame,
+    from: "before" | "after",
+    to: "before" | "after",
   ): Promise<CardsReceipt> {
     // Все чтения — до единственного moveCards: при конфликте не пишем ничего,
     // пакет остаётся атомарным.
     const current = await Promise.all(this.moves.map((m) => gateway.readCard(m.id)));
     const cards = this.moves.map((m, i) => {
       const card = current[i];
-      if (!samePosition(card.frame, from(m))) throw new CommandConflictError(this.label, action);
+      if (!samePosition(card.frame, m[from])) throw new CommandConflictError(this.label, action);
       return {
         id: m.id,
         expectedRevision: card.revision,
-        frame: withPosition(card.frame, to(m)),
+        frame: withPosition(card.frame, m[to]),
+        ...groupAssignment(m, to),
       };
     });
     return this.applyReceipt(await gateway.moveCards({ cards }));

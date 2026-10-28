@@ -35,6 +35,7 @@ pub enum CardKind {
     FilesystemAlias,
     File,
     BoardShortcut,
+    Group,
 }
 
 impl CardKind {
@@ -47,6 +48,7 @@ impl CardKind {
         CardKind::FilesystemAlias,
         CardKind::File,
         CardKind::BoardShortcut,
+        CardKind::Group,
     ];
 
     /// Leaf kinds: everything that is not a board's primary portal. Leaf
@@ -59,6 +61,7 @@ impl CardKind {
         CardKind::FilesystemAlias,
         CardKind::File,
         CardKind::BoardShortcut,
+        CardKind::Group,
     ];
 
     /// The value stored in `cards.kind` (and the DTO's serde tag).
@@ -71,6 +74,7 @@ impl CardKind {
             CardKind::FilesystemAlias => "filesystem_alias",
             CardKind::File => "file",
             CardKind::BoardShortcut => "board_shortcut",
+            CardKind::Group => "group",
         }
     }
 

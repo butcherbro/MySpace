@@ -15,6 +15,7 @@ import { EmbedCard } from "./link/EmbedCard";
 import { FolderShortcutCard } from "./folder/FolderShortcutCard";
 import { FileCard } from "./file/FileCard";
 import { BoardShortcutCard } from "./board/BoardShortcutCard";
+import { GroupCard } from "./group/GroupCard";
 import type { DocumentSave } from "../editor/corrupt-document";
 import type { ResizeOptions } from "./resize-options";
 // The single card-kind list and per-kind capability registry live in
@@ -23,7 +24,7 @@ import type { ResizeOptions } from "./resize-options";
 // components-only-exports rule stays happy here).
 
 export interface CardRenderContext {
-  /** Whether the card (if a note) is currently being edited. */
+  /** Whether the card (a note, or a group being renamed) is currently being edited. */
   editing: boolean;
   /** Exit note editing. */
   onDeactivate: () => void;
@@ -67,6 +68,12 @@ export interface CardRenderContext {
   onRevealFileCard: (id: string) => void;
   /** Persist a manual resize for File Cards. */
   onResizeFileCard: (id: string, width: number, height: number) => void;
+  /** Сохранить ручное изменение размера группы. */
+  onResizeGroup: (id: string, width: number, height: number) => void;
+  /** Войти в переименование группы (то же состояние «правится», что у заметки). */
+  onStartRenameGroup: (id: string) => void;
+  /** Сохранить новое название группы. */
+  onRenameGroup: (id: string, title: string) => void;
   /** The portal currently being hovered during a card drag, if any. */
   highlightedPortalId: string | null;
   /** Transient search phrase to highlight inside cards (UI-only). */
@@ -147,6 +154,20 @@ export function renderCard(card: CardDto, ctx: CardRenderContext): ReactNode {
         onOpen={ctx.onOpenFileCard}
         onReveal={ctx.onRevealFileCard}
         onResize={ctx.onResizeFileCard}
+        onContextMenu={ctx.onContextMenu}
+      />
+    );
+  }
+
+  if (card.kind === "group") {
+    return (
+      <GroupCard
+        group={card}
+        renaming={ctx.editing}
+        onStartRename={ctx.onStartRenameGroup}
+        onRename={ctx.onRenameGroup}
+        onDeactivate={ctx.onDeactivate}
+        onResize={ctx.onResizeGroup}
         onContextMenu={ctx.onContextMenu}
       />
     );

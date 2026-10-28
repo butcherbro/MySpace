@@ -13,6 +13,7 @@ function note(id: string, revision: number): NoteCardDto {
     frame: { x: 0, y: 0, width: 200, height: 80 },
     zIndex: 0,
     revision,
+    groupId: null,
     documentJson: { type: "doc" },
     plainText: "",
     colorToken: "default",
@@ -206,5 +207,34 @@ describe("single writer", () => {
     dispatch({ type: "selectionChanged", ids: ["a"] });
 
     expect(dispatched).toHaveLength(3);
+  });
+});
+
+describe("connector writes", () => {
+  const connector = {
+    id: "c1",
+    boardId: "home",
+    fromCardId: "a",
+    toCardId: "b",
+    colorToken: "default",
+    arrowEnds: "end" as const,
+    label: null,
+    revision: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  it("stamps connectors created and removed after a snapshot request, and drops a creation from another board", () => {
+    const { dispatch, writes } = harness();
+    writes.applySnapshot(loaded("home", []), writes.snapshotRequested());
+    const stamp = writes.snapshotRequested();
+
+    writes.apply({ type: "connectorCreated", connector: { ...connector, id: "elsewhere", boardId: "other" } });
+    writes.apply({ type: "connectorCreated", connector });
+    writes.apply({ type: "connectorsRemoved", ids: ["gone"] });
+    writes.applySnapshot(loaded("home", []), stamp);
+
+    expect(dispatch.mock.calls.some(([a]) => a.type === "connectorCreated" && a.connector.id === "elsewhere")).toBe(false);
+    expect(sinceRequest(dispatch)).toEqual({ written: ["c1"], added: ["c1"], removed: ["gone"] });
   });
 });

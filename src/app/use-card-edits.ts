@@ -212,6 +212,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
         frame: conflictCopyFrame(beside.frame),
         zIndex: beside.zIndex + 1,
         revision: 1,
+        groupId: null,
         documentJson,
         plainText: documentToPlainText(documentJson),
         colorToken: "default",

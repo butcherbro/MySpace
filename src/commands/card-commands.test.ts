@@ -306,6 +306,67 @@ describe("MoveCardsCommand", () => {
     await expect(cmd.execute(gateway)).rejects.toThrow('Can\'t redo "Move": the card has changed since.');
     expect(gateway.moveCards).toHaveBeenCalledTimes(2);
   });
+
+  it("sends `group` only for cards whose membership changes; undo sends the old group, redo the new one", async () => {
+    const { gateway } = storeGateway({
+      "note-1": { boardId: "home", frame: sourceFrame, revision: 1 },
+      "note-2": { boardId: "home", frame: sourceFrame, revision: 1 },
+      "note-3": { boardId: "home", frame: sourceFrame, revision: 1 },
+    });
+    const cmd = new MoveCardsCommand("move", [
+      // Вошла в группу g.
+      { id: "note-1", revision: 1, before: sourceFrame, after: targetFrame, group: { before: null, after: "g" } },
+      // Осталась в той же группе — поле не отправляется.
+      { id: "note-2", revision: 1, before: sourceFrame, after: targetFrame, group: { before: "g", after: "g" } },
+      // Членство не вычислялось (несли вместе с рамкой).
+      { id: "note-3", revision: 1, before: sourceFrame, after: targetFrame },
+    ]);
+
+    await cmd.execute(gateway);
+    expect(gateway.moveCards).toHaveBeenLastCalledWith({
+      cards: [
+        { id: "note-1", expectedRevision: 1, frame: targetFrame, group: { groupId: "g" } },
+        { id: "note-2", expectedRevision: 1, frame: targetFrame },
+        { id: "note-3", expectedRevision: 1, frame: targetFrame },
+      ],
+    });
+
+    await cmd.undo(gateway);
+    expect(gateway.moveCards).toHaveBeenLastCalledWith({
+      cards: [
+        { id: "note-1", expectedRevision: 2, frame: sourceFrame, group: { groupId: null } },
+        { id: "note-2", expectedRevision: 2, frame: sourceFrame },
+        { id: "note-3", expectedRevision: 2, frame: sourceFrame },
+      ],
+    });
+
+    await cmd.execute(gateway);
+    expect(gateway.moveCards).toHaveBeenLastCalledWith({
+      cards: [
+        { id: "note-1", expectedRevision: 3, frame: targetFrame, group: { groupId: "g" } },
+        { id: "note-2", expectedRevision: 3, frame: targetFrame },
+        { id: "note-3", expectedRevision: 3, frame: targetFrame },
+      ],
+    });
+  });
+
+  it("undo of leaving a group puts the card back into it", async () => {
+    const { gateway } = storeGateway({
+      "note-1": { boardId: "home", frame: sourceFrame, revision: 4 },
+    });
+    const cmd = new MoveCardsCommand("move", [
+      { id: "note-1", revision: 4, before: sourceFrame, after: targetFrame, group: { before: "g", after: null } },
+    ]);
+
+    await cmd.execute(gateway);
+    expect(gateway.moveCards).toHaveBeenLastCalledWith({
+      cards: [{ id: "note-1", expectedRevision: 4, frame: targetFrame, group: { groupId: null } }],
+    });
+    await cmd.undo(gateway);
+    expect(gateway.moveCards).toHaveBeenLastCalledWith({
+      cards: [{ id: "note-1", expectedRevision: 5, frame: sourceFrame, group: { groupId: "g" } }],
+    });
+  });
 });
 
 describe("CreateNoteCommand", () => {

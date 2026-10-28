@@ -120,3 +120,96 @@
 .canvas-surface--space-pan .react-flow__pane.dragging * {
   cursor: grabbing;
 }
+
+/* Связи (стрелки между карточками). Ручка-источник — кружок в правом верхнем
+   углу карточки, виден при наведении и пока карточка выделена. */
+.canvas-surface .react-flow__handle.connector-handle {
+  top: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  transform: translate(50%, -50%);
+  background: var(--paper-raised);
+  border: 2px solid var(--edge-focus);
+  border-radius: 50%;
+  box-shadow: var(--shadow-paper);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 2;
+}
+
+.canvas-surface .canvas-card-frame:hover .react-flow__handle.connector-handle,
+.canvas-surface .canvas-card-frame[data-selected="true"] .react-flow__handle.connector-handle,
+.canvas-surface .react-flow__handle.connector-handle.connectingfrom {
+  opacity: 1;
+}
+
+/* Цель связи — вся карточка, но только пока тянут связь: React Flow ставит
+   `connectionindicator` целевой ручке лишь во время протягивания (у неё
+   `isConnectableStart={false}`). В остальное время она прозрачна для указателя. */
+.canvas-surface .react-flow__handle.connector-target {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.canvas-surface .react-flow__handle.connector-target.connectionindicator {
+  pointer-events: all;
+  cursor: crosshair;
+}
+
+.canvas-surface .react-flow__handle.connector-target.connectingto.valid {
+  box-shadow:
+    0 0 0 1px var(--edge-focus),
+    0 0 0 3px var(--focus-halo);
+}
+
+.canvas-surface .react-flow__connection-path {
+  stroke: var(--connector-default);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.connector-edge {
+  --connector-stroke: var(--connector-default);
+}
+.connector-edge[data-color-token="yellow"] { --connector-stroke: var(--connector-yellow); }
+.connector-edge[data-color-token="pink"] { --connector-stroke: var(--connector-pink); }
+.connector-edge[data-color-token="lavender"] { --connector-stroke: var(--connector-lavender); }
+.connector-edge[data-color-token="blue"] { --connector-stroke: var(--connector-blue); }
+.connector-edge[data-color-token="green"] { --connector-stroke: var(--connector-green); }
+.connector-edge[data-color-token="gray"] { --connector-stroke: var(--connector-gray); }
+
+.connector-edge__line {
+  fill: none;
+  stroke: var(--connector-stroke);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.connector-edge__head {
+  fill: var(--connector-stroke);
+}
+
+/* Широкая невидимая обводка: по линии в 2px легко попасть кликом; она же
+   рисует ореол выделения. */
+.connector-edge__hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+}
+
+.react-flow__edge.selected .connector-edge__line {
+  stroke-width: 3;
+}
+
+.react-flow__edge.selected .connector-edge__hit {
+  stroke: var(--focus-halo);
+}

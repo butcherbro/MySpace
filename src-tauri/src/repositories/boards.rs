@@ -77,6 +77,7 @@ pub fn load_board_snapshot(
     let viewport = load_viewport(conn, board_id)?;
     let cards = load_cards(conn, board_id, false)?;
     let unsorted_cards = load_cards(conn, board_id, true)?;
+    let connectors = super::connectors::load_board_connectors(conn, board_id)?;
 
     Ok(BoardSnapshot {
         board,
@@ -84,6 +85,7 @@ pub fn load_board_snapshot(
         viewport,
         cards,
         unsorted_cards,
+        connectors,
     })
 }
 

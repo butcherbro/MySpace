@@ -36,15 +36,17 @@ use crate::domain::asset_service::{self, StagedAsset};
 use crate::domain::device::DeviceIdentity;
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
-    AddQuickBoardInput, AssetDto, CardDto, CardReceipt, CardsReceipt, ConvertNoteToEmbedInput,
-    CreateBoardShortcutInput, CreateChildBoardInput, CreateFileCardInput,
-    CreateFilesystemAliasInput, CreateImageCardInput, CreateItemBatchInput, CreateLinkBatchInput,
-    CreateLinkBatchResult, CreateNoteInput, DuplicateBoardInput, DuplicateBoardReceipt,
-    EmbedCardDto, EmptyTrashResult, MoveBoardInput, MoveCardToBoardInput, MoveCardsInput,
+    AddQuickBoardInput, AssetDto, CardDto, CardReceipt, CardsReceipt, ConnectorDto,
+    ConvertNoteToEmbedInput, CreateBoardShortcutInput, CreateChildBoardInput, CreateConnectorInput,
+    CreateFileCardInput, CreateFilesystemAliasInput, CreateGroupInput, CreateImageCardInput,
+    CreateItemBatchInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
+    DuplicateBoardInput, DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult,
+    GroupCreatedReceipt, MoveBoardInput, MoveCardToBoardInput, MoveCardsInput,
     MoveCardsToUnsortedInput, MoveSelectionToBoardInput, MoveSelectionToBoardReceipt,
     PlaceUnsortedCardInput, ReorderQuickBoardsInput, SetNoteColorInput, TextReceipt,
-    TrashSelectionInput, UpdateCardFrameInput, UpdateEmbedDescriptionInput,
-    UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput, ViewportReceipt,
+    TrashSelectionInput, UpdateCardFrameInput, UpdateConnectorInput, UpdateEmbedDescriptionInput,
+    UpdateGroupInput, UpdateImageCaptionInput, UpdateNoteInput, UpdateViewportInput,
+    ViewportReceipt,
 };
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::devices;
@@ -96,6 +98,7 @@ pub enum EntityKind {
     Card,
     Asset,
     QuickBoard,
+    Connector,
     TrashBatch,
     LinkBatch,
     Device,
@@ -110,6 +113,7 @@ impl EntityKind {
             EntityKind::Card => "card",
             EntityKind::Asset => "asset",
             EntityKind::QuickBoard => "quick_board",
+            EntityKind::Connector => "connector",
             EntityKind::TrashBatch => "trash_batch",
             EntityKind::LinkBatch => "link_batch",
             EntityKind::Device => "device",
@@ -168,6 +172,11 @@ pub const OP_NAMES: &[&str] = &[
     "sync.peers",
     "sync.compact_journal",
     "maintenance.vacuum",
+    "connector.create",
+    "connector.update",
+    "connector.remove",
+    "group.create",
+    "group.update",
 ];
 
 /// One write, as data. See the module docs.
@@ -227,6 +236,18 @@ pub enum Mutation {
         board_id: String,
     },
     ReorderQuickBoards(ReorderQuickBoardsInput),
+
+    // ---- connectors ---------------------------------------------------------
+    CreateConnector(CreateConnectorInput),
+    UpdateConnector(UpdateConnectorInput),
+    /// Мягкое удаление; неизвестный id — no-op.
+    RemoveConnector {
+        connector_id: String,
+    },
+
+    // ---- groups -------------------------------------------------------------
+    CreateGroup(CreateGroupInput),
+    UpdateGroup(UpdateGroupInput),
 
     // ---- assets and filesystem cards -------------------------------------
     /// Records an asset whose file was already staged by the caller. On error
@@ -327,6 +348,7 @@ pub enum MutationOutcome {
     Id(String),
     Count(i64),
     Card(CardDto),
+    Connector(ConnectorDto),
     /// Boxed: the embed projection is the largest outcome by far.
     Embed(Box<EmbedCardDto>),
     MoveSelectionReceipt(MoveSelectionToBoardReceipt),
@@ -343,6 +365,8 @@ pub enum MutationOutcome {
     SyncReport(ApplyReport),
     SyncPeers(PeerOutcome),
     Compaction(CompactReport),
+    /// `group.create`: the group plus a receipt per member that joined it.
+    GroupCreated(GroupCreatedReceipt),
 }
 
 fn unexpected(what: &str) -> WorkspaceError {
@@ -372,6 +396,12 @@ impl MutationOutcome {
         match self {
             Self::Card(card) => Ok(card),
             _ => Err(unexpected("card")),
+        }
+    }
+    pub fn into_connector(self) -> Result<ConnectorDto, WorkspaceError> {
+        match self {
+            Self::Connector(connector) => Ok(connector),
+            _ => Err(unexpected("connector")),
         }
     }
     pub fn into_embed(self) -> Result<EmbedCardDto, WorkspaceError> {
@@ -454,6 +484,12 @@ impl MutationOutcome {
             _ => Err(unexpected("compaction report")),
         }
     }
+    pub fn into_group_created(self) -> Result<GroupCreatedReceipt, WorkspaceError> {
+        match self {
+            Self::GroupCreated(r) => Ok(r),
+            _ => Err(unexpected("group-created receipt")),
+        }
+    }
 }
 
 impl Mutation {
@@ -490,6 +526,11 @@ impl Mutation {
             Self::AddQuickBoard(_) => "quick_board.add",
             Self::RemoveQuickBoard { .. } => "quick_board.remove",
             Self::ReorderQuickBoards(_) => "quick_board.reorder",
+            Self::CreateConnector(_) => "connector.create",
+            Self::UpdateConnector(_) => "connector.update",
+            Self::RemoveConnector { .. } => "connector.remove",
+            Self::CreateGroup(_) => "group.create",
+            Self::UpdateGroup(_) => "group.update",
             Self::InsertAsset(_) => "asset.insert",
             Self::CreateFilesystemAlias(_) => "card.create_filesystem_alias",
             Self::RefreshFilesystemAliasLocator { .. } => "card.refresh_alias_locator",
@@ -550,6 +591,11 @@ impl Mutation {
             Self::AddQuickBoard(i) => (K::QuickBoard, &i.board_id),
             Self::RemoveQuickBoard { board_id } => (K::QuickBoard, board_id),
             Self::ReorderQuickBoards(_) => (K::Workspace, ""),
+            Self::CreateConnector(i) => (K::Connector, &i.id),
+            Self::UpdateConnector(i) => (K::Connector, &i.connector_id),
+            Self::RemoveConnector { connector_id } => (K::Connector, connector_id),
+            Self::CreateGroup(i) => (K::Card, &i.id),
+            Self::UpdateGroup(i) => (K::Card, &i.card_id),
             Self::InsertAsset(asset) => (K::Asset, &asset.id),
             Self::CreateFilesystemAlias(i) => (K::Card, &i.id),
             Self::RefreshFilesystemAliasLocator { card_id, .. } => (K::Card, card_id),
@@ -657,6 +703,11 @@ impl Mutation {
             | Self::AddQuickBoard(_)
             | Self::RemoveQuickBoard { .. }
             | Self::ReorderQuickBoards(_)
+            | Self::CreateConnector(_)
+            | Self::UpdateConnector(_)
+            | Self::RemoveConnector { .. }
+            | Self::CreateGroup(_)
+            | Self::UpdateGroup(_)
             | Self::InsertAsset(_)
             | Self::CreateFilesystemAlias(_)
             | Self::RefreshFilesystemAliasLocator { .. }
@@ -758,6 +809,14 @@ impl Mutation {
             Self::ReorderQuickBoards(input) => {
                 repo::reorder_quick_boards(conn, input).map(|_| Out::Unit)
             }
+
+            Self::CreateConnector(input) => repo::create_connector(conn, input).map(Out::Connector),
+            Self::UpdateConnector(input) => repo::update_connector(conn, input).map(Out::Connector),
+            Self::RemoveConnector { connector_id } => {
+                repo::remove_connector(conn, connector_id).map(|_| Out::Unit)
+            }
+            Self::CreateGroup(input) => repo::create_group(conn, input).map(Out::GroupCreated),
+            Self::UpdateGroup(input) => repo::update_group(conn, input).map(Out::CardReceipt),
 
             Self::InsertAsset(asset) => {
                 asset_service::insert_asset_row(conn, asset).map(|_| Out::Unit)
@@ -926,7 +985,12 @@ maintenance.hash_assets
 sync.apply_changes
 sync.peers
 sync.compact_journal
-maintenance.vacuum"
+maintenance.vacuum
+connector.create
+connector.update
+connector.remove
+group.create
+group.update"
         );
     }
 

@@ -105,6 +105,37 @@ describe("useWorkspaceShortcuts", () => {
     expect(deps.handleCopySelection).toHaveBeenCalledTimes(1);
   });
 
+  it("Cmd+G groups the selection and Ctrl+Shift+G ungroups it", () => {
+    const deps = makeDeps({ handleGroupSelection: vi.fn(async () => {}), handleUngroupSelection: vi.fn(async () => {}) });
+    renderHook(() => useWorkspaceShortcuts(deps));
+
+    act(() => {
+      dispatchKeyDown({ key: "g", metaKey: true });
+      dispatchKeyDown({ key: "G", ctrlKey: true, shiftKey: true });
+    });
+
+    expect(deps.handleGroupSelection).toHaveBeenCalledTimes(1);
+    expect(deps.handleUngroupSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("Cmd+G does nothing while a text field has focus", () => {
+    const deps = makeDeps({ handleGroupSelection: vi.fn(async () => {}) });
+    renderHook(() => useWorkspaceShortcuts(deps));
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+
+    try {
+      act(() => {
+        dispatchKeyDown({ key: "g", metaKey: true });
+      });
+    } finally {
+      input.remove();
+    }
+
+    expect(deps.handleGroupSelection).not.toHaveBeenCalled();
+  });
+
   it("Backspace deletes the selection without a modifier key", () => {
     const deps = makeDeps();
     renderHook(() => useWorkspaceShortcuts(deps));

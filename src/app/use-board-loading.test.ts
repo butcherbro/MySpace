@@ -50,6 +50,7 @@ function note(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
     frame: { x: 0, y: 0, width: 240, height: 120 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     documentJson: { type: "doc", content: [] },
     plainText: "",
     colorToken: "default",
@@ -65,6 +66,7 @@ function portal(overrides: Partial<BoardPortalDto> = {}): BoardPortalDto {
     frame: { x: 0, y: 0, width: 120, height: 112 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     target: {
       id: "board-A",
       boardRevision: 1,
@@ -86,6 +88,7 @@ function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
     viewport: { x: 0, y: 0, zoom: 1, revision: 1 },
     cards: [],
     unsortedCards: [],
+    connectors: [],
     ...overrides,
   };
 }
@@ -245,6 +248,7 @@ describe("useBoardLoading", () => {
           okPortal,
         ],
         unsortedCards: [{ ...unsortedNote, documentJson: { type: "doc", content: [] } }],
+        connectors: [],
         sinceRequest: { written: [], added: [], removed: [] },
       });
     });

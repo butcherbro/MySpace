@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canvasNodeInputsEqual,
   cardToNodeLike,
+  nodeZIndex,
   frameIntersectionRatio,
   movedNodeToCard,
   nodeLikeToFrame,
@@ -16,6 +17,7 @@ function card(overrides: Partial<CanvasCard> = {}): CanvasCard {
     frame: { x: 10, y: 20, width: 200, height: 80 },
     zIndex: 3,
     revision: 1,
+    groupId: null,
     ...overrides,
   };
 }
@@ -25,6 +27,34 @@ describe("canvas mapping", () => {
     const foreign = card({ kind: "filesystem_alias", aliasLocal: false });
     expect(canvasNodeInputsEqual(foreign, { ...foreign })).toBe(true);
     expect(canvasNodeInputsEqual(foreign, { ...foreign, aliasLocal: true })).toBe(false);
+  });
+
+  it("puts a nested (smaller) group above the outer one, and every group below every card even when selected", () => {
+    const outer = card({ kind: "group", zIndex: 0, frame: { x: 0, y: 0, width: 2000, height: 1000 } });
+    const inner = card({ kind: "group", zIndex: 7, frame: { x: 100, y: 100, width: 400, height: 300 } });
+    const max = card({ kind: "group", frame: { x: 0, y: 0, width: 8000, height: 10000 } });
+    const note = card({ kind: "note", zIndex: 0 });
+
+    expect(nodeZIndex(outer, false)).toBe(-10200);
+    expect(nodeZIndex(inner, false)).toBe(-10012);
+    expect(nodeZIndex(max, false)).toBe(-18000);
+    expect(nodeZIndex(inner, false)).toBeGreaterThan(nodeZIndex(outer, false));
+    // Выделение группу не поднимает: ни над вложенной группой, ни над карточкой.
+    expect(nodeZIndex(outer, true)).toBe(nodeZIndex(outer, false));
+    expect(nodeZIndex(outer, true)).toBeLessThan(nodeZIndex(inner, false));
+    expect(nodeZIndex(inner, true)).toBeLessThan(nodeZIndex(note, false));
+  });
+
+  it("keeps a card's own z and lifts it by 1000 when selected", () => {
+    expect(nodeZIndex(card({ zIndex: 3 }), false)).toBe(3);
+    expect(nodeZIndex(card({ zIndex: 3 }), true)).toBe(1003);
+  });
+
+  it("rebuilds a group node when its title or colour changes", () => {
+    const group = card({ kind: "group", groupTitle: "", groupColorToken: "default" });
+    expect(canvasNodeInputsEqual(group, { ...group })).toBe(true);
+    expect(canvasNodeInputsEqual(group, { ...group, groupTitle: "Идеи" })).toBe(false);
+    expect(canvasNodeInputsEqual(group, { ...group, groupColorToken: "pink" })).toBe(false);
   });
 
   it("rebuilds a note node when its color changes, without a revision bump", () => {

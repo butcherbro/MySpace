@@ -18,6 +18,7 @@ const ALL_CARD_DTO_KINDS: CardDto["kind"][] = [
   "filesystem_alias",
   "file",
   "board_shortcut",
+  "group",
 ];
 
 describe("card-kinds registry", () => {

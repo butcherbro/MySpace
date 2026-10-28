@@ -18,17 +18,18 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Card width bounds (formerly `CHECK(width >= 120 AND width <= 1600)`).
+    /// Card width bounds. The old `CHECK` capped width at 1600; a group frame
+    /// (ADR-0013) is routinely wider, so the cap is 8000 for every kind.
     pub const MIN_WIDTH: f64 = 120.0;
-    pub const MAX_WIDTH: f64 = 1600.0;
+    pub const MAX_WIDTH: f64 = 8000.0;
     /// Card height bounds (formerly `CHECK(height >= 48 AND height <= 10000)`).
     pub const MIN_HEIGHT: f64 = 48.0;
     pub const MAX_HEIGHT: f64 = 10000.0;
 
     /// The frame invariants SQLite used to enforce with CHECK constraints on
-    /// `cards` (dropped in migration 0021): width in 120..=1600, height in
-    /// 48..=10000, finite x/y. Called by every repository function that
-    /// writes a whole frame.
+    /// `cards` (dropped in migration 0021), with the width cap raised by
+    /// ADR-0013: width in 120..=8000, height in 48..=10000, finite x/y.
+    /// Called by every repository function that writes a whole frame.
     pub fn validate(&self) -> Result<(), crate::domain::errors::WorkspaceError> {
         use crate::domain::errors::WorkspaceError;
         if !self.x.is_finite() || !self.y.is_finite() {
@@ -111,6 +112,9 @@ pub struct NoteCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub document_json: Value,
     pub plain_text: String,
     /// Semantic background-color preset id (`default`, `yellow`, …).
@@ -131,6 +135,9 @@ pub struct BoardPortalDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub target: PortalTarget,
 }
 
@@ -143,6 +150,9 @@ pub struct ImageCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub asset: AssetDto,
     pub caption_json: Value,
     pub caption_plain_text: String,
@@ -163,6 +173,9 @@ pub struct EmbedCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub source_url: String,
     pub display_url: String,
     pub site_name: Option<String>,
@@ -199,6 +212,9 @@ pub struct FilesystemAliasDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub target_kind: String,
     pub path_hint: String,
     pub display_name: String,
@@ -236,6 +252,9 @@ pub struct BoardShortcutDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub target_board_id: String,
     pub target: Option<BoardShortcutTarget>,
 }
@@ -251,6 +270,69 @@ pub struct CreateBoardShortcutInput {
     pub frame: Frame,
     pub z_index: i64,
     pub target_board_id: String,
+}
+
+/// A group card (ADR-0013): a named, coloured frame drawn under other cards.
+/// Membership is stored on the member (`group_id`), not on the group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupCardDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
+    /// `''` is a valid, untitled group; the UI renders the fallback label.
+    pub title: String,
+    /// Note palette preset id (`default`, `yellow`, …).
+    pub color_token: String,
+}
+
+/// Input for creating a group card. Idempotent by `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateGroupInput {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    /// Defaults to `''`.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Defaults to `default`.
+    #[serde(default)]
+    pub color_token: Option<String>,
+    /// Cards that join the group in the same transaction.
+    #[serde(default)]
+    pub member_ids: Vec<String>,
+    /// The new group's own group (a frame nested in another frame).
+    #[serde(default)]
+    pub group_id: Option<String>,
+}
+
+/// Receipt of `create_group`: the stored group plus a receipt per member
+/// whose `group_id` was set (empty on an idempotent repeat).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupCreatedReceipt {
+    pub group: CardDto,
+    pub members: Vec<CardReceipt>,
+}
+
+/// Input for renaming / recolouring a group; absent fields are unchanged,
+/// at least one must be present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateGroupInput {
+    pub card_id: String,
+    pub expected_revision: i64,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub color_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -315,6 +397,9 @@ pub struct FileCardDto {
     pub frame: Frame,
     pub z_index: i64,
     pub revision: i64,
+    /// The group the card belongs to (ADR-0013), normalized by the loader:
+    /// `None` unless it is a live group on the same board.
+    pub group_id: Option<String>,
     pub asset: AssetDto,
     pub preview_text: String,
     /// Generated thumbnail (PDF/office/HTML) when available.
@@ -349,6 +434,7 @@ pub enum CardDto {
     File(FileCardDto),
     #[serde(rename = "board_shortcut")]
     BoardShortcut(BoardShortcutDto),
+    Group(GroupCardDto),
 }
 
 impl CardDto {
@@ -362,6 +448,7 @@ impl CardDto {
             CardDto::FilesystemAlias(a) => &a.id,
             CardDto::File(f) => &f.id,
             CardDto::BoardShortcut(s) => &s.id,
+            CardDto::Group(g) => &g.id,
         }
     }
 }
@@ -376,6 +463,72 @@ pub struct BoardSnapshot {
     pub cards: Vec<CardDto>,
     /// Cards in this board's Unsorted panel (not yet placed on the canvas).
     pub unsorted_cards: Vec<CardDto>,
+    /// Живые коннекторы, оба конца которых — живые карточки холста этой доски.
+    #[serde(default)]
+    pub connectors: Vec<ConnectorDto>,
+}
+
+/// Стрелка между двумя карточками одной доски (`from` → `to`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorDto {
+    pub id: String,
+    pub board_id: String,
+    pub from_card_id: String,
+    pub to_card_id: String,
+    /// Пресет цвета заметки (`default`, `yellow`, …).
+    pub color_token: String,
+    /// `end` (наконечник у `to`), `both` или `none`.
+    pub arrow_ends: String,
+    /// Хранится, в v1 не редактируется.
+    pub label: Option<String>,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Ввод создания коннектора. Идемпотентно по `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateConnectorInput {
+    pub id: String,
+    pub board_id: String,
+    pub from_card_id: String,
+    pub to_card_id: String,
+    /// По умолчанию `default`.
+    #[serde(default)]
+    pub color_token: Option<String>,
+    /// По умолчанию `end`.
+    #[serde(default)]
+    pub arrow_ends: Option<String>,
+}
+
+/// Ввод правки коннектора; отсутствующие поля не меняются.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConnectorInput {
+    pub connector_id: String,
+    pub expected_revision: i64,
+    #[serde(default)]
+    pub color_token: Option<String>,
+    #[serde(default)]
+    pub arrow_ends: Option<String>,
+    #[serde(default)]
+    pub from_card_id: Option<String>,
+    #[serde(default)]
+    pub to_card_id: Option<String>,
+    /// Нет поля — без изменений; `null` — очистить; строка — задать.
+    #[serde(default, deserialize_with = "present_or_null")]
+    pub label: Option<Option<String>>,
+}
+
+/// Отличает явный `null` (`Some(None)`) от отсутствующего поля (`None`,
+/// через `#[serde(default)]`).
+fn present_or_null<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// Input for creating a note card.
@@ -475,6 +628,16 @@ pub struct MoveCardItem {
     pub id: String,
     pub expected_revision: i64,
     pub frame: Frame,
+    /// Absent = membership unchanged.
+    #[serde(default)]
+    pub group: Option<GroupAssignment>,
+}
+
+/// A card's new group in a [`MoveCardItem`]; `None` takes it out of its group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupAssignment {
+    pub group_id: Option<String>,
 }
 
 /// A transactional multi-card move (one gesture = one transaction/undo entry).

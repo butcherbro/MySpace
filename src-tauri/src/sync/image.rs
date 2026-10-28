@@ -6,7 +6,8 @@
 //!
 //! | entity        | register | columns                                              |
 //! |---------------|----------|------------------------------------------------------|
-//! | `card`        | `place`  | board_id, x, y, width, height, z_index, unsorted     |
+//! | `card`        | `place`  | board_id, x, y, width, height, z_index, unsorted,    |
+//! |               |          | group_id                                             |
 //! | `card`        | `life`   | deleted_at, trash_batch_id                           |
 //! | `card`        | `body`   | kind + the kind's detail row (`to_payload`)          |
 //! | `board`       | `meta`   | title, color_token, symbol, cover_asset_id           |
@@ -14,6 +15,9 @@
 //! | `board`       | `life`   | deleted_at, trash_batch_id                           |
 //! | `asset`       | `body`   | every column except `id`                             |
 //! | `quick_board` | `body`   | present, sort_order                                  |
+//! | `connector`   | `body`   | board_id, from/to_card_id, color_token, arrow_ends,  |
+//! |               |          | label                                                |
+//! | `connector`   | `life`   | present, deleted_at, trash_batch_id                  |
 //!
 //! Never in an image: `revision` / `updated_at` (local write counters), the
 //! `workspace_id` (each device has its own workspace row), `change_seq` and
@@ -37,7 +41,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{
-    board_from_wire, board_to_wire, ENTITY_ASSET, ENTITY_BOARD, ENTITY_CARD, ENTITY_QUICK_BOARD,
+    board_from_wire, board_to_wire, ENTITY_ASSET, ENTITY_BOARD, ENTITY_CARD, ENTITY_CONNECTOR,
+    ENTITY_QUICK_BOARD,
 };
 use crate::domain::card_kind::{handler, CardKind};
 use crate::domain::errors::WorkspaceError;
@@ -56,6 +61,7 @@ pub fn registers(entity_kind: &str) -> &'static [&'static str] {
     match entity_kind {
         ENTITY_CARD => &[REG_PLACE, REG_LIFE, REG_BODY],
         ENTITY_BOARD => &[REG_META, REG_PLACE, REG_LIFE],
+        ENTITY_CONNECTOR => &[REG_BODY, REG_LIFE],
         ENTITY_ASSET | ENTITY_QUICK_BOARD => &[REG_BODY],
         _ => &[],
     }
@@ -142,6 +148,7 @@ pub fn read_state(
         ENTITY_BOARD => read_board(conn, local_id, root),
         ENTITY_ASSET => read_asset(conn, local_id),
         ENTITY_QUICK_BOARD => read_quick_board(conn, local_id),
+        ENTITY_CONNECTOR => read_connector(conn, local_id, root),
         other => Err(WorkspaceError::ConstraintViolation(format!(
             "unknown entity kind: {other}"
         ))),
@@ -152,7 +159,7 @@ fn read_card(conn: &Connection, id: &str, root: &str) -> Result<Option<Value>, W
     let row = conn
         .query_row(
             "SELECT board_id, kind, x, y, width, height, z_index, unsorted, created_at,
-                    deleted_at, trash_batch_id
+                    deleted_at, trash_batch_id, group_id
              FROM cards WHERE id = ?1",
             [id],
             |r| {
@@ -169,6 +176,9 @@ fn read_card(conn: &Connection, id: &str, root: &str) -> Result<Option<Value>, W
                         "created_at": r.get::<_, i64>(8)?,
                         "deleted_at": r.get::<_, Option<i64>>(9)?,
                         "trash_batch_id": r.get::<_, Option<String>>(10)?,
+                        // Хранимое значение, не нормализованное: «спящее»
+                        // членство тоже должно доехать до другой реплики.
+                        "group_id": r.get::<_, Option<String>>(11)?,
                     }),
                 ))
             },
@@ -263,6 +273,43 @@ fn read_quick_board(conn: &Connection, board_id: &str) -> Result<Option<Value>, 
     }))
 }
 
+/// Образ коннектора есть всегда: физически стёртая строка едет как
+/// `present: false`.
+///
+/// Строка исчезает физически только FK-каскадом, когда стирается конец или
+/// доска (Empty Trash, purge из реплея); любое другое удаление мягкое. Свой
+/// purge-тумбстоун ей не нужен: тумбстоун стёртой карточки или доски
+/// отбрасывает поздние строки коннектора. `present` входит в регистр `life`.
+fn read_connector(
+    conn: &Connection,
+    id: &str,
+    root: &str,
+) -> Result<Option<Value>, WorkspaceError> {
+    let row = conn
+        .query_row(
+            "SELECT board_id, from_card_id, to_card_id, color_token, arrow_ends, label, created_at,
+                    deleted_at, trash_batch_id
+             FROM connectors WHERE id = ?1",
+            [id],
+            |r| {
+                Ok(json!({
+                    "present": true,
+                    "board_id": board_to_wire(root, &r.get::<_, String>(0)?),
+                    "from_card_id": r.get::<_, String>(1)?,
+                    "to_card_id": r.get::<_, String>(2)?,
+                    "color_token": r.get::<_, String>(3)?,
+                    "arrow_ends": r.get::<_, String>(4)?,
+                    "label": r.get::<_, Option<String>>(5)?,
+                    "created_at": r.get::<_, i64>(6)?,
+                    "deleted_at": r.get::<_, Option<i64>>(7)?,
+                    "trash_batch_id": r.get::<_, Option<String>>(8)?,
+                }))
+            },
+        )
+        .optional()?;
+    Ok(Some(row.unwrap_or_else(|| json!({ "present": false }))))
+}
+
 // ---- field access for replay -------------------------------------------------
 
 fn invalid(what: &str) -> WorkspaceError {
@@ -315,11 +362,17 @@ fn get_bool(state: &Value, key: &str) -> Result<bool, WorkspaceError> {
 // ---- writing registers (replay) ---------------------------------------------
 
 /// A card's `place` register, validated.
+///
+/// `group_id` (ADR-0013) живёт в `place`, а не в `body`: членство меняется
+/// тем же жестом, что и рамка, и в `body` параллельная правка текста заметки
+/// и перенос её в группу на другом устройстве давали бы conflict copy.
 pub struct CardPlace {
     pub board_id: String,
     pub frame: Frame,
     pub z_index: i64,
     pub unsorted: bool,
+    /// `None` also when the image has no key (an older build).
+    pub group_id: Option<String>,
 }
 
 pub fn card_place(state: &Value, root: &str) -> Result<CardPlace, WorkspaceError> {
@@ -335,6 +388,7 @@ pub fn card_place(state: &Value, root: &str) -> Result<CardPlace, WorkspaceError
         frame,
         z_index: get_i64(state, "z_index")?,
         unsorted: get_bool(state, "unsorted")?,
+        group_id: get_opt_str(state, "group_id")?,
     })
 }
 
@@ -363,8 +417,9 @@ pub fn insert_card(
     let kind = card_kind(state)?;
     conn.execute(
         "INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision,
-                            created_at, updated_at, deleted_at, trash_batch_id, unsorted)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?13)",
+                            created_at, updated_at, deleted_at, trash_batch_id, unsorted,
+                            group_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             id,
             place.board_id,
@@ -379,6 +434,7 @@ pub fn insert_card(
             get_opt_i64(state, "deleted_at")?,
             get_opt_str(state, "trash_batch_id")?,
             i64::from(place.unsorted),
+            place.group_id,
         ],
     )?;
     write_card_body(conn, id, kind, None, state, root)
@@ -391,7 +447,7 @@ pub fn update_card_place(
 ) -> Result<(), WorkspaceError> {
     conn.execute(
         "UPDATE cards SET board_id = ?2, x = ?3, y = ?4, width = ?5, height = ?6, z_index = ?7,
-                          unsorted = ?8
+                          unsorted = ?8, group_id = ?9
          WHERE id = ?1",
         params![
             id,
@@ -401,7 +457,8 @@ pub fn update_card_place(
             place.frame.width,
             place.frame.height,
             place.z_index,
-            i64::from(place.unsorted)
+            i64::from(place.unsorted),
+            place.group_id,
         ],
     )?;
     Ok(())
@@ -597,5 +654,90 @@ pub fn write_quick_board(
     } else {
         conn.execute("DELETE FROM quick_boards WHERE board_id = ?1", [board_id])?;
     }
+    Ok(())
+}
+
+/// Описывает ли образ коннектора существующую строку (`present: true`).
+pub fn connector_present(state: &Value) -> Result<bool, WorkspaceError> {
+    get_bool(state, "present")
+}
+
+/// Вставляет коннектор, которого здесь нет, из полного образа.
+pub fn insert_connector(
+    conn: &Connection,
+    id: &str,
+    state: &Value,
+    root: &str,
+    now: i64,
+) -> Result<(), WorkspaceError> {
+    conn.execute(
+        "INSERT INTO connectors (id, board_id, from_card_id, to_card_id, color_token, arrow_ends,
+                                 label, revision, created_at, updated_at, deleted_at,
+                                 trash_batch_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11)",
+        params![
+            id,
+            board_from_wire(root, get_str(state, "board_id")?),
+            get_str(state, "from_card_id")?,
+            get_str(state, "to_card_id")?,
+            get_str(state, "color_token")?,
+            get_str(state, "arrow_ends")?,
+            get_opt_str(state, "label")?,
+            get_opt_i64(state, "created_at")?.unwrap_or(now),
+            now,
+            get_opt_i64(state, "deleted_at")?,
+            get_opt_str(state, "trash_batch_id")?,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Регистр `body` существующего коннектора.
+pub fn update_connector_body(
+    conn: &Connection,
+    id: &str,
+    state: &Value,
+    root: &str,
+) -> Result<(), WorkspaceError> {
+    conn.execute(
+        "UPDATE connectors SET board_id = ?2, from_card_id = ?3, to_card_id = ?4,
+                               color_token = ?5, arrow_ends = ?6, label = ?7
+         WHERE id = ?1",
+        params![
+            id,
+            board_from_wire(root, get_str(state, "board_id")?),
+            get_str(state, "from_card_id")?,
+            get_str(state, "to_card_id")?,
+            get_str(state, "color_token")?,
+            get_str(state, "arrow_ends")?,
+            get_opt_str(state, "label")?,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Регистр `life` существующего коннектора, когда образ говорит `present`.
+pub fn update_connector_life(
+    conn: &Connection,
+    id: &str,
+    state: &Value,
+) -> Result<(), WorkspaceError> {
+    conn.execute(
+        "UPDATE connectors SET deleted_at = ?2, trash_batch_id = ?3 WHERE id = ?1",
+        params![
+            id,
+            get_opt_i64(state, "deleted_at")?,
+            get_opt_str(state, "trash_batch_id")?
+        ],
+    )?;
+    Ok(())
+}
+
+/// Сдвигает локальные счётчики записи коннектора, тронутого реплеем.
+pub fn touch_connector(conn: &Connection, id: &str, now: i64) -> Result<(), WorkspaceError> {
+    conn.execute(
+        "UPDATE connectors SET revision = revision + 1, updated_at = ?2 WHERE id = ?1",
+        params![id, now],
+    )?;
     Ok(())
 }

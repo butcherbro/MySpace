@@ -10,8 +10,8 @@ use myspace_lib::domain::card_kind::{handler, registry, sql_in_list, CardKind};
 use myspace_lib::domain::errors::WorkspaceError;
 use myspace_lib::domain::models::{
     CreateBoardShortcutInput, CreateChildBoardInput, CreateFileCardInput,
-    CreateFilesystemAliasInput, CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame,
-    LinkBatchItem,
+    CreateFilesystemAliasInput, CreateGroupInput, CreateImageCardInput, CreateLinkBatchInput,
+    CreateNoteInput, Frame, LinkBatchItem,
 };
 use myspace_lib::repositories::workspace_repository as repo;
 use rusqlite::{params, Connection};
@@ -66,7 +66,7 @@ fn card_kind_all_matches_registry_order() {
     );
     assert_eq!(
         sql_in_list(CardKind::LEAF),
-        "('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut')"
+        "('note', 'image', 'embed', 'filesystem_alias', 'file', 'board_shortcut', 'group')"
     );
     assert!(matches!(
         "test_kind".parse::<CardKind>(),
@@ -216,10 +216,28 @@ fn one_card_of_each_kind(conn: &mut Connection) -> Vec<(CardKind, String)> {
         conn,
         &CreateBoardShortcutInput {
             id: "c-shortcut".into(),
-            board_id: home,
+            board_id: home.clone(),
             frame: frame(),
             z_index: 5,
             target_board_id: "b-child".into(),
+        },
+    )
+    .unwrap();
+
+    repo::create_group(
+        conn,
+        &CreateGroupInput {
+            id: "c-group".into(),
+            board_id: home,
+            frame: Frame {
+                width: 3000.0,
+                ..frame()
+            },
+            z_index: 0,
+            title: Some("Research".into()),
+            color_token: Some("lavender".into()),
+            member_ids: Vec::new(),
+            group_id: None,
         },
     )
     .unwrap();
@@ -232,6 +250,7 @@ fn one_card_of_each_kind(conn: &mut Connection) -> Vec<(CardKind, String)> {
         (CardKind::FilesystemAlias, "c-alias".into()),
         (CardKind::File, "c-file".into()),
         (CardKind::BoardShortcut, "c-shortcut".into()),
+        (CardKind::Group, "c-group".into()),
     ]
 }
 
@@ -344,7 +363,12 @@ fn frame_validate_matches_the_old_checks() {
         }
         .validate()
     };
-    for (w, h) in [(120.0, 48.0), (1600.0, 10000.0), (240.0, 160.0)] {
+    for (w, h) in [
+        (120.0, 48.0),
+        (8000.0, 10000.0),
+        (1600.1, 160.0),
+        (240.0, 160.0),
+    ] {
         assert!(ok(0.0, 0.0, w, h).is_ok(), "{w}x{h} is valid");
     }
     assert!(
@@ -353,7 +377,7 @@ fn frame_validate_matches_the_old_checks() {
     );
     for (x, y, w, h) in [
         (0.0, 0.0, 119.9, 100.0),
-        (0.0, 0.0, 1600.1, 100.0),
+        (0.0, 0.0, 8000.1, 100.0),
         (0.0, 0.0, 200.0, 47.9),
         (0.0, 0.0, 200.0, 10000.1),
         (0.0, 0.0, f64::NAN, 100.0),
@@ -413,6 +437,22 @@ fn every_frame_writer_validates() {
                 frame: bad,
                 z_index: 0,
                 target_board_id: home.clone(),
+            },
+        )
+        .map(|_| ())
+    ));
+    assert!(is_constraint(
+        repo::create_group(
+            &mut conn,
+            &CreateGroupInput {
+                id: "g".into(),
+                board_id: home.clone(),
+                frame: bad,
+                z_index: 0,
+                title: None,
+                color_token: None,
+                member_ids: Vec::new(),
+                group_id: None,
             },
         )
         .map(|_| ())

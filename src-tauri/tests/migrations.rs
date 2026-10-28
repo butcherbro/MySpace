@@ -554,6 +554,8 @@ fn migration_0021_drops_the_kind_check_and_keeps_every_cards_index() {
     assert_eq!(
         indexes,
         vec![
+            // 0029 (после 0021): частичный индекс членства в группе.
+            ("cards_group_id".to_string(), true),
             ("idx_cards_board_active".to_string(), false),
             ("idx_cards_trash_batch".to_string(), false),
             ("idx_cards_trashed".to_string(), true),
@@ -783,4 +785,365 @@ fn migration_0023_adds_board_change_seq_and_its_triggers() {
     )
     .unwrap();
     assert_eq!(seq(&conn, "home"), 1);
+}
+
+/// Migration 0027 creates `connectors` with its indexes and the `change_seq`
+/// triggers; deleting an endpoint card cascades to its connectors.
+#[test]
+fn migration_0027_creates_connectors_and_its_change_seq_triggers() {
+    assert!(
+        migrations::MIGRATIONS
+            .iter()
+            .any(|m| m.version == 27 && m.name == "connectors"),
+        "migration 0027 is registered"
+    );
+    let conn = open_in_memory().unwrap();
+    assert!(table_names(&conn).contains(&"connectors".to_string()));
+    let indexes = index_names(&conn);
+    for expected in [
+        "idx_connectors_board",
+        "idx_connectors_from_card",
+        "idx_connectors_to_card",
+        "idx_connectors_trash_batch",
+    ] {
+        assert!(
+            indexes.iter().any(|i| i == expected),
+            "missing index: {expected}"
+        );
+    }
+    let triggers: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'change_seq_connectors_%'")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    for op in ["ai", "au", "ad"] {
+        let name = format!("change_seq_connectors_{op}");
+        assert!(triggers.contains(&name), "missing trigger {name}");
+    }
+
+    conn.execute_batch(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at)
+             VALUES ('home', 'ws', NULL, 'Home', 'default', NULL, 1, 0, 0);
+         INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at)
+             VALUES ('a', 'home', 'note', 0, 0, 200, 80, 0, 0),
+                    ('b', 'home', 'note', 0, 0, 200, 80, 0, 0);",
+    )
+    .unwrap();
+    let seq = |conn: &rusqlite::Connection| -> i64 {
+        conn.query_row("SELECT change_seq FROM boards WHERE id = 'home'", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    let before = seq(&conn);
+    conn.execute(
+        "INSERT INTO connectors (id, board_id, from_card_id, to_card_id, created_at, updated_at)
+         VALUES ('k', 'home', 'a', 'b', 0, 0)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(seq(&conn), before + 1, "insert bumps the board");
+    let (color, ends): (String, String) = conn
+        .query_row(
+            "SELECT color_token, arrow_ends FROM connectors WHERE id = 'k'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((color.as_str(), ends.as_str()), ("default", "end"));
+    conn.execute(
+        "UPDATE connectors SET color_token = 'pink' WHERE id = 'k'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(seq(&conn), before + 2, "update bumps the board");
+    assert!(conn
+        .execute(
+            "UPDATE connectors SET arrow_ends = 'start' WHERE id = 'k'",
+            []
+        )
+        .is_err());
+
+    conn.execute("DELETE FROM cards WHERE id = 'b'", [])
+        .unwrap();
+    let left: i64 = conn
+        .query_row("SELECT COUNT(*) FROM connectors", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(left, 0, "the endpoint's delete cascades");
+}
+
+/// Строки `connector`, которые старая сборка сохранила в `changes` и
+/// отвергла, после миграции 0027 стоят в очереди повторов; повторный запуск
+/// шага дублей не создаёт.
+#[test]
+fn migration_0027_requeues_connector_changes_an_old_build_rejected() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 27) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch(migration.sql).unwrap();
+        if let Some(step) = migration.after {
+            step(&tx).unwrap();
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(
+        "INSERT INTO changes (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at)
+             VALUES ('peer', '000000000000001-00000-peer', 'connector', 'k1', 'connector.create', '{\"v\":1}', 5),
+                    ('peer', '000000000000002-00000-peer', 'card', 'c1', 'card.create_note', '{\"v\":1}', 5);",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let pending = |conn: &rusqlite::Connection| -> Vec<(String, String, i64)> {
+        let mut stmt = conn
+            .prepare("SELECT entity_kind, entity_id, received_at FROM pending_changes ORDER BY hlc")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(
+        pending(&conn),
+        [("connector".to_string(), "k1".to_string(), 5)],
+        "only the connector row is queued"
+    );
+
+    let tx = conn.transaction().unwrap();
+    migrations::requeue_connector_changes(&tx).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(pending(&conn).len(), 1, "a second run adds no duplicate");
+}
+
+/// Migration 0028 creates `group_cards` (defaults, colour CHECK, cascade from
+/// `cards`) and its `change_seq` triggers.
+#[test]
+fn migration_0028_creates_group_cards_and_its_change_seq_triggers() {
+    assert!(
+        migrations::MIGRATIONS
+            .iter()
+            .any(|m| m.version == 28 && m.name == "group_cards"),
+        "migration 0028 is registered"
+    );
+    let conn = open_in_memory().unwrap();
+    assert!(table_names(&conn).contains(&"group_cards".to_string()));
+    let triggers: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'change_seq_group_cards_%'")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    for op in ["ai", "au", "ad"] {
+        let name = format!("change_seq_group_cards_{op}");
+        assert!(triggers.contains(&name), "missing trigger {name}");
+    }
+
+    conn.execute_batch(
+        "INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('ws', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, symbol, revision, created_at, updated_at)
+             VALUES ('home', 'ws', NULL, 'Home', 'default', NULL, 1, 0, 0);
+         INSERT INTO cards (id, board_id, kind, x, y, width, height, created_at, updated_at)
+             VALUES ('g', 'home', 'group', 0, 0, 3000, 800, 0, 0);",
+    )
+    .unwrap();
+    let seq = |conn: &rusqlite::Connection| -> i64 {
+        conn.query_row("SELECT change_seq FROM boards WHERE id = 'home'", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    let before = seq(&conn);
+    conn.execute("INSERT INTO group_cards (card_id) VALUES ('g')", [])
+        .unwrap();
+    assert_eq!(seq(&conn), before + 1, "insert bumps the board");
+    let (title, color): (String, String) = conn
+        .query_row(
+            "SELECT title, color_token FROM group_cards WHERE card_id = 'g'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((title.as_str(), color.as_str()), ("", "default"));
+    conn.execute(
+        "UPDATE group_cards SET color_token = 'green' WHERE card_id = 'g'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(seq(&conn), before + 2, "update bumps the board");
+    assert!(conn
+        .execute(
+            "UPDATE group_cards SET color_token = 'red' WHERE card_id = 'g'",
+            []
+        )
+        .is_err());
+
+    conn.execute("DELETE FROM cards WHERE id = 'g'", [])
+        .unwrap();
+    let left: i64 = conn
+        .query_row("SELECT COUNT(*) FROM group_cards", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(left, 0, "the card's delete cascades");
+}
+
+/// Строки `card` с видом `group`, которые старая сборка сохранила в `changes`
+/// и отвергла, после миграции 0028 стоят в очереди повторов; прочие строки и
+/// битый JSON не мешают, повторный запуск дублей не создаёт.
+#[test]
+fn migration_0028_requeues_group_card_changes_an_old_build_rejected() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 28) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch(migration.sql).unwrap();
+        if let Some(step) = migration.after {
+            step(&tx).unwrap();
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    conn.execute_batch(
+        "INSERT INTO changes (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at)
+             VALUES ('peer', '000000000000001-00000-peer', 'card', 'g1', 'group.create', '{\"v\":1,\"state\":{\"kind\":\"group\"}}', 5),
+                    ('peer', '000000000000002-00000-peer', 'card', 'c1', 'card.create_note', '{\"v\":1,\"state\":{\"kind\":\"note\"}}', 5),
+                    ('peer', '000000000000003-00000-peer', 'card', 'c2', 'card.move', 'not json', 5),
+                    ('peer', '000000000000004-00000-peer', 'card', 'g1', 'card.move', '{\"v\":1,\"state\":{\"kind\":\"group\"}}', 6);",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let pending = |conn: &rusqlite::Connection| -> Vec<(String, String, i64)> {
+        let mut stmt = conn
+            .prepare("SELECT entity_id, op, received_at FROM pending_changes ORDER BY hlc")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(
+        pending(&conn),
+        [
+            ("g1".to_string(), "group.create".to_string(), 5),
+            ("g1".to_string(), "card.move".to_string(), 6),
+        ],
+        "only the group rows are queued"
+    );
+
+    let tx = conn.transaction().unwrap();
+    migrations::requeue_group_card_changes(&tx).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(pending(&conn).len(), 2, "a second run adds no duplicate");
+}
+
+/// Migration 0029 adds `cards.group_id` (nullable, no FK) and its partial
+/// index on a fresh database.
+#[test]
+fn migration_0029_adds_card_group_id_on_a_fresh_database() {
+    let conn = open_in_memory().unwrap();
+    assert!(
+        migrations::MIGRATIONS
+            .iter()
+            .any(|m| m.version == 29 && m.name == "card_group" && m.after.is_none()),
+        "migration 0029 is registered"
+    );
+    let (notnull, default): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT \"notnull\", dflt_value FROM pragma_table_info('cards') WHERE name = 'group_id'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((notnull, default), (0, None));
+    assert!(index_names(&conn).contains(&"cards_group_id".to_string()));
+    let fks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_foreign_key_list('cards') WHERE \"from\" = 'group_id'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fks, 0, "no foreign key: replay may apply a member first");
+}
+
+/// На базе версии 28 с карточками миграция 0029 добавляет колонку, не трогая
+/// строки: у старых карточек `group_id` NULL, внешние ключи чисты.
+#[test]
+fn migration_0029_upgrades_a_version_28_database() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    for migration in migrations::MIGRATIONS.iter().filter(|m| m.version < 29) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch(migration.sql).unwrap();
+        if let Some(step) = migration.after {
+            step(&tx).unwrap();
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![migration.version, migration.name],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         INSERT INTO workspaces (id, title, root_board_id, created_at, updated_at) VALUES ('w', 'Home', 'home', 0, 0);
+         INSERT INTO boards (id, workspace_id, parent_board_id, title, color_token, revision, created_at, updated_at)
+             VALUES ('home', 'w', NULL, 'Home', 'default', 1, 0, 0);
+         INSERT INTO cards (id, board_id, kind, x, y, width, height, z_index, revision, created_at, updated_at)
+             VALUES ('n', 'home', 'note', 0, 0, 200, 80, 0, 3, 0, 0);",
+    )
+    .unwrap();
+
+    migrations::run_migrations(&mut conn).unwrap();
+
+    let (group_id, revision): (Option<String>, i64) = conn
+        .query_row(
+            "SELECT group_id, revision FROM cards WHERE id = 'n'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((group_id, revision), (None, 3));
+    let latest: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(latest, 29);
+    let violations: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(violations, 0);
 }

@@ -14,6 +14,7 @@ function embed(overrides: Partial<EmbedCardDto> = {}): EmbedCardDto {
     frame: { x: 0, y: 0, width: 320, height: 180 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     sourceUrl: "https://example.com",
     displayUrl: "example.com",
     siteName: null,

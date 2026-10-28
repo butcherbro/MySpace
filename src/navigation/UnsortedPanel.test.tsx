@@ -12,6 +12,7 @@ function note(id: string, text = "hello"): CardDto {
     frame: { x: 0, y: 0, width: 200, height: 80 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     documentJson: { type: "doc" },
     plainText: text,
     colorToken: "default",
@@ -26,6 +27,7 @@ function folder(id: string): CardDto {
     frame: { x: 0, y: 0, width: 360, height: 300 },
     zIndex: 0,
     revision: 1,
+    groupId: null,
     targetKind: "folder",
     pathHint: "/Volumes/Studio/Video project",
     displayName: "Video project",
@@ -52,6 +54,25 @@ describe("UnsortedPanel", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Place" })[0]);
     expect(onPlace).toHaveBeenCalledWith("a");
+  });
+
+  it("renders a group by its title, or the untitled fallback", () => {
+    const group = (id: string, title: string): CardDto => ({
+      kind: "group",
+      id,
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 640, height: 320 },
+      zIndex: 0,
+      revision: 1,
+      groupId: null,
+      title,
+      colorToken: "default",
+    });
+    render(<UnsortedPanel cards={[group("g1", "Проект"), group("g2", "")]} onPlace={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getAllByTestId("unsorted-group").map((el) => el.textContent)).toEqual([
+      "Проект",
+      "Группа без названия",
+    ]);
   });
 
   it("renders a recognizable compact folder shortcut identity", () => {

@@ -18,11 +18,11 @@
 //!
 //! Journal rows are STATE, not commands: each row carries the full image of
 //! one entity (a board, a card with its kind payload, an asset, a quick-board
-//! reference) plus the HLC of every register in it. Replay merges registers by
-//! last-writer-wins, which converges regardless of delivery order and needs no
-//! deterministic re-execution of the original command (ids minted inside a
-//! command, such as trash batch ids or a duplicated board's subtree, arrive as
-//! data). The originating command is kept as the row's `op`
+//! reference, a connector) plus the HLC of every register in it. Replay
+//! merges registers by last-writer-wins, which converges regardless of
+//! delivery order and needs no deterministic re-execution of the original
+//! command (ids minted inside a command, such as trash batch ids or a
+//! duplicated board's subtree, arrive as data). The originating command is kept as the row's `op`
 //! ([`crate::domain::mutation::Mutation::op_name`]).
 
 pub mod compact;
@@ -63,6 +63,7 @@ pub const ENTITY_BOARD: &str = "board";
 pub const ENTITY_CARD: &str = "card";
 pub const ENTITY_ASSET: &str = "asset";
 pub const ENTITY_QUICK_BOARD: &str = "quick_board";
+pub const ENTITY_CONNECTOR: &str = "connector";
 
 /// One journal row as exchanged between devices. `received_at` and `seq`
 /// are local and never travel.
@@ -105,6 +106,24 @@ pub struct ApplyReport {
     /// Local board ids whose rendered content changed (their `change_seq`
     /// was bumped by the 0023 triggers). A transport notifies the UI with it.
     pub touched_boards: Vec<String>,
+}
+
+/// Replays the rows parked in `pending_changes` once, if there are any.
+///
+/// Повторы паркованных строк идут только внутри реплея пришедшей страницы.
+/// Строки `connector`, поставленные в очередь миграцией 0027, ждали бы
+/// первой непустой страницы от пира; при старте они применяются сразу.
+pub fn retry_pending_blocking(
+    ws: &crate::app::Workspace,
+) -> Result<Option<ApplyReport>, WorkspaceError> {
+    if ws.read_blocking(journal::pending_count)? == 0 {
+        return Ok(None);
+    }
+    ws.apply_blocking(crate::domain::mutation::Mutation::ApplySyncChanges(
+        Vec::new(),
+    ))?
+    .into_sync_report()
+    .map(Some)
 }
 
 /// This installation's `device_id` (ADR-0012).

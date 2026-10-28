@@ -52,6 +52,7 @@ export function useBoardLoading(deps: BoardLoadingDeps): BoardNavigation {
               ? { ...c, documentJson: normalizeDocument(c.documentJson) }
               : c,
           ),
+          connectors: snapshot.connectors,
         },
         requestStamp,
       );

@@ -17,6 +17,7 @@ export const CARD_KINDS = [
   "filesystem_alias",
   "file",
   "board_shortcut",
+  "group",
 ] as const;
 
 export type CardKind = (typeof CARD_KINDS)[number];
@@ -67,6 +68,8 @@ export const CARD_KIND_INFO: Record<CardKind, CardKindInfo> = {
   filesystem_alias: { isLeaf: true, trashKind: "filesystem_alias", clipboard: "none", paste: false },
   file: { isLeaf: true, trashKind: "file", clipboard: "none", paste: false },
   board_shortcut: { isLeaf: true, trashKind: "board_shortcut", clipboard: "structured", paste: true },
+  // Группа (ADR-0013) — лист, как ярлык; копирование/вставка рамки в v1 не поддержаны.
+  group: { isLeaf: true, trashKind: "group", clipboard: "none", paste: false },
 };
 
 /** Kinds that can be copied into the internal card clipboard (App.tsx's Cmd+C). */

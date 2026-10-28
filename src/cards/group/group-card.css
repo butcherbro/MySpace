@@ -1,0 +1,78 @@
+/* Группа (ADR-0013): полупрозрачная заливка и рамка 2 px цвета пресета,
+   плашка названия внутри верхней полосы рамки (под неё у новой группы
+   отведено `GROUP_TITLE_SPACE`; снаружи над рамкой у y=0 до неё не
+   дотянуться). Цвета — набор `--connector-*`: пастельные заливки заметок слишком бледны для рамки и плашки с белым
+   текстом, а у связей уже есть насыщенные варианты для светлой и тёмной темы. */
+.group-card {
+  --group-color: var(--connector-default);
+  position: relative;
+  box-sizing: border-box;
+  border: 2px solid var(--group-color);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--group-color) 14%, transparent);
+}
+
+.group-card[data-color-token="yellow"] { --group-color: var(--connector-yellow); }
+.group-card[data-color-token="pink"] { --group-color: var(--connector-pink); }
+.group-card[data-color-token="lavender"] { --group-color: var(--connector-lavender); }
+.group-card[data-color-token="blue"] { --group-color: var(--connector-blue); }
+.group-card[data-color-token="green"] { --group-color: var(--connector-green); }
+.group-card[data-color-token="gray"] { --group-color: var(--connector-gray); }
+
+.group-card__title {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  max-width: calc(100% - 12px);
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--group-color);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: default;
+  user-select: none;
+}
+
+.group-card__title-input {
+  box-sizing: border-box;
+  width: 240px;
+  border: 0;
+  outline: 2px solid var(--edge-focus);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  user-select: text;
+  cursor: text;
+}
+
+.group-card__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  border-radius: 0 0 10px 0;
+}
+
+.group-card__resize::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--group-color);
+  border-bottom: 2px solid var(--group-color);
+}
+
+/* Кольцо выделения холста повторяет скругление рамки группы. */
+.canvas-surface .react-flow__node .canvas-card-frame[data-card-kind="group"] {
+  border-radius: 12px;
+}

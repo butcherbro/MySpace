@@ -14,6 +14,7 @@ const note: NoteCardDto = {
   frame: { x: 0, y: 0, width: 240, height: 120 },
   zIndex: 0,
   revision: 1,
+  groupId: null,
   documentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "hello" }] }] },
   plainText: "hello",
   colorToken: "default",

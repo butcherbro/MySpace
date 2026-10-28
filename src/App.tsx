@@ -15,6 +15,9 @@ import { usePasteActions } from "./app/use-paste-actions";
 import { useCardEdits } from "./app/use-card-edits";
 import { useCardCreation } from "./app/use-card-creation";
 import { useContextActions } from "./app/use-context-actions";
+import { useConnectorActions } from "./app/use-connector-actions";
+import { useGroupActions } from "./app/use-group-actions";
+import { useGroupEdits } from "./app/use-group-edits";
 import { useCardDrop } from "./app/use-card-drop";
 import { useBoardLoading } from "./app/use-board-loading";
 import { useBoardRefresh } from "./app/use-board-refresh";
@@ -24,7 +27,7 @@ import { useTrashController } from "./app/use-trash-controller";
 import { useErrorReports } from "./app/error-reports";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
-import type { CanvasCard } from "./canvas/canvas-types";
+import type { CanvasCard, CanvasConnector } from "./canvas/canvas-types";
 import { renderCard as renderCardFromRegistry } from "./cards/card-registry";
 import { RenameBoardCommand } from "./commands/board-commands";
 import { CommandDispatcher } from "./commands/command-dispatcher";
@@ -91,7 +94,13 @@ function App() {
 
   // The contextual rail shows note tools when exactly one Note is active:
   // either it is being edited, or it is the single selected card.
-  const activeNoteId = state.editingCardId
+  // Переименование группы тоже держит `editingCardId`, но инструменты заметки
+  // для него не нужны.
+  const editingNoteId =
+    state.editingCardId !== null && state.cards.find((c) => c.id === state.editingCardId)?.kind === "group"
+      ? null
+      : state.editingCardId;
+  const activeNoteId = editingNoteId
     ?? (state.selection.length === 1 &&
         state.cards.find((c) => c.id === state.selection[0])?.kind === "note"
       ? state.selection[0]
@@ -290,6 +299,16 @@ function App() {
     recordErrorReport: recordReport,
   });
 
+  const { handleResizeGroup } = useGroupEdits({
+    gateway,
+    dispatch,
+    cardWrites,
+    queueRef,
+    cardsRef,
+    dispatcher,
+    idGenerator,
+  });
+
   // Build the canvas projection from all cards (notes + portals). Memoised on
   // `state.cards` (P1.8): the canvas diffs this array per card, and an App
   // re-render that didn't touch the cards must hand it the same array.
@@ -300,13 +319,23 @@ function App() {
     frame: c.frame,
     zIndex: c.zIndex,
     revision: c.revision,
+    groupId: c.groupId,
     targetBoardId: c.kind === "board_portal" ? c.target.id : undefined,
     portalTitle: c.kind === "board_portal" ? c.target.title : undefined,
     portalCoverAssetId: c.kind === "board_portal" ? c.target.coverAsset?.id ?? undefined : undefined,
     aliasLocal: c.kind === "filesystem_alias" ? c.local : undefined,
+    groupTitle: c.kind === "group" ? c.title : undefined,
+    groupColorToken: c.kind === "group" ? c.colorToken : undefined,
     colorToken: c.kind === "note" ? c.colorToken : undefined,
   })), [state.cards]);
   const cardsById = useMemo(() => new Map(state.cards.map((c) => [c.id, c])), [state.cards]);
+  const canvasConnectors: CanvasConnector[] = useMemo(() => state.connectors.map((c) => ({
+    id: c.id,
+    fromCardId: c.fromCardId,
+    toCardId: c.toCardId,
+    colorToken: c.colorToken,
+    arrowEnds: c.arrowEnds,
+  })), [state.connectors]);
 
 
   const {
@@ -336,6 +365,34 @@ function App() {
     cardWrites,
     refreshTrash,
   });
+
+  const connectorActions = useConnectorActions({
+    board,
+    connectors: state.connectors,
+    dispatcher,
+    idGenerator,
+    dispatch,
+    cardWrites,
+  });
+  const groupActions = useGroupActions({
+    board,
+    cards: state.cards,
+    selection: state.selection,
+    cardsRef,
+    queueRef,
+    dispatcher,
+    idGenerator,
+    dispatch,
+    cardWrites,
+    refreshTrash,
+  });
+  const connectorDeleteKey = connectorActions.handleDeleteKey;
+  // Delete/Backspace: сначала выделенные связи, потом выделенные карточки в
+  // корзину — по очереди (см. handleDeleteKey в use-connector-actions.ts).
+  const handleDeleteKey = useCallback(
+    () => connectorDeleteKey(state.selection, handleDeleteSelection),
+    [connectorDeleteKey, state.selection, handleDeleteSelection],
+  );
 
   // Viewport saves are debounced, flushed on navigation, and pinned to the board
   // revision captured when the viewport settled. The board-scoped policy around
@@ -529,8 +586,10 @@ function App() {
     handleNavigateForward,
     handleWorkspaceUndo,
     handleWorkspaceRedo,
-    handleDeleteSelection,
+    handleDeleteSelection: handleDeleteKey,
     handleCopySelection,
+    handleGroupSelection: groupActions.groupSelection,
+    handleUngroupSelection: groupActions.ungroupSelection,
     trashOpen,
     closeTrashDrawer,
   });
@@ -561,6 +620,9 @@ function App() {
     onOpenFileCard: openFileCard,
     onRevealFileCard: revealFileCard,
     onResizeFileCard: handleResizeNote,
+    onResizeGroup: handleResizeGroup,
+    onStartRenameGroup: groupActions.startRename,
+    onRenameGroup: groupActions.rename,
     onNoteCommands: noteFormatting.handleNoteCommands,
     onNoteBoldStateChange: noteFormatting.handleNoteBoldStateChange,
     onNoteItalicStateChange: noteFormatting.handleNoteItalicStateChange,
@@ -656,6 +718,19 @@ function App() {
             const isFolderAlias = card?.kind === "filesystem_alias";
             const isFileCard = card?.kind === "file";
             const isLinkCard = card?.kind === "embed";
+            if (card?.kind === "group") {
+              return (
+                <ContextMenu
+                  x={contextMenu.x}
+                  y={contextMenu.y}
+                  actions={[
+                    ...groupActions.groupMenuActions(card),
+                    { id: "delete", label: "Delete", onSelect: handleContextDelete },
+                  ]}
+                  onClose={() => setContextMenu(null)}
+                />
+              );
+            }
             const actions: ContextMenuAction[] = [
               { id: "copy-link", label: "Copy MySpace Link", onSelect: () => void handleCopyLink() },
             ];
@@ -714,6 +789,9 @@ function App() {
                 onSelect: () => handleCreateShortcut(card as BoardShortcutDto),
               });
             }
+            if (state.selection.length > 0) {
+              actions.push({ id: "group", label: "Group", onSelect: () => void groupActions.groupSelection() });
+            }
             actions.push({ id: "delete", label: "Delete", onSelect: handleContextDelete });
             return (
               <ContextMenu
@@ -724,6 +802,15 @@ function App() {
               />
             );
           })()}
+        {connectorActions.connectorMenu && connectorActions.connectorMenuActions.length > 0 && (
+          <ContextMenu
+            x={connectorActions.connectorMenu.x}
+            y={connectorActions.connectorMenu.y}
+            actions={connectorActions.connectorMenuActions}
+            onClose={connectorActions.closeConnectorMenu}
+            testId="connector-context-menu"
+          />
+        )}
         {paneContextMenu && (
           <ContextMenu
             x={paneContextMenu.x}
@@ -856,6 +943,7 @@ function App() {
         <div className="workspace__canvas" data-testid="canvas" ref={canvasRef}>
           <CanvasAdapter
             cards={canvasCards}
+            connectors={canvasConnectors}
             viewport={viewport}
             viewportResetToken={boardOpenRevision}
             editingCardId={state.editingCardId}
@@ -880,6 +968,9 @@ function App() {
               onPortalHighlight: setHighlightedPortalId,
               onCardDragMove: crossBoardDragSession.onDragMove,
               onCardDragEnd: handleCardDragEnd,
+              onConnectorCreate: connectorActions.handleConnectorCreate,
+              onConnectorSelectionChanged: connectorActions.handleConnectorSelectionChanged,
+              onConnectorContextMenu: connectorActions.handleConnectorContextMenu,
               // Double-click on the empty canvas creates a note directly, top-left
               // corner at the click point, and opens it for editing (todo.md №19,
               // Milanote-style — corrects №10, which routed this through a menu).

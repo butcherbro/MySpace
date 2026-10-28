@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{CreateChildBoardInput, MoveBoardInput};
-use crate::repositories::immediate_tx;
+use crate::repositories::{connectors, immediate_tx};
 
 use super::super::db;
 
@@ -271,6 +271,7 @@ pub fn move_board(conn: &mut Connection, input: &MoveBoardInput) -> Result<(), W
             actual: portal_revision,
         });
     }
+    connectors::delete_connectors_touching(&tx, &[portal_card_id.as_str()])?;
 
     tx.commit()?;
     Ok(())
