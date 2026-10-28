@@ -304,6 +304,7 @@ function App() {
     portalTitle: c.kind === "board_portal" ? c.target.title : undefined,
     portalCoverAssetId: c.kind === "board_portal" ? c.target.coverAsset?.id ?? undefined : undefined,
     aliasLocal: c.kind === "filesystem_alias" ? c.local : undefined,
+    colorToken: c.kind === "note" ? c.colorToken : undefined,
   })), [state.cards]);
   const cardsById = useMemo(() => new Map(state.cards.map((c) => [c.id, c])), [state.cards]);
 

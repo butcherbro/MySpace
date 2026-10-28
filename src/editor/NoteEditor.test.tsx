@@ -24,13 +24,20 @@ describe("NoteEditor", () => {
     expect(screen.getByText("hello")).toBeInTheDocument();
   });
 
+  it("mounting an editable editor does not report a change", () => {
+    const onChange = vi.fn();
+    render(<NoteEditor document={doc} editable={true} onChange={onChange} />);
+
+    // Открытие заметки не правка: onChange на монтировании сделал бы черновик
+    // грязным и записал тот же документ (на устаревшем виде - ложную Conflict copy).
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("shows a document replaced from outside without reporting it as the user's change", () => {
     const onChange = vi.fn();
     const stored = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "stored" }] }] };
     const { rerender } = render(<NoteEditor document={doc} editable={true} onChange={onChange} />);
 
-    // Mounting may report the initial document once; only the replacement matters here.
-    onChange.mockClear();
     rerender(<NoteEditor document={stored} editable={true} onChange={onChange} />);
 
     expect(screen.getByText("stored")).toBeInTheDocument();

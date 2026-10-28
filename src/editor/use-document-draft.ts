@@ -48,9 +48,22 @@ export function useDocumentDraft(opts: {
     corruptRef.current = corrupt;
   }, [corrupt]);
   const editingRef = useRef(editing);
+  // Номер сессии правки: ответ записи прежней сессии не закрывает новую.
+  const editSessionRef = useRef(0);
   useLayoutEffect(() => {
     editingRef.current = editing;
+    if (editing) editSessionRef.current += 1;
   }, [editing]);
+  // Карточка может размонтироваться в том же коммите, где сбрасывается editingCardId
+  // (cardsRemoved, cardReplaced, snapshotLoaded): эффект выше тогда не сработает, а
+  // поздний ответ finalize закрыл бы правку уже другой карточки. У ImageCard/EmbedCard
+  // `editing` не передаётся, ref остаётся undefined, и их поведение прежнее.
+  useLayoutEffect(
+    () => () => {
+      if (editingRef.current) editingRef.current = false;
+    },
+    [],
+  );
 
   // Черновик, которому передали правку (копия конфликта), начинает её с
   // новейшего текста оригинала, а не с копии, какой она была создана. Текст
@@ -213,6 +226,14 @@ export function useDocumentDraft(opts: {
       // транзакцию смены типа карточки.
       const lineage = lineageRef.current;
       if (savingLineRef.current === lineage) return;
+      const session = editSessionRef.current;
+      // `onSaved` общий для приложения (закрывает правку любой карточки): ответ
+      // приходит позже blur, и за это время правка могла перейти к другой карточке.
+      const closeEditing = () => {
+        // `=== false`, не `!editing`: у ImageCard/EmbedCard ref `undefined`, сессия 0, их поведение прежнее.
+        if (editingRef.current === false || editSessionRef.current !== session) return;
+        onSaved?.();
+      };
       setSaving(true);
       savingLineRef.current = lineage;
       setError(null);
@@ -220,13 +241,13 @@ export function useDocumentDraft(opts: {
         const { conflict, retired } = await send(onFinalize ?? onUpdate, doc);
         if (conflict) {
           settleConflict(conflict);
-          if (conflict.editingMovedTo === null && !dirtyRef.current) onSaved?.();
+          if (conflict.editingMovedTo === null && !dirtyRef.current) closeEditing();
           return;
         }
         if (retired) return;
         dirtyRef.current = false;
         needsFinalizeRef.current = false;
-        onSaved?.();
+        closeEditing();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -303,19 +324,25 @@ export function useDocumentDraft(opts: {
     }
   }, [finalize, onSaved, forwardToCopy, clearDebounce]);
 
-  const handleFinalize = useCallback(() => {
-    clearDebounce();
-    if (corruptRef.current) return Promise.resolve();
-    if (handedOffRef.current) {
-      forwardToCopy();
+  // `force`: чистый черновик всё равно идёт в finalize. Enter на голой ссылке в
+  // открытой, но не изменённой заметке должен дойти до записи, которая превращает
+  // её в карточку-ссылку; blur и барьер черновиков зовут без `force`.
+  const handleFinalize = useCallback(
+    (options?: { force?: boolean }) => {
+      clearDebounce();
+      if (corruptRef.current) return Promise.resolve();
+      if (handedOffRef.current) {
+        forwardToCopy();
+        return Promise.resolve();
+      }
+      if (options?.force || dirtyRef.current || needsFinalizeRef.current) {
+        return finalize(draftRef.current);
+      }
+      onSaved?.();
       return Promise.resolve();
-    }
-    if (dirtyRef.current || needsFinalizeRef.current) {
-      return finalize(draftRef.current);
-    }
-    onSaved?.();
-    return Promise.resolve();
-  }, [finalize, onSaved, forwardToCopy, clearDebounce]);
+    },
+    [finalize, onSaved, forwardToCopy, clearDebounce],
+  );
 
   // A reload of the open board: a dirty draft is saved as by the autosave, and
   // editing goes on.
