@@ -2,6 +2,7 @@ import type { CardDto } from "../services/workspace-gateway";
 import { BoardIdentityThumbnail } from "../boards/BoardIdentityThumbnail";
 import "./unsorted-panel.css";
 import { assetUrl } from "../services/asset-url";
+import { groupDisplayTitle } from "../cards/group/group-title";
 
 interface UnsortedPanelProps {
   cards: CardDto[];
@@ -119,6 +120,11 @@ export function UnsortedPanel({ cards, onPlace, onDragStartCard, onClose }: Unso
             )}
             {card.kind === "note" && (
               <div className="unsorted-panel__note">{card.plainText.trim() || "Note"}</div>
+            )}
+            {card.kind === "group" && (
+              <div className="unsorted-panel__note" data-testid="unsorted-group">
+                {groupDisplayTitle(card.title)}
+              </div>
             )}
             {card.kind === "filesystem_alias" && (
               <div className="unsorted-panel__folder">

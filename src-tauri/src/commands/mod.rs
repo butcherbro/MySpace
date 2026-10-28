@@ -9,6 +9,7 @@ pub mod connectors;
 pub mod device;
 pub mod error_reports;
 pub mod filesystem_aliases;
+pub mod groups;
 pub mod link_metadata;
 pub mod quick_boards;
 pub mod search;

@@ -54,6 +54,24 @@ describe("UnsortedPanel", () => {
     expect(onPlace).toHaveBeenCalledWith("a");
   });
 
+  it("renders a group by its title, or the untitled fallback", () => {
+    const group = (id: string, title: string): CardDto => ({
+      kind: "group",
+      id,
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 640, height: 320 },
+      zIndex: 0,
+      revision: 1,
+      title,
+      colorToken: "default",
+    });
+    render(<UnsortedPanel cards={[group("g1", "Проект"), group("g2", "")]} onPlace={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getAllByTestId("unsorted-group").map((el) => el.textContent)).toEqual([
+      "Проект",
+      "Группа без названия",
+    ]);
+  });
+
   it("renders a recognizable compact folder shortcut identity", () => {
     render(<UnsortedPanel cards={[folder("folder-1")]} onPlace={vi.fn()} onClose={vi.fn()} />);
 

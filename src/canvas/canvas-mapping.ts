@@ -24,6 +24,26 @@ export function cardToNodeLike(card: CanvasCard): NodeLike {
   };
 }
 
+/**
+ * Полоса z групп (ADR-0013): все группы ниже любой другой карточки, что бы ни
+ * говорил их `cards.z_index`.
+ */
+export const GROUP_Z_BAND = -10000;
+/** На сколько поднимается выделенная карточка (как делал React Flow сам). */
+export const SELECTED_Z_LIFT = 1000;
+
+/**
+ * z узла на холсте. Обычная карточка — свой `zIndex`, выделенная — выше на
+ * `SELECTED_Z_LIFT`. Группа — в полосе ниже нуля, тем глубже, чем больше её
+ * площадь (на каждые 10 000 px² — на единицу; рамка 8000×10000 даёт −18 000),
+ * и без подъёма при выделении: вложенная (меньшая) группа всегда над
+ * внешней, а выделенная группа не перекрывает ни карточки, ни внутренние группы.
+ */
+export function nodeZIndex(card: Pick<CanvasCard, "kind" | "zIndex" | "frame">, selected: boolean): number {
+  if (card.kind === "group") return GROUP_Z_BAND - Math.floor((card.frame.width * card.frame.height) / 10000);
+  return card.zIndex + (selected ? SELECTED_Z_LIFT : 0);
+}
+
 /** Converts a renderer-neutral node back into a domain card frame. */
 export function nodeLikeToFrame(node: NodeLike): CanvasFrame {
   return {
@@ -78,7 +98,9 @@ export function canvasNodeInputsEqual(a: CanvasCard, b: CanvasCard): boolean {
     a.targetBoardId === b.targetBoardId &&
     a.portalTitle === b.portalTitle &&
     a.portalCoverAssetId === b.portalCoverAssetId &&
-    a.aliasLocal === b.aliasLocal
+    a.aliasLocal === b.aliasLocal &&
+    a.groupTitle === b.groupTitle &&
+    a.groupColorToken === b.groupColorToken
   );
 }
 

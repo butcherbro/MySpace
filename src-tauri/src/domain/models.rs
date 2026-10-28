@@ -18,17 +18,18 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Card width bounds (formerly `CHECK(width >= 120 AND width <= 1600)`).
+    /// Card width bounds. The old `CHECK` capped width at 1600; a group frame
+    /// (ADR-0013) is routinely wider, so the cap is 8000 for every kind.
     pub const MIN_WIDTH: f64 = 120.0;
-    pub const MAX_WIDTH: f64 = 1600.0;
+    pub const MAX_WIDTH: f64 = 8000.0;
     /// Card height bounds (formerly `CHECK(height >= 48 AND height <= 10000)`).
     pub const MIN_HEIGHT: f64 = 48.0;
     pub const MAX_HEIGHT: f64 = 10000.0;
 
     /// The frame invariants SQLite used to enforce with CHECK constraints on
-    /// `cards` (dropped in migration 0021): width in 120..=1600, height in
-    /// 48..=10000, finite x/y. Called by every repository function that
-    /// writes a whole frame.
+    /// `cards` (dropped in migration 0021), with the width cap raised by
+    /// ADR-0013: width in 120..=8000, height in 48..=10000, finite x/y.
+    /// Called by every repository function that writes a whole frame.
     pub fn validate(&self) -> Result<(), crate::domain::errors::WorkspaceError> {
         use crate::domain::errors::WorkspaceError;
         if !self.x.is_finite() || !self.y.is_finite() {
@@ -253,6 +254,51 @@ pub struct CreateBoardShortcutInput {
     pub target_board_id: String,
 }
 
+/// A group card (ADR-0013): a named, coloured frame drawn under other cards.
+/// Membership is geometric and computed by the frontend; nothing is stored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupCardDto {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    pub revision: i64,
+    /// `''` is a valid, untitled group; the UI renders the fallback label.
+    pub title: String,
+    /// Note palette preset id (`default`, `yellow`, …).
+    pub color_token: String,
+}
+
+/// Input for creating a group card. Idempotent by `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateGroupInput {
+    pub id: String,
+    pub board_id: String,
+    pub frame: Frame,
+    pub z_index: i64,
+    /// Defaults to `''`.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Defaults to `default`.
+    #[serde(default)]
+    pub color_token: Option<String>,
+}
+
+/// Input for renaming / recolouring a group; absent fields are unchanged,
+/// at least one must be present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateGroupInput {
+    pub card_id: String,
+    pub expected_revision: i64,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub color_token: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderEntryDto {
@@ -349,6 +395,7 @@ pub enum CardDto {
     File(FileCardDto),
     #[serde(rename = "board_shortcut")]
     BoardShortcut(BoardShortcutDto),
+    Group(GroupCardDto),
 }
 
 impl CardDto {
@@ -362,6 +409,7 @@ impl CardDto {
             CardDto::FilesystemAlias(a) => &a.id,
             CardDto::File(f) => &f.id,
             CardDto::BoardShortcut(s) => &s.id,
+            CardDto::Group(g) => &g.id,
         }
     }
 }

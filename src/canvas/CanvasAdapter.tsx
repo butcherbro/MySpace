@@ -22,8 +22,16 @@ import "./canvas.css";
 
 import { detectPlatform } from "../app/platform";
 import { CanvasScrollbars } from "./CanvasScrollbars";
-import { cardToNodeLike, frameIntersectionRatio, movedNodeToCard, staleNodeIds } from "./canvas-mapping";
+import {
+  SELECTED_Z_LIFT,
+  cardToNodeLike,
+  frameIntersectionRatio,
+  movedNodeToCard,
+  nodeZIndex,
+  staleNodeIds,
+} from "./canvas-mapping";
 import { connectorsToEdgeLikes } from "./connector-mapping";
+import { groupMembers } from "./group-membership";
 import { ConnectorEdge, type ConnectorEdgeType } from "./ConnectorEdge";
 import type {
   CanvasCard,
@@ -66,7 +74,9 @@ function isSpaceReservedTarget(target: EventTarget | null): boolean {
   return !!target.closest('button, a[href], [role="button"], [role="menuitem"], [role="tab"], [role="option"]');
 }
 
-type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"] };
+// `baseZIndex` — z невыделенного узла (см. `nodeZIndex`); подъём выделенной
+// карточки добавляется при отдаче узлов React Flow.
+type CardNodeData = { content: ReactNode; kind: CanvasCard["kind"]; baseZIndex: number };
 
 /** Top-left of the translate extent: the board never scrolls above/left of its origin. */
 const TRANSLATE_EXTENT_MIN = { x: 0, y: 0 } as const;
@@ -125,8 +135,8 @@ function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode):
     position: like.position,
     width: like.width,
     height: like.height,
-    zIndex: like.zIndex,
-    data: { content: renderCard(card), kind: card.kind },
+    zIndex: nodeZIndex(card, false),
+    data: { content: renderCard(card), kind: card.kind, baseZIndex: nodeZIndex(card, false) },
     // No per-node `draggable`: an explicit `true` here would override the
     // `nodesDraggable={false}` that Space-pan mode sets (React Flow gives the
     // node's own flag precedence), and a draggable node carries `nopan`, so a
@@ -135,6 +145,17 @@ function cardToNode(card: CanvasCard, renderCard: (c: CanvasCard) => ReactNode):
 }
 
 const NO_CONNECTORS: CanvasConnector[] = [];
+
+/**
+ * z узла с учётом выделения. Подъём выделенного узла считаем сами
+ * (`elevateNodesOnSelect={false}`): у React Flow он один на все узлы и поднимал
+ * бы выделенную группу над вложенной. Неизменный узел возвращается как есть.
+ */
+function withSelectionZ(node: Node<CardNodeData>): Node<CardNodeData> {
+  const lift = node.selected && node.data.kind !== "group" ? SELECTED_Z_LIFT : 0;
+  const zIndex = node.data.baseZIndex + lift;
+  return node.zIndex === zIndex ? node : { ...node, zIndex };
+}
 
 /**
  * The single place React Flow is used (ADR-002). It maps domain cards to
@@ -323,6 +344,7 @@ export function CanvasAdapter({
     events.onConnectorSelectionChanged?.({ ids: prunedEdgeSelection });
   }, [prunedEdgeSelection, events]);
 
+  const renderedNodes = useMemo(() => nodes.map(withSelectionZ), [nodes]);
   const nodesRef = useRef(nodes);
   const selectedIdsRef = useRef<Set<string>>(new Set());
   const highlightedPortalRef = useRef<string | null>(null);
@@ -337,6 +359,14 @@ export function CanvasAdapter({
   const windowDragMoveRef = useRef<((e: PointerEvent) => void) | null>(null);
   const windowDragUpRef = useRef<(() => void) | null>(null);
   const draggingCardIdRef = useRef<string | null>(null);
+  // Перетаскивание с группой: члены групп (по геометрии на старте жеста), которых
+  // React Flow сам не двигает, и их стартовые позиции; `anchor` — узел под
+  // указателем, по его смещению двигаются члены.
+  const groupDragRef = useRef<{
+    anchorId: string;
+    anchorStart: { x: number; y: number };
+    members: Map<string, { x: number; y: number }>;
+  } | null>(null);
 
   const cleanupWindowDragListeners = () => {
     if (windowDragMoveRef.current) {
@@ -549,6 +579,8 @@ export function CanvasAdapter({
     // Stop the raw-pointer tracking opened at drag start.
     cleanupWindowDragListeners();
     draggingCardIdRef.current = null;
+    const groupDrag = groupDragRef.current;
+    groupDragRef.current = null;
 
     // Clear any portal highlight.
     if (highlightedPortalRef.current !== null) {
@@ -561,6 +593,7 @@ export function CanvasAdapter({
     // consumed (pinned to Quick Boards / moved to a portal), stop here and do
     // not also persist a plain reposition.
     if (events.onCardDragEnd?.()) {
+      if (groupDrag) restoreGroupMembers(groupDrag.members);
       return;
     }
 
@@ -569,9 +602,10 @@ export function CanvasAdapter({
     if (ids.length === 0) return;
 
     // Drop onto a portal: if the dragged card (or group) lands inside a board
-    // portal, move the whole selection there instead of repositioning.
+    // portal, move the whole selection there instead of repositioning. Жест с
+    // группой в v1 только перемещает по доске (см. handleNodeDragStart).
     const dragged = nodesRef.current.find((n) => n.id === ids[0]);
-    if (dragged) {
+    if (dragged && !groupDrag) {
       const portal = portalAtPoint(dragged, cursorPoint);
       if (portal?.targetBoardId) {
         events.onCardsDroppedOnPortal?.(ids, portal.targetBoardId);
@@ -597,6 +631,19 @@ export function CanvasAdapter({
     });
 
     const valid = moved.filter((m): m is { id: string; frame: CanvasCard["frame"] } => m !== null);
+    // Члены группы едут тем же смещением, что и узел под указателем, — одной
+    // записью вместе с самой группой (один MoveCardsCommand, один шаг undo).
+    const anchor = groupDrag ? nodesRef.current.find((n) => n.id === groupDrag.anchorId) : undefined;
+    if (groupDrag) {
+      const anchorPosition = node?.id === groupDrag.anchorId ? node.position : anchor?.position;
+      const dx = anchorPosition ? anchorPosition.x - groupDrag.anchorStart.x : 0;
+      const dy = anchorPosition ? anchorPosition.y - groupDrag.anchorStart.y : 0;
+      for (const [id, start] of groupDrag.members) {
+        const source = cards.find((c) => c.id === id);
+        if (!source) continue;
+        valid.push({ id, frame: { ...source.frame, x: start.x + dx, y: start.y + dy } });
+      }
+    }
     if (valid.length > 0) {
       events.onCardsMoved?.({ cards: valid });
     }
@@ -616,6 +663,22 @@ export function CanvasAdapter({
   // can highlight it. Only emit on change to avoid redundant renders. Also
   // surface the screen-space pointer so the parent can hit-test breadcrumbs.
   const handleNodeDrag = (event: React.MouseEvent | MouseEvent | TouchEvent, node: Node<CardNodeData>) => {
+    const groupDrag = groupDragRef.current;
+    if (groupDrag) {
+      // Жест с группой: члены следуют за рамкой; порталы, хлебные крошки и
+      // вкладки как цели броска в v1 не участвуют.
+      if (node.id === groupDrag.anchorId) {
+        const dx = node.position.x - groupDrag.anchorStart.x;
+        const dy = node.position.y - groupDrag.anchorStart.y;
+        setNodes((prev) =>
+          prev.map((n) => {
+            const start = groupDrag.members.get(n.id);
+            return start ? { ...n, position: { x: start.x + dx, y: start.y + dy } } : n;
+          }),
+        );
+      }
+      return;
+    }
     // The hover highlight must resolve the same way the eventual drop will
     // (cursor-first, overlap fallback) — otherwise the highlighted portal
     // would lie about where the card is about to land.
@@ -641,6 +704,27 @@ export function CanvasAdapter({
   const handleNodeDragStart = (event: React.MouseEvent | MouseEvent | TouchEvent, node: Node<CardNodeData>) => {
     draggingCardIdRef.current = node.id;
 
+    // Состав групп считается один раз на старте (ADR-0013). Члены, которые уже
+    // в перетаскиваемом наборе, React Flow двигает сам — их не дублируем.
+    const selected = selectedIdsRef.current;
+    const draggedIds = selected.has(node.id) && selected.size > 1 ? [...selected] : [node.id];
+    const dragged = new Set(draggedIds);
+    const members = new Map<string, { x: number; y: number }>();
+    for (const id of draggedIds) {
+      if (cards.find((c) => c.id === id)?.kind !== "group") continue;
+      for (const memberId of groupMembers(id, cards)) {
+        if (dragged.has(memberId) || members.has(memberId)) continue;
+        const memberNode = nodesRef.current.find((n) => n.id === memberId);
+        const position = memberNode?.position ?? cards.find((c) => c.id === memberId)?.frame;
+        if (position) members.set(memberId, { x: position.x, y: position.y });
+      }
+    }
+    const hasGroup = draggedIds.some((id) => cards.find((c) => c.id === id)?.kind === "group");
+    groupDragRef.current = hasGroup ? { anchorId: node.id, anchorStart: { ...node.position }, members } : null;
+    // Перенос группы на другую доску (портал, крошки, вкладка) в v1 не
+    // поддержан: её члены остались бы здесь. Такой жест — только перемещение.
+    if (hasGroup) return;
+
     const report = (e: PointerEvent) => {
       const cardId = draggingCardIdRef.current;
       if (!cardId) return;
@@ -661,6 +745,17 @@ export function CanvasAdapter({
     if ("clientX" in event) {
       events.onCardDragMove?.({ cardId: node.id, clientX: event.clientX, clientY: event.clientY });
     }
+  };
+
+  // Жест не закончился перемещением: члены групп возвращаются на места.
+  const restoreGroupMembers = (members: Map<string, { x: number; y: number }>) => {
+    if (members.size === 0) return;
+    setNodes((prev) =>
+      prev.map((n) => {
+        const start = members.get(n.id);
+        return start ? { ...n, position: start } : n;
+      }),
+    );
   };
 
   const handleNodeDoubleClick = (
@@ -726,7 +821,8 @@ export function CanvasAdapter({
     >
       <ReactFlow
         key={interactionResetRevision}
-        nodes={nodes}
+        nodes={renderedNodes}
+        elevateNodesOnSelect={false}
         nodeTypes={nodeTypes}
         edges={edges}
         edgeTypes={edgeTypes}

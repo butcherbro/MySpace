@@ -194,6 +194,12 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../../migrations/0027_connectors.sql"),
         after: Some(requeue_connector_changes),
     },
+    Migration {
+        version: 28,
+        name: "group_cards",
+        sql: include_str!("../../migrations/0028_group_cards.sql"),
+        after: Some(requeue_group_card_changes),
+    },
 ];
 
 /// Rust step of migration 0027: queues every `connector` journal row this
@@ -211,6 +217,35 @@ pub fn requeue_connector_changes(tx: &Transaction) -> Result<()> {
             (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at, attempts)
          SELECT origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at, 1
          FROM changes WHERE entity_kind = 'connector'
+         ON CONFLICT(origin_device_id, hlc) DO UPDATE SET attempts = attempts + 1",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Rust step of migration 0028: queues every `card` journal row of a card
+/// that is a `group` into `pending_changes`, so the next replay applies it.
+///
+/// Та же причина, что у [`requeue_connector_changes`]: старая сборка не знает
+/// вид `group`, отвергает строку и двигает курсор, так что пир её больше не
+/// пришлёт. Группа узнаётся по любой строке с `state.kind = 'group'`, а в
+/// очередь идут ВСЕ строки этого id: у тумбстоуна (`purge`) нет `state`, и
+/// без него опустошённая группа воскресла бы после реплея `group.create`.
+/// `json_valid` под `CASE` — чтобы одна битая строка журнала не уронила
+/// миграцию (`json_extract` на невалидном JSON — ошибка).
+pub fn requeue_group_card_changes(tx: &Transaction) -> Result<()> {
+    tx.execute(
+        "INSERT INTO pending_changes
+            (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at, attempts)
+         SELECT origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at, 1
+         FROM changes
+         WHERE entity_kind = 'card'
+           AND entity_id IN (
+               SELECT entity_id FROM changes
+               WHERE entity_kind = 'card'
+                 AND CASE WHEN json_valid(payload_json)
+                          THEN json_extract(payload_json, '$.state.kind') END = 'group'
+           )
          ON CONFLICT(origin_device_id, hlc) DO UPDATE SET attempts = attempts + 1",
         [],
     )?;

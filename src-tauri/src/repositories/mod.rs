@@ -6,6 +6,7 @@ pub mod boards;
 pub mod cards;
 pub mod connectors;
 pub mod devices;
+pub mod groups;
 pub mod move_selection;
 pub mod quick_boards;
 pub mod receipts;

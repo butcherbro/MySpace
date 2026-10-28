@@ -467,4 +467,99 @@ describe("MockWorkspaceGateway", () => {
       expect((await gateway.loadBoardSnapshot("home")).connectors.map((c) => c.id)).toEqual(["c1"]);
     });
   });
+
+  describe("groups", () => {
+    const frame = { x: 40, y: 40, width: 2400, height: 600 };
+
+    it("creates a group with defaults, idempotently by id, wider than the old 1600 px limit", async () => {
+      const gateway = new MockWorkspaceGateway();
+      const created = await gateway.createGroup({ id: "g1", boardId: "home", frame, zIndex: 0 });
+      expect(created).toMatchObject({ kind: "group", id: "g1", frame, title: "", colorToken: "default", revision: 1 });
+
+      const again = await gateway.createGroup({ id: "g1", boardId: "home", frame, zIndex: 0, title: "other" });
+      expect(again).toEqual(created);
+      expect((await gateway.loadBoardSnapshot("home")).cards).toEqual([created]);
+    });
+
+    it("refuses an unknown colour, an out-of-range frame and a missing board", async () => {
+      const gateway = new MockWorkspaceGateway();
+      await expect(
+        gateway.createGroup({ id: "g1", boardId: "home", frame, zIndex: 0, colorToken: "neon" }),
+      ).rejects.toMatchObject({ code: "constraint_violation" });
+      await expect(
+        gateway.createGroup({ id: "g2", boardId: "home", frame: { ...frame, width: 8001 }, zIndex: 0 }),
+      ).rejects.toMatchObject({ code: "constraint_violation" });
+      await expect(
+        gateway.createGroup({ id: "g3", boardId: "nowhere", frame, zIndex: 0 }),
+      ).rejects.toMatchObject({ code: "not_found" });
+    });
+
+    it("updates the title and colour with a revision check and returns a receipt", async () => {
+      const gateway = new MockWorkspaceGateway();
+      await gateway.createGroup({ id: "g1", boardId: "home", frame, zIndex: 0 });
+
+      expect(await gateway.updateGroup({ cardId: "g1", expectedRevision: 1, title: "Идеи" })).toEqual({
+        id: "g1",
+        revision: 2,
+      });
+      expect(await gateway.updateGroup({ cardId: "g1", expectedRevision: 2, colorToken: "blue" })).toEqual({
+        id: "g1",
+        revision: 3,
+      });
+      expect(await gateway.readCard("g1")).toMatchObject({ title: "Идеи", colorToken: "blue", revision: 3 });
+
+      await expect(gateway.updateGroup({ cardId: "g1", expectedRevision: 1, title: "x" })).rejects.toMatchObject({
+        code: "stale_revision",
+      });
+      await expect(gateway.updateGroup({ cardId: "missing", expectedRevision: 1, title: "x" })).rejects.toMatchObject({
+        code: "not_found",
+      });
+    });
+
+    it("limits the title to 200 characters (not bytes) on create and update", async () => {
+      const gateway = new MockWorkspaceGateway();
+      const cyrillic200 = "я".repeat(200);
+      await gateway.createGroup({ id: "g1", boardId: "home", frame, zIndex: 0, title: cyrillic200 });
+      await expect(
+        gateway.createGroup({ id: "g2", boardId: "home", frame, zIndex: 0, title: "я".repeat(201) }),
+      ).rejects.toMatchObject({ code: "constraint_violation" });
+      await expect(
+        gateway.updateGroup({ cardId: "g1", expectedRevision: 1, title: "x".repeat(201) }),
+      ).rejects.toMatchObject({ code: "constraint_violation" });
+    });
+
+    it("refuses an empty update before looking the group up", async () => {
+      const gateway = new MockWorkspaceGateway();
+      await expect(gateway.updateGroup({ cardId: "missing", expectedRevision: 1 })).rejects.toMatchObject({
+        code: "constraint_violation",
+      });
+    });
+
+    it("trashes a group as a leaf and lists it in the Trash by its title", async () => {
+      const gateway = new MockWorkspaceGateway();
+      await gateway.createGroup({ id: "g1", boardId: "home", frame, zIndex: 0, title: "Проект" });
+      await gateway.trashSelection({ items: [{ id: "g1", kind: "group" }] });
+
+      expect((await gateway.loadBoardSnapshot("home")).cards).toEqual([]);
+      const trash = await gateway.listTrash();
+      expect(trash.batches[0].items).toMatchObject([{ id: "g1", kind: "group", title: "Проект" }]);
+    });
+
+    it("seeds the ?fixture=groups board: a group «Проект», two notes inside and one outside", async () => {
+      const previous = window.location.href;
+      window.history.replaceState(null, "", "/?fixture=groups");
+      try {
+        const cards = (await new MockWorkspaceGateway().loadBoardSnapshot("home")).cards;
+        const group = cards.find((c) => c.kind === "group");
+        expect(group).toMatchObject({ id: "group-project", title: "Проект" });
+        expect(cards.filter((c) => c.kind === "note").map((c) => c.id)).toEqual([
+          "group-note-a",
+          "group-note-b",
+          "group-note-outside",
+        ]);
+      } finally {
+        window.history.replaceState(null, "", previous);
+      }
+    });
+  });
 });

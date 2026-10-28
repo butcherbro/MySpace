@@ -111,6 +111,44 @@ export interface BoardShortcutDto {
   } | null;
 }
 
+/**
+ * Группа (ADR-0013): именованная цветная рамка под другими карточками. Состав
+ * нигде не хранится — карточка входит в группу, пока её рамка лежит внутри
+ * рамки группы (считает фронт, `canvas/group-membership.ts`).
+ */
+export interface GroupCardDto {
+  kind: "group";
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  revision: number;
+  /** '' допустим: UI показывает «Группа без названия». */
+  title: string;
+  /** Id пресета цвета заметки ('default' | 'yellow' | 'pink' | …). */
+  colorToken: string;
+}
+
+/** Идемпотентно по `id`: повтор возвращает сохранённую карточку. */
+export interface CreateGroupInput {
+  id: string;
+  boardId: string;
+  frame: Frame;
+  zIndex: number;
+  /** По умолчанию ''. */
+  title?: string;
+  /** По умолчанию 'default'. */
+  colorToken?: string;
+}
+
+/** Хотя бы одно из полей `title`/`colorToken`; `stale_revision` при расхождении ревизии. */
+export interface UpdateGroupInput {
+  cardId: string;
+  expectedRevision: number;
+  title?: string;
+  colorToken?: string;
+}
+
 export interface CreateBoardShortcutInput {
   id: string;
   boardId: string;
@@ -275,7 +313,8 @@ export type CardDto =
   | EmbedCardDto
   | FilesystemAliasDto
   | FileCardDto
-  | BoardShortcutDto;
+  | BoardShortcutDto
+  | GroupCardDto;
 
 export interface BoardSnapshot {
   board: BoardSummary;
@@ -486,7 +525,7 @@ export interface UpdateImageCaptionInput {
 
 export interface TrashItemInput {
   id: string;
-  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal" | "file" | "board_shortcut";
+  kind: "note" | "image" | "embed" | "filesystem_alias" | "board_portal" | "file" | "board_shortcut" | "group";
 }
 
 export interface ConvertNoteToEmbedInput {
@@ -517,7 +556,7 @@ export interface TrashSelectionInput {
 /** A single representative top-level item in a Trash batch. */
 export interface TrashEntryDto {
   id: string;
-  kind: "note" | "image" | "embed" | "filesystem_alias" | "board";
+  kind: "note" | "image" | "embed" | "filesystem_alias" | "board" | "group";
   title: string;
   /** Thumbnail source: image/preview/cover asset when one exists. */
   thumbnailAsset: AssetDto | null;
@@ -702,6 +741,10 @@ export interface WorkspaceGateway {
   updateConnector(input: UpdateConnectorInput): Promise<ConnectorDto>;
   /** Мягкое удаление с сохранением ревизии; отсутствующий id — no-op, чтобы цепочки undo/redo не падали с not_found. */
   removeConnector(input: RemoveConnectorInput): Promise<void>;
+  /** Идемпотентно по id; constraint_violation на неизвестный цвет или плохую рамку. */
+  createGroup(input: CreateGroupInput): Promise<GroupCardDto>;
+  /** Меняет название и/или цвет группы; возвращает новую ревизию. */
+  updateGroup(input: UpdateGroupInput): Promise<CardReceipt>;
   /** Lists backup snapshots under `backups/`, newest first. */
   listBackups(): Promise<BackupSummary[]>;
   /**

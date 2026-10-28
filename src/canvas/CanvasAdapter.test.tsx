@@ -10,6 +10,7 @@ const setViewport = vi.fn();
 const setCenter = vi.fn();
 const getZoom = vi.fn(() => 1);
 const reactFlowProps: unknown[] = [];
+const reactFlowNodes: Array<Array<{ id: string; zIndex?: number; position: { x: number; y: number } }>> = [];
 const backgroundProps: Array<{
   variant?: string;
   gap?: number;
@@ -40,7 +41,18 @@ vi.mock("@xyflow/react", async () => {
       <div className={className} data-testid={props["data-testid"]} />
     ),
     SelectionMode: { Partial: "partial" },
-    applyNodeChanges: (_changes: unknown, nodes: unknown) => nodes,
+    // Только выделение: остальные изменения тестам не нужны.
+    applyNodeChanges: (
+      changes: Array<{ type: string; id: string; selected?: boolean }>,
+      nodes: Array<{ id: string; selected?: boolean }>,
+    ) => {
+      const selects = changes.filter((c) => c.type === "select");
+      if (selects.length === 0) return nodes;
+      return nodes.map((n) => {
+        const change = selects.find((c) => c.id === n.id);
+        return change ? { ...n, selected: change.selected } : n;
+      });
+    },
     ReactFlow: ({
       nodes,
       nodeTypes,
@@ -65,6 +77,7 @@ vi.mock("@xyflow/react", async () => {
     }) => {
       useEffect(() => {
         reactFlowProps.push(props);
+        reactFlowNodes.push(nodes as unknown as (typeof reactFlowNodes)[number]);
         onInit?.({
           setViewport,
           screenToFlowPosition: (point) => point,
@@ -651,6 +664,127 @@ describe("CanvasAdapter", () => {
       );
 
       expect(onPortalHighlight).toHaveBeenCalledWith("pA");
+    });
+  });
+
+  describe("groups (ADR-0013)", () => {
+    const group: CanvasCard = {
+      id: "g",
+      boardId: "home",
+      kind: "group",
+      frame: { x: 0, y: 0, width: 400, height: 300 },
+      zIndex: 5,
+      revision: 1,
+    };
+    const inside: CanvasCard = { ...cards[0], id: "in", frame: { x: 20, y: 40, width: 100, height: 60 }, zIndex: 0 };
+    const alsoInside: CanvasCard = { ...cards[0], id: "in2", frame: { x: 200, y: 100, width: 100, height: 60 }, zIndex: 0 };
+    const outside: CanvasCard = { ...cards[0], id: "out", frame: { x: 500, y: 0, width: 100, height: 60 }, zIndex: 0 };
+    const portal: CanvasCard = {
+      id: "p",
+      boardId: "home",
+      kind: "board_portal",
+      frame: { x: 600, y: 400, width: 100, height: 100 },
+      zIndex: 1,
+      revision: 1,
+      targetBoardId: "board-p",
+    };
+
+    type DragProps = {
+      onNodeDragStart?: (event: MouseEvent, node: { id: string; position: { x: number; y: number } }) => void;
+      onNodeDrag?: (event: MouseEvent, node: { id: string; position: { x: number; y: number } }) => void;
+      onNodeDragStop?: (event: MouseEvent, node?: { id: string; position: { x: number; y: number } }) => void;
+      onSelectionChange?: (params: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => void;
+    };
+
+    function renderGroupCanvas(events: Parameters<typeof CanvasAdapter>[0]["events"]) {
+      reactFlowProps.length = 0;
+      reactFlowNodes.length = 0;
+      render(
+        <CanvasAdapter
+          cards={[group, inside, alsoInside, outside, portal]}
+          viewport={{ x: 0, y: 0, zoom: 1 }}
+          viewportResetToken={1}
+          events={events}
+          renderCard={(card) => <span>{card.id}</span>}
+        />,
+      );
+      return () => reactFlowProps[reactFlowProps.length - 1] as DragProps;
+    }
+
+    it("puts group nodes in a z band below every other card and turns React Flow's own lift off", () => {
+      const props = renderGroupCanvas({});
+      const nodes = reactFlowNodes[reactFlowNodes.length - 1];
+      // 400×300 = 120 000 px² → −12.
+      expect(nodes.find((n) => n.id === "g")?.zIndex).toBe(-10012);
+      expect(nodes.find((n) => n.id === "in")?.zIndex).toBe(0);
+      expect((props() as { elevateNodesOnSelect?: boolean }).elevateNodesOnSelect).toBe(false);
+    });
+
+    it("lifts a selected card by 1000 but never a selected group", () => {
+      const props = renderGroupCanvas({});
+      act(() =>
+        (props() as { onNodesChange?: (changes: unknown[]) => void }).onNodesChange?.([
+          { type: "select", id: "g", selected: true },
+          { type: "select", id: "in", selected: true },
+        ]),
+      );
+      const nodes = reactFlowNodes[reactFlowNodes.length - 1];
+      expect(nodes.find((n) => n.id === "g")?.zIndex).toBe(-10012);
+      expect(nodes.find((n) => n.id === "in")?.zIndex).toBe(1000);
+      expect(nodes.find((n) => n.id === "out")?.zIndex).toBe(0);
+    });
+
+    it("moves the cards inside with the frame and persists them in one move, outside cards untouched", () => {
+      const onCardsMoved = vi.fn();
+      const onCardDragMove = vi.fn();
+      const onCardsDroppedOnPortal = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved, onCardDragMove, onCardsDroppedOnPortal });
+
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "g", position: { x: 0, y: 0 } }));
+      act(() =>
+        props().onNodeDrag?.({ clientX: 650, clientY: 450 } as unknown as MouseEvent, { id: "g", position: { x: 120, y: 80 } }),
+      );
+
+      // Во время жеста члены уже стоят со смещением рамки.
+      const live = reactFlowNodes[reactFlowNodes.length - 1];
+      expect(live.find((n) => n.id === "in")?.position).toEqual({ x: 140, y: 120 });
+      expect(live.find((n) => n.id === "out")?.position).toEqual({ x: 500, y: 0 });
+
+      // Отпущено над порталом: жест с группой — только перемещение по доске.
+      act(() =>
+        props().onNodeDragStop?.({ clientX: 650, clientY: 450 } as unknown as MouseEvent, { id: "g", position: { x: 120, y: 80 } }),
+      );
+
+      expect(onCardsDroppedOnPortal).not.toHaveBeenCalled();
+      expect(onCardDragMove).not.toHaveBeenCalled();
+      expect(onCardsMoved).toHaveBeenCalledTimes(1);
+      const moved = onCardsMoved.mock.calls[0][0] as { cards: Array<{ id: string; frame: CanvasCard["frame"] }> };
+      expect(moved.cards.map((c) => c.id)).toEqual(["g", "in", "in2"]);
+      expect(moved.cards.find((c) => c.id === "in")?.frame).toEqual({ x: 140, y: 120, width: 100, height: 60 });
+      expect(moved.cards.find((c) => c.id === "in2")?.frame).toEqual({ x: 320, y: 180, width: 100, height: 60 });
+    });
+
+    it("does not list a member twice when it is also selected", () => {
+      const onCardsMoved = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved });
+
+      act(() => props().onSelectionChange?.({ nodes: [{ id: "g" }, { id: "in" }], edges: [] }));
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "g", position: { x: 0, y: 0 } }));
+      act(() => props().onNodeDragStop?.(new MouseEvent("pointerup"), { id: "g", position: { x: 10, y: 10 } }));
+
+      const moved = onCardsMoved.mock.calls[0][0] as { cards: Array<{ id: string }> };
+      expect(moved.cards.map((c) => c.id).sort()).toEqual(["g", "in", "in2"]);
+    });
+
+    it("a plain card drag moves nothing else", () => {
+      const onCardsMoved = vi.fn();
+      const props = renderGroupCanvas({ onCardsMoved });
+
+      act(() => props().onNodeDragStart?.(new MouseEvent("pointerdown"), { id: "in", position: { x: 20, y: 40 } }));
+      act(() => props().onNodeDragStop?.(new MouseEvent("pointerup"), { id: "in", position: { x: 600, y: 40 } }));
+
+      const moved = onCardsMoved.mock.calls[0][0] as { cards: Array<{ id: string }> };
+      expect(moved.cards.map((c) => c.id)).toEqual(["in"]);
     });
   });
 

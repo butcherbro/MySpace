@@ -486,4 +486,34 @@ describe("TauriWorkspaceGateway", () => {
     await gw.removeConnector({ connectorId: "c1" });
     expect(invokeMock).toHaveBeenCalledWith("remove_connector", { connectorId: "c1" });
   });
+
+  it("calls create_group with a wrapped input payload and returns the group card", async () => {
+    const dto = {
+      kind: "group",
+      id: "g1",
+      boardId: "home",
+      frame: { x: 0, y: 0, width: 400, height: 300 },
+      zIndex: 0,
+      revision: 1,
+      createdAt: 1,
+      updatedAt: 1,
+      title: "",
+      colorToken: "default",
+    };
+    invokeMock.mockResolvedValue(dto);
+    const gw = new TauriWorkspaceGateway();
+    const input = { id: "g1", boardId: "home", frame: dto.frame, zIndex: 0 };
+    const result = await gw.createGroup(input);
+    expect(invokeMock).toHaveBeenCalledWith("create_group", { input });
+    expect(result).toEqual(dto);
+  });
+
+  it("calls update_group with a wrapped input payload and returns the receipt", async () => {
+    invokeMock.mockResolvedValue({ id: "g1", revision: 3 });
+    const gw = new TauriWorkspaceGateway();
+    const input = { cardId: "g1", expectedRevision: 2, title: "Идеи" };
+    const result = await gw.updateGroup(input);
+    expect(invokeMock).toHaveBeenCalledWith("update_group", { input });
+    expect(result).toEqual({ id: "g1", revision: 3 });
+  });
 });

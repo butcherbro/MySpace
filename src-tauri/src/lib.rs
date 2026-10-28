@@ -294,6 +294,8 @@ pub fn run() {
             commands::connectors::create_connector,
             commands::connectors::update_connector,
             commands::connectors::remove_connector,
+            commands::groups::create_group,
+            commands::groups::update_group,
             commands::sync::sync_export_changes,
             commands::sync::sync_apply_changes,
             commands::sync::sync_status,

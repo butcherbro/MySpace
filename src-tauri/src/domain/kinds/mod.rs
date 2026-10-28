@@ -15,11 +15,12 @@ pub mod board_shortcut;
 pub mod embed;
 pub mod file;
 pub mod filesystem_alias;
+pub mod group;
 pub mod image;
 pub mod note;
 
 /// The registry, in [`CardKind::ALL`] order (checked by a test).
-static REGISTRY: [&dyn CardKindHandler; 7] = [
+static REGISTRY: [&dyn CardKindHandler; 8] = [
     &note::NoteHandler,
     &board_portal::BoardPortalHandler,
     &image::ImageHandler,
@@ -27,6 +28,7 @@ static REGISTRY: [&dyn CardKindHandler; 7] = [
     &filesystem_alias::FilesystemAliasHandler,
     &file::FileHandler,
     &board_shortcut::BoardShortcutHandler,
+    &group::GroupHandler,
 ];
 
 /// Every registered handler, in [`CardKind::ALL`] order.

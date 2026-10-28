@@ -41,6 +41,7 @@ pub const DETAIL_TABLES: &[&str] = &[
     "filesystem_aliases",
     "file_cards",
     "board_shortcut_cards",
+    "group_cards",
 ];
 
 /// Pseudo-register recorded by a hard delete.

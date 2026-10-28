@@ -17,6 +17,9 @@ import type {
   CreateBoardShortcutInput,
   CreateChildBoardInput,
   CreateConnectorInput,
+  CreateGroupInput,
+  GroupCardDto,
+  UpdateGroupInput,
   CreateFileCardInput,
   CreateFolderAliasInput,
   CreateImageCardInput,
@@ -71,6 +74,7 @@ import { denseBoardSnapshot } from "../test/dense-board-fixture";
 import { documentToPlainText, plainTextToDocument } from "../editor/document-codec";
 import { fileNameFromPath } from "./platform-path";
 import { NOTE_COLOR_OPTIONS } from "../cards/note/note-color";
+import { GROUP_TITLE_MAX_CHARS } from "../cards/group/group-title";
 
 /**
  * The rejection the Tauri gateway passes on for Rust's
@@ -114,8 +118,15 @@ function connectorDto(stored: StoredConnector): ConnectorDto {
 }
 
 function frameBoundsError(frame: { width: number; height: number }): Error | null {
-  if (!(frame.width >= 120 && frame.width <= 1600)) return new Error("card width must be between 120 and 1600");
+  if (!(frame.width >= 120 && frame.width <= 8000)) return new Error("card width must be between 120 and 8000");
   if (!(frame.height >= 48 && frame.height <= 10000)) return new Error("card height must be between 48 and 10000");
+  return null;
+}
+
+function groupTitleError(title: string | undefined) {
+  if (title !== undefined && [...title].length > GROUP_TITLE_MAX_CHARS) {
+    return constraintViolation(`group title is longer than ${GROUP_TITLE_MAX_CHARS} characters`);
+  }
   return null;
 }
 
@@ -178,6 +189,9 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   /** Seeded once by the `?fixture=foreign-shortcut` fixture (ADR-0012). */
   private foreignShortcutFixtureSeeded = false;
+
+  /** Засевается один раз фикстурой `?fixture=groups`. */
+  private groupsFixtureSeeded = false;
 
   /** This (mock) installation's identity (ADR-0012). */
   private device: DeviceIdentity = { deviceId: MOCK_DEVICE_ID, deviceName: "This Mac" };
@@ -362,6 +376,12 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         deletedAt: null,
         trashBatchId: null,
       });
+    }
+    // Тестовая фикстура групп: группа «Проект» с двумя заметками внутри и одна
+    // заметка снаружи. Один раз, чтобы перемещения переживали перезагрузку.
+    if (boardId === "home" && !this.groupsFixtureSeeded && fixtureParam() === "groups") {
+      this.groupsFixtureSeeded = true;
+      this.snapshot.cards = groupsFixtureCards();
     }
     // Test-only dense fixture activated by a query parameter.
     if (
@@ -938,6 +958,61 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     };
     this.snapshot.cards.push(card);
     return Promise.resolve(structuredClone(card));
+  }
+
+  createGroup(input: CreateGroupInput): Promise<GroupCardDto> {
+    // Как бэкенд: повтор с тем же id возвращает сохранённую карточку.
+    const existing = this.snapshot.cards.find((c) => c.id === input.id);
+    if (existing) {
+      if (existing.kind !== "group") return Promise.reject(constraintViolation(`card ${input.id} is not a group`));
+      return Promise.resolve(structuredClone(existing));
+    }
+    if (!this.boards.has(input.boardId)) {
+      return Promise.reject({ code: "not_found", message: `board ${input.boardId}` });
+    }
+    const colorToken = input.colorToken ?? "default";
+    if (!NOTE_COLOR_OPTIONS.some((o) => o.id === colorToken)) {
+      return Promise.reject(constraintViolation(`unknown group color: ${colorToken}`));
+    }
+    const titleInvalid = groupTitleError(input.title);
+    if (titleInvalid) return Promise.reject(titleInvalid);
+    const invalid = frameBoundsError(input.frame);
+    if (invalid) return Promise.reject(constraintViolation(invalid.message));
+    const card: GroupCardDto = {
+      kind: "group",
+      id: input.id,
+      boardId: input.boardId,
+      frame: { ...input.frame },
+      zIndex: input.zIndex,
+      revision: 1,
+      title: input.title ?? "",
+      colorToken,
+    };
+    this.snapshot.cards.push(card);
+    return Promise.resolve(structuredClone(card));
+  }
+
+  updateGroup(input: UpdateGroupInput): Promise<CardReceipt> {
+    // Как бэкенд: сначала проверка самого запроса, потом поиск карточки.
+    if (input.title === undefined && input.colorToken === undefined) {
+      return Promise.reject(constraintViolation("update_group needs a title or a color"));
+    }
+    const titleInvalid = groupTitleError(input.title);
+    if (titleInvalid) return Promise.reject(titleInvalid);
+    if (input.colorToken !== undefined && !NOTE_COLOR_OPTIONS.some((o) => o.id === input.colorToken)) {
+      return Promise.reject(constraintViolation(`unknown group color: ${input.colorToken}`));
+    }
+    const card = this.snapshot.cards.find(
+      (c): c is GroupCardDto => c.kind === "group" && c.id === input.cardId,
+    );
+    if (!card) return Promise.reject({ code: "not_found", message: `group ${input.cardId}` });
+    if (card.revision !== input.expectedRevision) {
+      return Promise.reject(staleRevision(input.expectedRevision, card.revision));
+    }
+    if (input.title !== undefined) card.title = input.title;
+    if (input.colorToken !== undefined) card.colorToken = input.colorToken;
+    card.revision += 1;
+    return Promise.resolve({ id: card.id, revision: card.revision });
   }
 
   createFolderAlias(input: CreateFolderAliasInput): Promise<FilesystemAliasDto> {
@@ -2079,6 +2154,37 @@ function connectorsFixtureCards(): CardDto[] {
   return [note("connector-note-a", 80, 120, "Note A"), note("connector-note-b", 560, 200, "Note B")];
 }
 
+/** Доска `?fixture=groups`: группа «Проект», две заметки в ней и одна снаружи. */
+function groupsFixtureCards(): CardDto[] {
+  const note = (id: string, x: number, y: number, text: string): CardDto => ({
+    kind: "note",
+    id,
+    boardId: "home",
+    frame: { x, y, width: 240, height: 120 },
+    zIndex: 1,
+    revision: 1,
+    documentJson: plainTextToDocument(text),
+    plainText: text,
+    colorToken: "default",
+  });
+  const group: GroupCardDto = {
+    kind: "group",
+    id: "group-project",
+    boardId: "home",
+    frame: { x: 60, y: 80, width: 640, height: 320 },
+    zIndex: 0,
+    revision: 1,
+    title: "Проект",
+    colorToken: "pink",
+  };
+  return [
+    group,
+    note("group-note-a", 100, 150, "Inside A"),
+    note("group-note-b", 420, 200, "Inside B"),
+    note("group-note-outside", 820, 160, "Outside"),
+  ];
+}
+
 /** Cards of the `?fixture=corrupt-note` board (P1.7). */
 function corruptNoteFixtureCards(): CardDto[] {
   const note = (id: string, x: number, text: string, corrupt: boolean): CardDto => ({
@@ -2110,6 +2216,8 @@ function cardTitle(card: CardDto): string {
       return card.displayName;
     case "file":
       return card.asset.fileName;
+    case "group":
+      return card.title;
     default:
       return "";
   }

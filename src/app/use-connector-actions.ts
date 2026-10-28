@@ -15,8 +15,8 @@ import type { BoardSummary, ConnectorDto } from "../services/workspace-gateway";
 import type { BoardViewAction } from "../state/current-board-store";
 import type { CardWrites } from "../state/card-writes";
 
-/** Подписи цветов связи в меню (id пресетов — те же, что у заметок). */
-const CONNECTOR_COLOR_LABELS: Record<string, string> = {
+/** Подписи цветов связи и группы в меню (id пресетов — те же, что у заметок). */
+export const CONNECTOR_COLOR_LABELS: Record<string, string> = {
   default: "Default",
   yellow: "Yellow",
   pink: "Pink",

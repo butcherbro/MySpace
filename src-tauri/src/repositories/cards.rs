@@ -71,7 +71,7 @@ fn stored_revision(tx: &Connection, id: &str) -> Result<i64, WorkspaceError> {
 }
 
 /// Reads the stored revision and wraps it in a [`CardReceipt`].
-fn card_receipt(tx: &Connection, id: &str) -> Result<CardReceipt, WorkspaceError> {
+pub(super) fn card_receipt(tx: &Connection, id: &str) -> Result<CardReceipt, WorkspaceError> {
     Ok(CardReceipt {
         id: id.to_string(),
         revision: stored_revision(tx, id)?,

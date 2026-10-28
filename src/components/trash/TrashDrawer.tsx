@@ -2,6 +2,7 @@ import type { TrashSummaryDto } from "../../services/workspace-gateway";
 import { BoardIdentityThumbnail } from "../../boards/BoardIdentityThumbnail";
 import "./trash-drawer.css";
 import { assetUrl } from "../../services/asset-url";
+import { groupDisplayTitle } from "../../cards/group/group-title";
 
 interface TrashDrawerProps {
   summary: TrashSummaryDto | null;
@@ -122,7 +123,7 @@ export function TrashDrawer({
                           )}
                         </span>
                         <span className="trash-drawer__item-title">
-                          {item.title || "(no title)"}
+                          {item.kind === "group" ? groupDisplayTitle(item.title) : item.title || "(no title)"}
                         </span>
                       </li>
                     ))}

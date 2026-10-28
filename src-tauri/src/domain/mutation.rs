@@ -38,14 +38,14 @@ use crate::domain::errors::WorkspaceError;
 use crate::domain::models::{
     AddQuickBoardInput, AssetDto, CardDto, CardReceipt, CardsReceipt, ConnectorDto,
     ConvertNoteToEmbedInput, CreateBoardShortcutInput, CreateChildBoardInput, CreateConnectorInput,
-    CreateFileCardInput, CreateFilesystemAliasInput, CreateImageCardInput, CreateItemBatchInput,
-    CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput, DuplicateBoardInput,
-    DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult, MoveBoardInput, MoveCardToBoardInput,
-    MoveCardsInput, MoveCardsToUnsortedInput, MoveSelectionToBoardInput,
+    CreateFileCardInput, CreateFilesystemAliasInput, CreateGroupInput, CreateImageCardInput,
+    CreateItemBatchInput, CreateLinkBatchInput, CreateLinkBatchResult, CreateNoteInput,
+    DuplicateBoardInput, DuplicateBoardReceipt, EmbedCardDto, EmptyTrashResult, MoveBoardInput,
+    MoveCardToBoardInput, MoveCardsInput, MoveCardsToUnsortedInput, MoveSelectionToBoardInput,
     MoveSelectionToBoardReceipt, PlaceUnsortedCardInput, ReorderQuickBoardsInput,
     SetNoteColorInput, TextReceipt, TrashSelectionInput, UpdateCardFrameInput,
-    UpdateConnectorInput, UpdateEmbedDescriptionInput, UpdateImageCaptionInput, UpdateNoteInput,
-    UpdateViewportInput, ViewportReceipt,
+    UpdateConnectorInput, UpdateEmbedDescriptionInput, UpdateGroupInput, UpdateImageCaptionInput,
+    UpdateNoteInput, UpdateViewportInput, ViewportReceipt,
 };
 use crate::domain::{board_service, duplicate_board, link_metadata, move_selection, trash_service};
 use crate::repositories::devices;
@@ -174,6 +174,8 @@ pub const OP_NAMES: &[&str] = &[
     "connector.create",
     "connector.update",
     "connector.remove",
+    "group.create",
+    "group.update",
 ];
 
 /// One write, as data. See the module docs.
@@ -241,6 +243,10 @@ pub enum Mutation {
     RemoveConnector {
         connector_id: String,
     },
+
+    // ---- groups -------------------------------------------------------------
+    CreateGroup(CreateGroupInput),
+    UpdateGroup(UpdateGroupInput),
 
     // ---- assets and filesystem cards -------------------------------------
     /// Records an asset whose file was already staged by the caller. On error
@@ -514,6 +520,8 @@ impl Mutation {
             Self::CreateConnector(_) => "connector.create",
             Self::UpdateConnector(_) => "connector.update",
             Self::RemoveConnector { .. } => "connector.remove",
+            Self::CreateGroup(_) => "group.create",
+            Self::UpdateGroup(_) => "group.update",
             Self::InsertAsset(_) => "asset.insert",
             Self::CreateFilesystemAlias(_) => "card.create_filesystem_alias",
             Self::RefreshFilesystemAliasLocator { .. } => "card.refresh_alias_locator",
@@ -577,6 +585,8 @@ impl Mutation {
             Self::CreateConnector(i) => (K::Connector, &i.id),
             Self::UpdateConnector(i) => (K::Connector, &i.connector_id),
             Self::RemoveConnector { connector_id } => (K::Connector, connector_id),
+            Self::CreateGroup(i) => (K::Card, &i.id),
+            Self::UpdateGroup(i) => (K::Card, &i.card_id),
             Self::InsertAsset(asset) => (K::Asset, &asset.id),
             Self::CreateFilesystemAlias(i) => (K::Card, &i.id),
             Self::RefreshFilesystemAliasLocator { card_id, .. } => (K::Card, card_id),
@@ -687,6 +697,8 @@ impl Mutation {
             | Self::CreateConnector(_)
             | Self::UpdateConnector(_)
             | Self::RemoveConnector { .. }
+            | Self::CreateGroup(_)
+            | Self::UpdateGroup(_)
             | Self::InsertAsset(_)
             | Self::CreateFilesystemAlias(_)
             | Self::RefreshFilesystemAliasLocator { .. }
@@ -794,6 +806,8 @@ impl Mutation {
             Self::RemoveConnector { connector_id } => {
                 repo::remove_connector(conn, connector_id).map(|_| Out::Unit)
             }
+            Self::CreateGroup(input) => repo::create_group(conn, input).map(Out::Card),
+            Self::UpdateGroup(input) => repo::update_group(conn, input).map(Out::CardReceipt),
 
             Self::InsertAsset(asset) => {
                 asset_service::insert_asset_row(conn, asset).map(|_| Out::Unit)
@@ -965,7 +979,9 @@ sync.compact_journal
 maintenance.vacuum
 connector.create
 connector.update
-connector.remove"
+connector.remove
+group.create
+group.update"
         );
     }
 

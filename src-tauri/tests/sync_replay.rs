@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use myspace_lib::app::{Workspace, WorkspacePaths};
 use myspace_lib::domain::models::{
     AssetDto, CardDto, CreateBoardShortcutInput, CreateConnectorInput, CreateFilesystemAliasInput,
-    CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame, LinkBatchItem,
-    UpdateCardFrameInput, UpdateConnectorInput, UpdateNoteInput,
+    CreateGroupInput, CreateImageCardInput, CreateLinkBatchInput, CreateNoteInput, Frame,
+    LinkBatchItem, UpdateCardFrameInput, UpdateConnectorInput, UpdateNoteInput,
 };
 use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::domain::plain_text::plain_text_to_document;
@@ -271,6 +271,20 @@ fn populate(a: &Replica) -> Fixture {
         z_index: 4,
         target_board_id: child.clone(),
     }));
+    // Группа шире старого предела 1600: проверяет и новый MAX_WIDTH на реплике.
+    a.apply(Mutation::CreateGroup(CreateGroupInput {
+        id: new_id(),
+        board_id: board.clone(),
+        frame: Frame {
+            x: 0.0,
+            y: 400.0,
+            width: 2400.0,
+            height: 900.0,
+        },
+        z_index: 0,
+        title: Some("Sources".into()),
+        color_token: Some("green".into()),
+    }));
     let connector = new_id();
     a.apply(Mutation::CreateConnector(CreateConnectorInput {
         id: connector.clone(),
@@ -339,6 +353,18 @@ fn a_board_with_every_kind_replicates_and_shortcuts_are_foreign() {
         b.board(&b.home()),
         a.board(&a.home()),
         "portal + shortcut on Home"
+    );
+    let groups: Vec<Value> = b.board(&fx.board)["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "group")
+        .cloned()
+        .collect();
+    assert_eq!(groups.len(), 1, "the group replicated");
+    assert_eq!(
+        (&groups[0]["title"], &groups[0]["colorToken"]),
+        (&Value::from("Sources"), &Value::from("green"))
     );
 
     // The folder shortcut is board content everywhere but opens only on A.
@@ -1088,4 +1114,75 @@ fn queued_connector_rows_apply_at_startup_without_a_peer_page() {
             .is_none(),
         "nothing left to retry"
     );
+}
+
+/// Старая сборка сохранила в `changes` и отвергла строки группы, включая
+/// тумбстоун её стирания (у него нет `state.kind`). После шага миграции 0028
+/// в очереди все строки группы, и повтор при старте не воскрешает её.
+#[test]
+fn a_purged_group_rejected_by_an_old_build_stays_purged_after_the_upgrade() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let group = new_id();
+    a.apply(Mutation::CreateGroup(CreateGroupInput {
+        id: group.clone(),
+        board_id: a.home(),
+        frame: frame(0.0),
+        z_index: 0,
+        title: Some("Doomed".into()),
+        color_token: None,
+    }));
+    a.apply(Mutation::TrashNote {
+        card_id: group.clone(),
+    });
+    a.apply(Mutation::EmptyTrash {
+        confirmation: "EMPTY".into(),
+    });
+    let rows: Vec<ChangeRow> = a
+        .export_for(&b)
+        .into_iter()
+        .filter(|r| r.entity_id == group)
+        .collect();
+    assert!(rows.iter().any(|r| r.op == "group.create"), "{rows:?}");
+    assert!(rows.iter().any(|r| r.op == "purge"), "{rows:?}");
+
+    // Как старая сборка: строки лежат в `changes` (курсор сдвинут), но не применены.
+    let mut conn = rusqlite::Connection::open(b.ws.paths().db_path()).unwrap();
+    for r in &rows {
+        conn.execute(
+            "INSERT INTO changes (origin_device_id, hlc, entity_kind, entity_id, op, payload_json, received_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+            rusqlite::params![r.origin_device_id, r.hlc, r.entity_kind, r.entity_id, r.op, r.payload_json],
+        )
+        .unwrap();
+    }
+    let tx = conn.transaction().unwrap();
+    myspace_lib::db::migrations::requeue_group_card_changes(&tx).unwrap();
+    tx.commit().unwrap();
+    let queued: Vec<String> = conn
+        .prepare("SELECT op FROM pending_changes WHERE entity_id = ?1 ORDER BY hlc")
+        .unwrap()
+        .query_map([&group], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        queued.len(),
+        rows.len(),
+        "every row of the group: {queued:?}"
+    );
+    assert_eq!(queued.last().map(String::as_str), Some("purge"));
+    drop(conn);
+
+    let report = myspace_lib::sync::retry_pending_blocking(&b.ws)
+        .unwrap()
+        .expect("there were parked rows");
+    assert_eq!(report.pending, 0, "{report:?}");
+    let cards: i64 = b
+        .scalar("SELECT COUNT(*) FROM cards WHERE id = ?1", &group)
+        .unwrap();
+    assert_eq!(cards, 0, "the purged group did not come back");
+    let purged: i64 = b
+        .scalar("SELECT COUNT(*) FROM purged WHERE entity_id = ?1", &group)
+        .unwrap();
+    assert_eq!(purged, 1);
 }

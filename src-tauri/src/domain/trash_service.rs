@@ -522,7 +522,8 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     fpa.file_path AS file_preview_file_path,
                     fpa.sha256 AS file_preview_sha256,
                     fcard.preview_asset_id AS file_preview_asset_id,
-                    shortcut_board.title AS shortcut_target_title
+                    shortcut_board.title AS shortcut_target_title,
+                    gc.title AS group_title
              FROM cards c
              LEFT JOIN note_cards n ON n.card_id = c.id
              LEFT JOIN image_cards i ON i.card_id = c.id
@@ -536,6 +537,7 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
              LEFT JOIN assets fpa ON fpa.id = fcard.preview_asset_id
              LEFT JOIN board_shortcut_cards bsc ON bsc.card_id = c.id
              LEFT JOIN boards shortcut_board ON shortcut_board.id = bsc.target_board_id
+             LEFT JOIN group_cards gc ON gc.card_id = c.id
              WHERE c.deleted_at IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -569,6 +571,10 @@ pub fn list_trash(conn: &Connection) -> Result<TrashSummaryDto, WorkspaceError> 
                     // empty when the target row is itself gone (broken shortcut).
                     "board_shortcut" => row
                         .get::<_, Option<String>>("shortcut_target_title")?
+                        .unwrap_or_default(),
+                    // Пустое имя группы остаётся `''`: подпись-заглушку рисует фронт.
+                    "group" => row
+                        .get::<_, Option<String>>("group_title")?
                         .unwrap_or_default(),
                     _ => String::new(),
                 };

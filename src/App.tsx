@@ -16,6 +16,8 @@ import { useCardEdits } from "./app/use-card-edits";
 import { useCardCreation } from "./app/use-card-creation";
 import { useContextActions } from "./app/use-context-actions";
 import { useConnectorActions } from "./app/use-connector-actions";
+import { useGroupActions } from "./app/use-group-actions";
+import { useGroupEdits } from "./app/use-group-edits";
 import { useCardDrop } from "./app/use-card-drop";
 import { useBoardLoading } from "./app/use-board-loading";
 import { useBoardRefresh } from "./app/use-board-refresh";
@@ -92,7 +94,13 @@ function App() {
 
   // The contextual rail shows note tools when exactly one Note is active:
   // either it is being edited, or it is the single selected card.
-  const activeNoteId = state.editingCardId
+  // Переименование группы тоже держит `editingCardId`, но инструменты заметки
+  // для него не нужны.
+  const editingNoteId =
+    state.editingCardId !== null && state.cards.find((c) => c.id === state.editingCardId)?.kind === "group"
+      ? null
+      : state.editingCardId;
+  const activeNoteId = editingNoteId
     ?? (state.selection.length === 1 &&
         state.cards.find((c) => c.id === state.selection[0])?.kind === "note"
       ? state.selection[0]
@@ -291,6 +299,16 @@ function App() {
     recordErrorReport: recordReport,
   });
 
+  const { handleResizeGroup } = useGroupEdits({
+    gateway,
+    dispatch,
+    cardWrites,
+    queueRef,
+    cardsRef,
+    dispatcher,
+    idGenerator,
+  });
+
   // Build the canvas projection from all cards (notes + portals). Memoised on
   // `state.cards` (P1.8): the canvas diffs this array per card, and an App
   // re-render that didn't touch the cards must hand it the same array.
@@ -305,6 +323,8 @@ function App() {
     portalTitle: c.kind === "board_portal" ? c.target.title : undefined,
     portalCoverAssetId: c.kind === "board_portal" ? c.target.coverAsset?.id ?? undefined : undefined,
     aliasLocal: c.kind === "filesystem_alias" ? c.local : undefined,
+    groupTitle: c.kind === "group" ? c.title : undefined,
+    groupColorToken: c.kind === "group" ? c.colorToken : undefined,
   })), [state.cards]);
   const cardsById = useMemo(() => new Map(state.cards.map((c) => [c.id, c])), [state.cards]);
   const canvasConnectors: CanvasConnector[] = useMemo(() => state.connectors.map((c) => ({
@@ -351,6 +371,18 @@ function App() {
     idGenerator,
     dispatch,
     cardWrites,
+  });
+  const groupActions = useGroupActions({
+    board,
+    cards: state.cards,
+    selection: state.selection,
+    cardsRef,
+    queueRef,
+    dispatcher,
+    idGenerator,
+    dispatch,
+    cardWrites,
+    refreshTrash,
   });
   const connectorDeleteKey = connectorActions.handleDeleteKey;
   // Delete/Backspace: сначала выделенные связи, потом выделенные карточки в
@@ -554,6 +586,8 @@ function App() {
     handleWorkspaceRedo,
     handleDeleteSelection: handleDeleteKey,
     handleCopySelection,
+    handleGroupSelection: groupActions.groupSelection,
+    handleUngroupSelection: groupActions.ungroupSelection,
     trashOpen,
     closeTrashDrawer,
   });
@@ -584,6 +618,9 @@ function App() {
     onOpenFileCard: openFileCard,
     onRevealFileCard: revealFileCard,
     onResizeFileCard: handleResizeNote,
+    onResizeGroup: handleResizeGroup,
+    onStartRenameGroup: groupActions.startRename,
+    onRenameGroup: groupActions.rename,
     onNoteCommands: noteFormatting.handleNoteCommands,
     onNoteBoldStateChange: noteFormatting.handleNoteBoldStateChange,
     onNoteItalicStateChange: noteFormatting.handleNoteItalicStateChange,
@@ -679,6 +716,19 @@ function App() {
             const isFolderAlias = card?.kind === "filesystem_alias";
             const isFileCard = card?.kind === "file";
             const isLinkCard = card?.kind === "embed";
+            if (card?.kind === "group") {
+              return (
+                <ContextMenu
+                  x={contextMenu.x}
+                  y={contextMenu.y}
+                  actions={[
+                    ...groupActions.groupMenuActions(card),
+                    { id: "delete", label: "Delete", onSelect: handleContextDelete },
+                  ]}
+                  onClose={() => setContextMenu(null)}
+                />
+              );
+            }
             const actions: ContextMenuAction[] = [
               { id: "copy-link", label: "Copy MySpace Link", onSelect: () => void handleCopyLink() },
             ];
@@ -736,6 +786,9 @@ function App() {
                 label: "Create Shortcut",
                 onSelect: () => handleCreateShortcut(card as BoardShortcutDto),
               });
+            }
+            if (state.selection.length > 0) {
+              actions.push({ id: "group", label: "Group", onSelect: () => void groupActions.groupSelection() });
             }
             actions.push({ id: "delete", label: "Delete", onSelect: handleContextDelete });
             return (

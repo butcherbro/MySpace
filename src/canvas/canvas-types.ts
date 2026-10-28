@@ -42,6 +42,10 @@ export interface CanvasCard {
    * A re-render key: pointing a shortcut at a local folder bumps no revision.
    */
   aliasLocal?: boolean;
+  /** Для групп: название (ключ перерисовки). */
+  groupTitle?: string;
+  /** Для групп: id цветового пресета (ключ перерисовки). */
+  groupColorToken?: string;
 }
 
 /** A point in board-space coordinates. */

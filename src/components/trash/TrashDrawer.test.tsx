@@ -69,6 +69,38 @@ describe("TrashDrawer", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
   });
 
+  it("renders a trashed group by its title, or the untitled fallback", () => {
+    const groups: TrashSummaryDto = {
+      batches: [
+        {
+          batchId: "batch-g",
+          deletedAt: 1_700_000_000_000,
+          items: [
+            { id: "g1", kind: "group", title: "Проект", thumbnailAsset: null, colorToken: null, symbol: null },
+            { id: "g2", kind: "group", title: "", thumbnailAsset: null, colorToken: null, symbol: null },
+          ],
+          boardCount: 0,
+          cardCount: 2,
+        },
+      ],
+      batchCount: 1,
+      boardCount: 0,
+      cardCount: 2,
+    };
+    render(
+      <TrashDrawer
+        summary={groups}
+        loading={false}
+        error={null}
+        restoringBatchId={null}
+        onClose={vi.fn()}
+        onRestore={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Проект")).toBeInTheDocument();
+    expect(screen.getByText("Группа без названия")).toBeInTheDocument();
+  });
+
   it("renders an error message", () => {
     render(
       <TrashDrawer

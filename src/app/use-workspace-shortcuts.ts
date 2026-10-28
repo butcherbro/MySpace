@@ -4,8 +4,9 @@ import { isDraftHandoffActive } from "../editor/draft-handoff";
 /**
  * Global keyboard shortcuts for the workspace: Cmd+[ / Cmd+] navigate
  * back/forward, Cmd+Z / Cmd+Shift+Z undo/redo, Cmd+C copies the selection,
- * Backspace/Delete deletes it, and Escape closes the trash drawer — unless an
- * editor or another text-entry control owns focus.
+ * Backspace/Delete deletes it, Cmd+G / Cmd+Shift+G group / ungroup it, and
+ * Escape closes the trash drawer — unless an editor or another text-entry
+ * control owns focus.
  *
  * Extracted from `App.tsx` unchanged (docs/plans/2026-09-26-app-tsx-split.md, step 12).
  */
@@ -17,6 +18,10 @@ export interface WorkspaceShortcutsDeps {
   handleWorkspaceRedo: () => Promise<void>;
   handleDeleteSelection: () => Promise<void>;
   handleCopySelection: () => void;
+  /** Cmd/Ctrl+G: обвести выделение группой (ADR-0013). */
+  handleGroupSelection?: () => Promise<void>;
+  /** Cmd/Ctrl+Shift+G: разгруппировать выделенные группы. */
+  handleUngroupSelection?: () => Promise<void>;
   trashOpen: boolean;
   closeTrashDrawer: () => void;
 }
@@ -29,6 +34,8 @@ export function useWorkspaceShortcuts(deps: WorkspaceShortcutsDeps): void {
     handleWorkspaceRedo,
     handleDeleteSelection,
     handleCopySelection,
+    handleGroupSelection,
+    handleUngroupSelection,
     trashOpen,
     closeTrashDrawer,
   } = deps;
@@ -89,9 +96,15 @@ export function useWorkspaceShortcuts(deps: WorkspaceShortcutsDeps): void {
       } else if (e.key.toLowerCase() === "c") {
         e.preventDefault();
         handleCopySelection();
+      } else if (e.key.toLowerCase() === "g") {
+        if (editingText) return;
+        e.preventDefault();
+        if (e.repeat) return;
+        if (e.shiftKey) void handleUngroupSelection?.();
+        else void handleGroupSelection?.();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelection, trashOpen, closeTrashDrawer]);
+  }, [handleNavigateBack, handleNavigateForward, handleWorkspaceUndo, handleWorkspaceRedo, handleDeleteSelection, handleCopySelection, handleGroupSelection, handleUngroupSelection, trashOpen, closeTrashDrawer]);
 }
