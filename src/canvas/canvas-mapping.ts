@@ -100,7 +100,10 @@ export function canvasNodeInputsEqual(a: CanvasCard, b: CanvasCard): boolean {
     a.portalCoverAssetId === b.portalCoverAssetId &&
     a.aliasLocal === b.aliasLocal &&
     a.groupTitle === b.groupTitle &&
-    a.groupColorToken === b.groupColorToken
+    a.groupColorToken === b.groupColorToken &&
+    // Смена цвета заметки не растит revision, поэтому без этого сравнения узел
+    // не перестраивается и открытая заметка остаётся прежнего цвета.
+    a.colorToken === b.colorToken
   );
 }
 

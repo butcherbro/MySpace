@@ -56,6 +56,12 @@ describe("canvas mapping", () => {
     expect(canvasNodeInputsEqual(group, { ...group, groupColorToken: "pink" })).toBe(false);
   });
 
+  it("rebuilds a note node when its color changes, without a revision bump", () => {
+    const note = card({ colorToken: "default" });
+    expect(canvasNodeInputsEqual(note, { ...note })).toBe(true);
+    expect(canvasNodeInputsEqual(note, { ...note, colorToken: "yellow" })).toBe(false);
+  });
+
   it("maps a card frame to a renderer-neutral node", () => {
     const node = cardToNodeLike(card());
     expect(node).toEqual({

@@ -325,6 +325,7 @@ function App() {
     aliasLocal: c.kind === "filesystem_alias" ? c.local : undefined,
     groupTitle: c.kind === "group" ? c.title : undefined,
     groupColorToken: c.kind === "group" ? c.colorToken : undefined,
+    colorToken: c.kind === "note" ? c.colorToken : undefined,
   })), [state.cards]);
   const cardsById = useMemo(() => new Map(state.cards.map((c) => [c.id, c])), [state.cards]);
   const canvasConnectors: CanvasConnector[] = useMemo(() => state.connectors.map((c) => ({

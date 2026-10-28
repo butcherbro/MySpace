@@ -38,7 +38,9 @@ architecture pass before sizing; `blocked` = depends on another item.
 
 ### 1. Agent surface — address a Board / pass it to an agent
 
-- `next` — A Board is addressed by stable `myspace://board/<id>`, not a filesystem
+- `delivered 2026-10-20` — MCP server inside the app (`myspace --mcp`), `add_items` batch,
+  ADR-0005 amendment; remaining tails are in «Агенты (MCP) — 2026-10-20» below.
+- A Board is addressed by stable `myspace://board/<id>`, not a filesystem
   path. A concrete Rust `WorkspaceService` owns typed queries/commands; Tauri and a
   local MCP-over-stdio server are adapters. Full decision and safety gates are in
   `docs/decisions/0005-provider-agnostic-agent-surface.md`.
@@ -507,7 +509,9 @@ P2 / platform:
 - [ ] Переписать `tasks/current-state.md` под `main`/`acf2b57` (сейчас описывает
       ветку `codex/v1-stabilization` от 13.09).
 - [ ] Пройти `docs/testing/v1-acceptance-runbook.md` целиком.
-- [ ] Резервная копия: приватный git remote — по решению пользователя.
+- [x] (снято 2026-10-01: репозиторий `butcherbro/MySpace` сделан публичным, история
+      проверена на секреты; приватный remote не нужен)
+      Резервная копия: приватный git remote — по решению пользователя.
 - [ ] Опционально: подогнать frame старых image cards под пропорции; полноэкранный
       просмотр `.md`.
 - [x] (закрыто 2026-09-30: `src/state/card-writes.ts`, защита в reducer,
@@ -659,7 +663,9 @@ P2 / platform:
 - [x] Writes by the MCP server (other process) reach peers in about 0.5 s:
       while a peer is paired, a pooled reader polls this device's journal
       cursor every 500 ms (done 2026-09-30, ADR-0011).
-- [ ] Journal compaction (all peers' cursors past a row → it can be folded
+- [x] (done 2026-09-30 as peer-independent dominance compaction, ADR-0011 amendment;
+      the offline-for-months policy is still open, see Known gaps there)
+      Journal compaction (all peers' cursors past a row → it can be folded
       into a snapshot) and a policy for devices that stay offline for months.
 - [ ] Known limitation (note conflict copy, 2026-09-30): if the conflict copy
       cannot be created (`createNote` fails) and the user leaves the board, the
@@ -679,7 +685,10 @@ P2 / platform:
 - [ ] Known limitation (conflict copy): the e2e "every character typed…" has only ~30 ms between the end of typing and the copy's creation, so which path it checks depends on CI load.
 - [ ] Known limitation (conflict copy): the `endDraftHandoff` cleanup in `src/cards/note/NoteCard.tsx`:161 breaks once StrictMode is enabled.
 - [ ] Known limitation (conflict copy): during the 2 s capture Backspace/Delete are swallowed even if the user has selected another card.
-- [ ] Known limitation (not only copies): clicking another card within ~30 ms after the blur of a note whose finalize is still in flight calls `onSaved` → the global `onDeactivate` and closes the editor just opened; part of the typed text is lost.
+- [x] (closed 2026-10-28: `finalize` in `src/editor/use-document-draft.ts` remembers its edit
+      session and calls `onSaved` only while that same session is still being edited; the
+      window was never a 30 ms constant but the full latency of the finalize write)
+      Known limitation (not only copies): clicking another card within ~30 ms after the blur of a note whose finalize is still in flight calls `onSaved` → the global `onDeactivate` and closes the editor just opened; part of the typed text is lost.
 
 ## Масштабирование — замеры 2026-09-30
 
@@ -706,7 +715,9 @@ M3 Max, release-сборка, код `main` (f443eb4). В норме: снапш
       7,9 с, блокирующе перед Empty Trash и перед миграцией. Предположительно
       `PRAGMA integrity_check` + online backup (`db/backup.rs:248`), по
       отдельности не замерено. 20 000 мелких файлов — 6,8 с (0,33 мс на файл).
-- [ ] **Компакция журнала.** Каждое автосохранение пишет полный образ сущности,
+- [x] (закрыто 2026-09-30: dominance-компакция, ADR-0011 поправка 2026-09-30,
+      `src-tauri/src/sync/compact.rs`; Known gaps там же)
+      **Компакция журнала.** Каждое автосохранение пишет полный образ сущности,
       около 1,6 KiB на изменение; 100 000 изменений ≈ 160 MB, 75 % базы.
       Нужна поправка к ADR-0011 до кода.
 - [ ] **Replay замедляется.** 2 030 строк/с, 100 000 строк — 49,5 с, страница
@@ -758,7 +769,12 @@ M3 Max, release-сборка, код `main` (f443eb4). В норме: снапш
 - [ ] Undo/redo создания и удаления не ставит метку в реестре записей и
       полагается на следующую за ним перезагрузку; снимок фонового опроса,
       пришедший во время `dispatcher.undo()`, может на мгновение вернуть карточку.
-- [ ] **Проверить первым: судьба правки пользователя после `stale_revision`.**
+- [x] (проверено 2026-10-28: текст не теряется — путь `stale_revision` при заданном `base`
+      не перезагружает доску, а создаёт Conflict copy, закрыто ещё в `52d98c9` 30.09;
+      e2e `stale-revision.spec.ts` строки 99-154 это проверяют. Остаются по чтению кода:
+      заметка, удалённая/перенесённая на другом устройстве во время набора — unmount-flush
+      молча не пишет; подпись картинки и описание ссылки — last-writer-wins без конфликта)
+      **Проверить первым: судьба правки пользователя после `stale_revision`.**
       Перезагрузка доски после устаревшей записи (cc6da1a) заменяет карточку
       сохранённой версией; e2e `tests/e2e/stale-revision.spec.ts` это и
       утверждает. Для заметки, в которую печатают, это может быть тихая потеря
@@ -792,7 +808,8 @@ M3 Max, release-сборка, код `main` (f443eb4). В норме: снапш
       API на запрос логов у джобы без логов, а не ошибка шага. Сам шаг
       «Verify latest.json» рабочий, менять его не нужно. Лечение: биллинг, затем
       «Re-run failed jobs» (сборки переиспользуются).
-- [ ] Объяснить и задокументировать экономику GitHub Actions для приватного
+- [x] (снято 2026-10-01: репозиторий публичный, минуты Actions бесплатны)
+      Объяснить и задокументировать экономику GitHub Actions для приватного
       репо: 2000 минут в месяц, множители macOS ×10 и Windows ×2 (Linux ×1).
       В сентябре ушло около 2170 минут, из них `gates` на macOS около 920
       (27 запусков). В `ci.yml` уже убраны дубли (push в main, PR Dependabot,
@@ -801,3 +818,34 @@ M3 Max, release-сборка, код `main` (f443eb4). В норме: снапш
 - [ ] `list_backups` запускает `integrity_check` на каждом снапшоте: около
       10 × 0,4 с на базе 214 MiB при открытии диалога «Backups…».
 - [ ] Prune бэкапов: 0,9 с на снапшот при 20 000 файлов × 10 снапшотов.
+
+## Потеря текста в заметке — 2026-10-28 (блок C)
+
+- [x] **Ложная Conflict copy при открытии заметки без набора.** `NoteEditor.tsx` звал
+      `editor.setEditable(editable)`; в Tiptap 3 второй параметр `emitUpdate` по умолчанию
+      `true`, и монтирование редактируемого редактора слало `update` с пустой транзакцией →
+      черновик dirty → через 250 мс `updateNote` с тем же документом. На устаревшем виде это
+      давало Conflict copy без единой буквы, в остальных случаях лишнюю ревизию и запись в
+      журнал sync при каждом открытии. Фикс: `setEditable(editable, false)`. Тесты:
+      `NoteEditor.test.tsx`, `NoteCard.real-editor.test.tsx` (настоящий Tiptap),
+      e2e в `stale-revision.spec.ts`.
+- [x] **Открытая заметка не перерисовывалась при смене цвета** (вскрыто фиксом выше: цвет
+      проявлялся только благодаря ложной записи, поднимавшей ревизию). `canvasNodeInputsEqual`
+      не сравнивал цвет, а `noteColorChanged` ревизию не растит. Теперь `colorToken` входит в
+      `CanvasCard` и в сравнение (`canvas-mapping.ts`, `App.tsx`), тест в
+      `canvas-mapping.test.ts`.
+- [ ] По чтению кода (не воспроизводилось): заметка, удалённая или перенесённая на другом
+      устройстве во время набора, — `judgeNoteSave` не находит карточку, unmount-flush молча
+      ничего не пишет. Подпись картинки и описание ссылки конфликтов не знают:
+      last-writer-wins, теряется чужой текст.
+- [ ] Синхронная ветка `onSaved` на чистом черновике (`use-document-draft.ts`, `handleBlur` /
+      `handleFinalize`) не проверяет `editingRef`: `flushAllDrafts("finalize")` при смене доски
+      зовёт её у каждой смонтированной заметки, N раз `editingStopped` + фокус холста.
+      Сейчас безвредно (идемпотентно), но стоит пропускать по той же проверке.
+- [ ] Поля, меняющиеся без роста ревизии и не входящие в `canvasNodeInputsEqual`:
+      `portal.target.colorToken` (рисуется в `BoardPortalCard.tsx`, меняется только снапшотом
+      с другого устройства) и поля цели у `board_shortcut` (`App.tsx` заполняет `targetBoardId` /
+      `portalTitle` только для `board_portal`). Проверить, читает ли рендер ярлыка их live.
+- [ ] Задержка finalize в живом Tauri не измерена; в mock-пробе при 15–150 мс терялись
+      1–6 символов до фикса гонки.
+

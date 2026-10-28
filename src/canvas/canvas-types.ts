@@ -46,6 +46,11 @@ export interface CanvasCard {
   groupTitle?: string;
   /** Для групп: id цветового пресета (ключ перерисовки). */
   groupColorToken?: string;
+  /**
+   * Для заметок: пресет фона. Ключ перерисовки: смена цвета не растит revision,
+   * и без него открытая заметка остаётся на экране прежнего цвета.
+   */
+  colorToken?: string;
 }
 
 /** A point in board-space coordinates. */

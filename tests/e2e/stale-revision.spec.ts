@@ -114,6 +114,29 @@ test("typing on after another device rewrote the note continues in a conflict co
   await expect(conflictCopy(page)).toContainText("Before the other device and mine and more");
 });
 
+test("opening a note another device rewrote, without typing, makes no conflict copy", async ({ page }) => {
+  await page.goto("/?fixture=stale-card");
+  await waitForCanvasReady(page);
+  await startTypingAtEnd(page);
+  const note = page.getByTestId("note-card");
+  await expect(note).toHaveAttribute("data-editing", "true");
+  // Дольше автосохранения (250 мс): ложная правка при открытии дошла бы до записи.
+  await page.waitForTimeout(600);
+
+  await expect(note).toHaveCount(1);
+  await expect(note).toHaveAttribute("data-editing", "true");
+  await expect(page.getByTestId("error-banner")).toHaveCount(0);
+
+  // Уход из нетронутой заметки тоже ничего не пишет: текст прежний, копии нет.
+  await clickEmptyCanvas(page);
+  await expect(note).toHaveAttribute("data-editing", "false");
+  await page.waitForTimeout(350);
+  await expect(note).toHaveCount(1);
+  await expect(note).toContainText("Before the other device");
+  await expect(note).not.toContainText("Written on another device");
+  await expect(page.getByTestId("error-banner")).toHaveCount(0);
+});
+
 test("leaving a note another device rewrote keeps the typed text in a conflict copy", async ({ page }) => {
   await page.goto("/?fixture=stale-card");
   await waitForCanvasReady(page);

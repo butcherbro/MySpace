@@ -268,8 +268,8 @@ export function CanvasAdapter({
   // revision, and any change to it rebuilt *every* node, so editing one note on
   // a 1 000-card board re-created 1 000 node objects and re-rendered 1 000
   // cards. Now each node is rebuilt only when its card's projection inputs
-  // (`canvasNodeInputsEqual`: id, kind, frame, zIndex, revision, portal
-  // appearance), its editing flag or the highlight query changed; every other
+  // (`canvasNodeInputsEqual`: id, kind, frame, zIndex, revision, note color,
+  // portal appearance), its editing flag or the highlight query changed; every other
   // node keeps its previous object — including React Flow's own state on it
   // (selection, measured size) — so React Flow skips it and its memoised card
   // component is never called. A rebuilt node preserves its `selected` flag, so

@@ -315,6 +315,124 @@ describe("useDocumentDraft", () => {
     vi.useRealTimers();
   });
 
+  it("blur finalize in flight, editing turned false: onSaved is not called", async () => {
+    // Blur карточки A запустил finalize; пока ответ в пути, правка перешла к B.
+    // onSaved общий для приложения: вызов закрыл бы редактор B.
+    let settleFinalize!: () => void;
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockReturnValue(new Promise<void>((resolve) => (settleFinalize = resolve)));
+    const onSaved = vi.fn();
+    const hook = renderHook(
+      (props: { editing: boolean }) =>
+        useDocumentDraft({ id: "card-1", persistedDocument: emptyDoc, onUpdate, onFinalize, onSaved, editing: props.editing }),
+      { initialProps: { editing: true } },
+    );
+    act(() => hook.result.current.handleChange(changedDoc));
+    act(() => hook.result.current.handleBlur());
+    hook.rerender({ editing: false });
+    await act(async () => {
+      settleFinalize();
+      await Promise.resolve();
+    });
+
+    // `setSaving(false)` стоит в `finally`: ответ обработан, и без фикса onSaved был бы вызван.
+    expect(hook.result.current.saving).toBe(false);
+    expect(onFinalize).toHaveBeenCalledTimes(1);
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("blur finalize in flight, the card edited again in between: onSaved is not called", async () => {
+    // Правка ушла к другой карточке и вернулась: ответ прежней сессии новую не закрывает.
+    let settleFinalize!: () => void;
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockReturnValue(new Promise<void>((resolve) => (settleFinalize = resolve)));
+    const onSaved = vi.fn();
+    const hook = renderHook(
+      (props: { editing: boolean }) =>
+        useDocumentDraft({ id: "card-1", persistedDocument: emptyDoc, onUpdate, onFinalize, onSaved, editing: props.editing }),
+      { initialProps: { editing: true } },
+    );
+    act(() => hook.result.current.handleChange(changedDoc));
+    act(() => hook.result.current.handleBlur());
+    hook.rerender({ editing: false });
+    hook.rerender({ editing: true });
+    await act(async () => {
+      settleFinalize();
+      await Promise.resolve();
+    });
+
+    expect(hook.result.current.saving).toBe(false);
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("blur finalize in flight, the card unmounted: onSaved is not called", async () => {
+    // Карточка размонтирована в том же коммите, где правка сброшена (cardsRemoved,
+    // cardReplaced, snapshotLoaded): layout-эффект editing уже не сработает.
+    let settleFinalize!: () => void;
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockReturnValue(new Promise<void>((resolve) => (settleFinalize = resolve)));
+    const onSaved = vi.fn();
+    const hook = renderHook(() =>
+      useDocumentDraft({ id: "card-1", persistedDocument: emptyDoc, onUpdate, onFinalize, onSaved, editing: true }),
+    );
+    act(() => hook.result.current.handleChange(changedDoc));
+    act(() => hook.result.current.handleBlur());
+    hook.unmount();
+    await act(async () => {
+      settleFinalize();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onFinalize).toHaveBeenCalledTimes(1);
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("a clean draft is not finalized on handleFinalize: editing just ends", async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockResolvedValue(undefined);
+    const onSaved = vi.fn();
+    const hook = renderHook(() =>
+      useDocumentDraft({ id: "card-1", persistedDocument: emptyDoc, onUpdate, onFinalize, onSaved, editing: true }),
+    );
+    await act(async () => hook.result.current.handleFinalize());
+
+    expect(onFinalize).not.toHaveBeenCalled();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("a clean draft is finalized when finalization is forced (Enter on a bare link)", async () => {
+    // Открытие заметки не правка, но Enter на голой ссылке должен дойти до
+    // finalize: только он превращает заметку в карточку-ссылку.
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockResolvedValue(undefined);
+    const onSaved = vi.fn();
+    const hook = renderHook(() =>
+      useDocumentDraft({ id: "card-1", persistedDocument: emptyDoc, onUpdate, onFinalize, onSaved, editing: true }),
+    );
+    await act(async () => hook.result.current.handleFinalize({ force: true }));
+
+    expect(onFinalize).toHaveBeenCalledWith("card-1", emptyDoc, expect.anything());
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("blur finalize answered while the card is still the edited one ends editing", async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onFinalize = vi.fn().mockResolvedValue(undefined);
+    const onSaved = vi.fn();
+    const hook = renderHook(() =>
+      useDocumentDraft({ id: "card-1", persistedDocument: emptyDoc, onUpdate, onFinalize, onSaved, editing: true }),
+    );
+    act(() => hook.result.current.handleChange(changedDoc));
+    await act(async () => {
+      hook.result.current.handleBlur();
+      await Promise.resolve();
+    });
+
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
   it("a late answer of the first hand-off does not end editing after a second one", async () => {
     vi.useFakeTimers();
     const theirs = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "theirs" }] }] };
