@@ -81,6 +81,19 @@ model a group were considered:
   membership for the next computation; no write.
 - Dragging a group into another group's area moves only the dragged group and
   its own members.
+- **Overlapping groups (rule added 2026-10-28 after the first user check).** A
+  card whose frame lies inside two groups belongs to *both* only when one of the
+  groups is nested in the other (its whole frame inside the other's); then the
+  outer group moves the inner one together with its cards, and the inner group
+  moves its own cards alone. When the two group frames overlap only partially
+  (neither contains the other), a card inside both is *contested* and moves with
+  neither group: it stays where it is when either frame is dragged. Without this
+  rule a group dragged over another one carried away every card it happened to
+  cover. The alternative — give the card to the smaller (or topmost) group —
+  was rejected because it reproduces exactly that: the dragged, usually smaller,
+  group would still take the cards of the one underneath. Two groups with
+  identical frames count as nested in both directions. `groupMembers` in
+  `group-membership.ts` implements this; nothing is stored.
 - Resizing a group (corner handles, same `ResizeCardCommand` path as images,
   wired through a new `use-group-edits.ts` hook rather than `use-card-edits.ts`)
   never moves cards; shrinking the frame simply drops members. Auto-expansion

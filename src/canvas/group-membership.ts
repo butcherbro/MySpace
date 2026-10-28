@@ -17,12 +17,38 @@ export function isInsideGroup(card: CanvasFrame, group: CanvasFrame): boolean {
 }
 
 /**
- * Id карточек внутри группы `groupId`, в порядке `cards`. Вложенные группы
- * входят (их собственные члены и так лежат внутри внешней рамки); сама группа —
- * никогда. Неизвестный id или карточка не-группа — пусто.
+ * Рамки пересекаются, но ни одна не лежит целиком в другой. Касание краями
+ * без общей площади пересечением не считается.
+ */
+export function overlapsPartially(a: CanvasFrame, b: CanvasFrame): boolean {
+  const intersects =
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  return intersects && !isInsideGroup(a, b) && !isInsideGroup(b, a);
+}
+
+/**
+ * Id карточек, которые едут вместе с группой `groupId`, в порядке `cards`.
+ *
+ * Внутри рамки — член; вложенные группы входят (их собственные члены и так
+ * лежат внутри внешней рамки); сама группа — никогда. Исключение — спорные
+ * карточки: если рамку группы лишь частично перекрывает другая группа, то
+ * карточка, лежащая внутри обеих, не принадлежит ни одной и остаётся на месте
+ * (иначе наезд одной группы на другую утаскивал бы чужие заметки). Группа,
+ * целиком вложенная в нашу или целиком содержащая нашу, спора не создаёт.
+ * Неизвестный id или карточка не-группа — пусто.
  */
 export function groupMembers(groupId: string, cards: readonly CanvasCard[]): string[] {
   const group = cards.find((c) => c.id === groupId);
   if (!group || group.kind !== "group") return [];
-  return cards.filter((c) => c.id !== groupId && isInsideGroup(c.frame, group.frame)).map((c) => c.id);
+  const rivals = cards.filter(
+    (c) => c.kind === "group" && c.id !== groupId && overlapsPartially(c.frame, group.frame),
+  );
+  return cards
+    .filter(
+      (c) =>
+        c.id !== groupId &&
+        isInsideGroup(c.frame, group.frame) &&
+        !rivals.some((rival) => isInsideGroup(c.frame, rival.frame)),
+    )
+    .map((c) => c.id);
 }

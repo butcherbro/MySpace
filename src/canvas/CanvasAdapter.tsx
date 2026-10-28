@@ -667,7 +667,9 @@ export function CanvasAdapter({
     if (groupDrag) {
       // Жест с группой: члены следуют за рамкой; порталы, хлебные крошки и
       // вкладки как цели броска в v1 не участвуют.
-      if (node.id === groupDrag.anchorId) {
+      // Группа без членов: не трогаем state на каждом кадре — иначе каждый
+      // шаг указателя пересобирал бы массив узлов и перерисовывал холст.
+      if (node.id === groupDrag.anchorId && groupDrag.members.size > 0) {
         const dx = node.position.x - groupDrag.anchorStart.x;
         const dy = node.position.y - groupDrag.anchorStart.y;
         setNodes((prev) =>

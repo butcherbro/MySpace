@@ -185,3 +185,61 @@ test("a marquee started outside the frame selects the frame and the notes it cro
   await expect(groupNode(page)).toHaveClass(/selected/);
   await expect(node(page, "group-note-outside")).not.toHaveClass(/selected/);
 });
+
+/** Выделить одну заметку: клик открывает редактор, Escape закрывает его, выделение остаётся. */
+async function selectSingleNote(page: Page, id: string) {
+  const b = await box(page, id);
+  await page.mouse.click(b.x + b.width / 2, b.y + b.height - 16);
+  await page.keyboard.press("Escape");
+  await expect(node(page, id)).toHaveClass(/selected/);
+  return b;
+}
+
+test("a group dragged over another group does not take the other group's notes along", async ({ page }) => {
+  await openFixture(page);
+  // Заметку «Outside» (820,160 240×120) сначала опускаем ниже края «Проекта»
+  // (y 400): рамка второй группы вокруг неё тогда торчит ниже «Проекта», и при
+  // любом сдвиге вправо две группы пересекутся лишь частично.
+  const outsideStart = await box(page, "group-note-outside");
+  // Первый из 10 шагов указателя React Flow не засчитывает: 120 → ~108, и
+  // низ заметки (y 388) остаётся выше края «Проекта», а низ рамки (412) — ниже.
+  await drag(page, { x: outsideStart.x + outsideStart.width / 2, y: outsideStart.y + outsideStart.height - 16 }, 0, 120);
+  await expect.poll(async () => (await box(page, "group-note-outside")).y - outsideStart.y).toBeGreaterThan(90);
+  await page.keyboard.press("Escape");
+  const outsideBefore = await selectSingleNote(page, "group-note-outside");
+  await page.mouse.click(outsideBefore.x + outsideBefore.width / 2, outsideBefore.y + outsideBefore.height - 16, {
+    button: "right",
+  });
+  await page.getByTestId("context-menu").getByRole("button", { name: "Group", exact: true }).click();
+  await expect(page.getByTestId("group-card")).toHaveCount(2);
+  const second = page.getByTestId("group-card").nth(1);
+  const secondBefore = await second.boundingBox();
+  if (!secondBefore) throw new Error("second group not visible");
+  await page.mouse.click(outsideBefore.x - 40, outsideBefore.y + outsideBefore.height + 200);
+
+  // «Проект» (60..700 × 80..400) уезжает вправо на ~460: рамка накрывает
+  // заметку «Outside» целиком, а вторую группу — лишь частично (та ниже).
+  const frame = await box(page, "group-project");
+  await drag(page, await groupBodyPoint(page), 500, 0);
+  const moved = await frameDelta(page, frame);
+  expect(moved.dx).toBeGreaterThan(400);
+  const covering = await box(page, "group-project");
+  const outside = await box(page, "group-note-outside");
+  expect(outside.x).toBeGreaterThanOrEqual(covering.x);
+  expect(outside.x + outside.width).toBeLessThanOrEqual(covering.x + covering.width);
+  expect(outside.y).toBeGreaterThanOrEqual(covering.y);
+  expect(outside.y + outside.height).toBeLessThanOrEqual(covering.y + covering.height);
+  const secondNow = await second.boundingBox();
+  if (!secondNow) throw new Error("second group not visible");
+  expect(secondNow.y + secondNow.height).toBeGreaterThan(covering.y + covering.height);
+  await expectMovedBy(page, "group-note-outside", outsideBefore, 0, 0);
+
+  // Обратно: «Outside» спорная (внутри обеих рамок) и остаётся; A едет с «Проектом».
+  const a = await box(page, "group-note-a");
+  await drag(page, await groupBodyPoint(page), -200, 0);
+  await expect.poll(async () => (await movedBy(page, "group-project", covering)).dx).toBeLessThan(-100);
+  const back = await movedBy(page, "group-project", covering);
+  await expectMovedBy(page, "group-note-a", a, back.dx, back.dy);
+  await expectMovedBy(page, "group-note-outside", outsideBefore, 0, 0);
+  await expect.poll(() => second.boundingBox().then((b) => b && Math.round(b.x))).toBe(Math.round(secondBefore.x));
+});
