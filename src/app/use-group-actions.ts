@@ -206,15 +206,24 @@ export function useGroupActions(deps: GroupActionsDeps): GroupActionsController 
 
   const groupMenuActions = useCallback(
     (group: GroupCardDto): ContextMenuAction[] => [
-      { id: "rename-group", label: "Rename", onSelect: () => startRename(group.id) },
+      { id: "rename-group", label: "Rename", onSelect: () => startRename(group.id), section: "rename" },
       ...NOTE_COLOR_OPTIONS.map((option) => ({
         id: `group-color-${option.id}`,
         label: CONNECTOR_COLOR_LABELS[option.id],
         onSelect: () => recolor(group.id, option.id),
+        section: "color",
       })),
-      { id: "ungroup", label: "Ungroup", onSelect: () => void ungroup([group.id]) },
+      {
+        id: "ungroup",
+        label: "Ungroup",
+        // Как ⇧⌘G: разгруппировать всё выделение. Правый клик по группе вне
+        // выделения сам выделяет её, так что одна группа тоже попадает сюда.
+        onSelect: () => void ungroupSelection(),
+        section: "arrange",
+        shortcut: "Mod+Shift+G",
+      },
     ],
-    [startRename, recolor, ungroup],
+    [startRename, recolor, ungroupSelection],
   );
 
   return { groupSelection, ungroup, ungroupSelection, startRename, rename, recolor, groupMenuActions };

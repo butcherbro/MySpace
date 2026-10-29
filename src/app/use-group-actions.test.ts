@@ -261,6 +261,13 @@ describe("useGroupActions", () => {
     expect(dispatched).toEqual([{ type: "cardsRemoved", ids: ["g"] }]);
   });
 
+  it("the menu's Ungroup acts on the selection, like the shortcut", async () => {
+    const { dispatched, cardsRef, hook } = await setup({ group: true, selection: ["a", "g"] });
+    const ungroup = hook.result.current.groupMenuActions(groupOf(cardsRef.current)!).find((a) => a.id === "ungroup")!;
+    await act(async () => ungroup.onSelect());
+    await waitFor(() => expect(dispatched).toEqual([{ type: "cardsRemoved", ids: ["g"] }]));
+  });
+
   it("rename stores the new title with the receipt's revision, undoably", async () => {
     const { gateway, dispatcher, dispatched, cardsRef, hook } = await setup({ group: true });
     act(() => hook.result.current.rename("g", "Идеи"));

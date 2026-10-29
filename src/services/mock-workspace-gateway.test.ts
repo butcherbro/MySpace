@@ -305,6 +305,16 @@ describe("MockWorkspaceGateway", () => {
     await expect(gateway.readCard("folder-1")).resolves.toMatchObject({ kind: "filesystem_alias" });
   });
 
+  it("stamps createdAt on creation and keeps it through an edit", async () => {
+    const gateway = new MockWorkspaceGateway();
+    await gateway.createNote(noteInput("n1", "hello"));
+    const created = await gateway.readCard("n1");
+    expect(created.createdAt).toBeGreaterThan(0);
+
+    await gateway.updateNote({ id: "n1", expectedRevision: 1, documentJson: plainTextToDocument("edited") });
+    expect((await gateway.readCard("n1")).createdAt).toBe(created.createdAt);
+  });
+
   it("keeps error reports in memory and returns a synthetic text", async () => {
     const gateway = new MockWorkspaceGateway();
     const input = { message: "boom", source: "canvas", frontendVersion: "0.2.3", userAgent: "UA" };

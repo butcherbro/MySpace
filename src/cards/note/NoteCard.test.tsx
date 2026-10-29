@@ -42,6 +42,7 @@ function makeNote(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     documentJson: {
       type: "doc",
       content: [{ type: "paragraph", content: [{ type: "text", text: "hello" }] }],

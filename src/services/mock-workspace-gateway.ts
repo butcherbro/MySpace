@@ -288,6 +288,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
         zIndex: 0,
         revision: 1,
         groupId: null,
+        createdAt: Date.now(),
         targetKind: "folder",
         pathHint: "/Users/me/Research",
         displayName: "Research",
@@ -613,6 +614,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: input.zIndex,
       revision: 1,
       groupId: null,
+      createdAt: Date.now(),
       documentJson: input.documentJson,
       plainText,
       colorToken: "default",
@@ -788,6 +790,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: 0,
       revision: 1,
       groupId: null,
+      createdAt: Date.now(),
       target: {
         id: input.boardId,
         boardRevision: 1,
@@ -842,6 +845,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     // в той же пачке, иначе обнуляется.
     const idMap = new Map<string, string>();
     const copies: CardDto[] = [];
+    const now = Date.now();
     for (const card of sourceCards) {
       const newCardId = `dup-card-${this.duplicateSequence++}`;
       idMap.set(card.id, newCardId);
@@ -854,6 +858,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           id: newCardId,
           boardId: newBoardId,
           revision: 1,
+          createdAt: now,
           target: {
             ...structuredClone(card.target),
             id: nestedNewBoardId,
@@ -869,6 +874,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
           id: newCardId,
           boardId: newBoardId,
           revision: 1,
+          createdAt: now,
         });
       }
     }
@@ -904,6 +910,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: 0,
       revision: 1,
       groupId: null,
+      createdAt: Date.now(),
       target: {
         id: input.newBoardId,
         boardRevision: 1,
@@ -996,6 +1003,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: input.zIndex,
       revision: 1,
       groupId: null,
+      createdAt: Date.now(),
       asset: {
         id: input.assetId,
         fileName: "",
@@ -1024,6 +1032,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: input.zIndex,
       revision: 1,
       groupId: null,
+      createdAt: Date.now(),
       targetBoardId: input.targetBoardId,
       target: {
         id: target.id,
@@ -1064,6 +1073,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: input.zIndex,
       revision: 1,
       groupId: null,
+      createdAt: Date.now(),
       title: input.title ?? "",
       colorToken,
     };
@@ -1144,6 +1154,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: input.zIndex,
       revision: 1,
       groupId: null,
+      createdAt: Date.now(),
       targetKind: "folder",
       pathHint: input.sourcePath,
       displayName,
@@ -1291,6 +1302,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: input.zIndex,
       revision: 1,
       groupId: null,
+      createdAt: Date.now(),
       asset: {
         id: `asset-${input.id}`,
         fileName,
@@ -1385,6 +1397,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
       zIndex: note.zIndex,
       revision: note.revision + 1,
       groupId: null,
+      createdAt: Date.now(),
       sourceUrl: input.sourceUrl,
       displayUrl: input.displayUrl,
       siteName: null,
@@ -2218,6 +2231,8 @@ const MOCK_DISCOVERED: DiscoveredDevice[] = [
 
 /** The mock installation's device id (ADR-0012). */
 const MOCK_DEVICE_ID = "mock-device";
+/** Время создания карточек фикстур: постоянное, чтобы подвал меню не зависел от часов. */
+const MOCK_FIXTURE_CREATED_AT = Date.UTC(2025, 7, 24, 10, 0);
 
 /** Cards of the `?fixture=foreign-shortcut` board (ADR-0012). */
 function foreignShortcutFixtureCards(thisDeviceName: string): CardDto[] {
@@ -2236,6 +2251,7 @@ function foreignShortcutFixtureCards(thisDeviceName: string): CardDto[] {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: MOCK_FIXTURE_CREATED_AT,
     targetKind: "folder",
     pathHint,
     displayName,
@@ -2268,6 +2284,7 @@ function staleCardFixtureNote(revision: number, text: string): CardDto {
     zIndex: 0,
     revision,
     groupId: null,
+    createdAt: MOCK_FIXTURE_CREATED_AT,
     documentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
     plainText: text,
     colorToken: "default",
@@ -2284,6 +2301,7 @@ function connectorsFixtureCards(): CardDto[] {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: MOCK_FIXTURE_CREATED_AT,
     documentJson: plainTextToDocument(text),
     plainText: text,
     colorToken: "default",
@@ -2301,6 +2319,7 @@ function groupsFixtureCards(): CardDto[] {
     zIndex: 1,
     revision: 1,
     groupId,
+    createdAt: MOCK_FIXTURE_CREATED_AT,
     documentJson: plainTextToDocument(text),
     plainText: text,
     colorToken: "default",
@@ -2313,6 +2332,7 @@ function groupsFixtureCards(): CardDto[] {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: MOCK_FIXTURE_CREATED_AT,
     title: "Проект",
     colorToken: "pink",
   };
@@ -2334,6 +2354,7 @@ function corruptNoteFixtureCards(): CardDto[] {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: MOCK_FIXTURE_CREATED_AT,
     documentJson: corrupt
       ? { type: "doc", content: [] }
       : { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },

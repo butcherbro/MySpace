@@ -19,6 +19,8 @@ interface TrashDrawerProps {
   onOpenDevices?: () => void;
   /** Run a manual update check (desktop builds only; the result shows in the update banner). */
   onCheckForUpdates?: () => void;
+  /** The app version (build-time `__APP_VERSION__`), shown under the footer actions. */
+  appVersion?: string;
 }
 
 function formatDeletedAt(millis: number): string {
@@ -51,6 +53,7 @@ export function TrashDrawer({
   onRestoreFromBackup,
   onOpenDevices,
   onCheckForUpdates,
+  appVersion,
 }: TrashDrawerProps) {
   const empty = !loading && !error && summary && summary.batches.length === 0;
   const populated = !loading && !error && summary && summary.batches.length > 0;
@@ -146,7 +149,7 @@ export function TrashDrawer({
         {onRestoreFromBackup && (
           <button
             type="button"
-            className="trash-drawer__restore-from-backup"
+            className="trash-drawer__menu-item trash-drawer__restore-from-backup"
             onClick={onRestoreFromBackup}
           >
             Backups…
@@ -155,7 +158,7 @@ export function TrashDrawer({
         {onOpenDevices && (
           <button
             type="button"
-            className="trash-drawer__restore-from-backup trash-drawer__devices"
+            className="trash-drawer__menu-item trash-drawer__devices"
             data-testid="trash-drawer-devices"
             onClick={onOpenDevices}
           >
@@ -165,21 +168,32 @@ export function TrashDrawer({
         {onCheckForUpdates && (
           <button
             type="button"
-            className="trash-drawer__restore-from-backup trash-drawer__check-updates"
+            className="trash-drawer__menu-item trash-drawer__check-updates"
             data-testid="trash-drawer-check-updates"
             onClick={onCheckForUpdates}
           >
             Check for updates…
           </button>
         )}
+        {(onRestoreFromBackup || onOpenDevices || onCheckForUpdates) && (
+          <div className="trash-drawer__divider" role="separator" />
+        )}
         <button
           type="button"
-          className="trash-drawer__empty"
+          className="trash-drawer__menu-item trash-drawer__empty-trash"
           onClick={onEmptyTrash}
           disabled={!hasBatches}
         >
           Empty Trash…
         </button>
+        {appVersion && (
+          <>
+            <div className="trash-drawer__divider" role="separator" />
+            <p className="trash-drawer__version" data-testid="trash-drawer-version">
+              MySpace {appVersion}
+            </p>
+          </>
+        )}
       </footer>
     </div>
   );

@@ -168,6 +168,22 @@ describe("TrashDrawer", () => {
     expect(onRestore).toHaveBeenCalledWith("batch-1");
   });
 
+  it("shows the app version under the footer actions once known", () => {
+    const props = {
+      summary,
+      loading: false,
+      error: null,
+      restoringBatchId: null,
+      onClose: vi.fn(),
+      onRestore: vi.fn(),
+    };
+    const { rerender } = render(<TrashDrawer {...props} />);
+    expect(screen.queryByTestId("trash-drawer-version")).not.toBeInTheDocument();
+
+    rerender(<TrashDrawer {...props} appVersion="0.3.1" />);
+    expect(screen.getByTestId("trash-drawer-version")).toHaveTextContent("MySpace 0.3.1");
+  });
+
   it("offers Devices… next to Backups… when wired", async () => {
     const user = userEvent.setup();
     const onOpenDevices = vi.fn();

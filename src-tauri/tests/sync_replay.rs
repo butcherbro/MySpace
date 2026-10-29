@@ -162,6 +162,15 @@ fn strip(value: &mut Value) {
     }
 }
 
+/// Drops `createdAt` from the snapshot card `card_id` only.
+fn strip_card_created_at(board: &mut Value, card_id: &str) {
+    for card in board["cards"].as_array_mut().unwrap() {
+        if card["id"] == card_id {
+            card.as_object_mut().unwrap().remove("createdAt");
+        }
+    }
+}
+
 /// One-way exchange `from` → `to`.
 fn sync(from: &Replica, to: &Replica) -> ApplyReport {
     to.apply_rows(from.export_for(to))
@@ -462,7 +471,22 @@ fn concurrent_note_edits_converge_with_a_conflict_copy_on_both() {
         "A's offline text"
     };
     assert!(on_a[0].contains(loser), "{on_a:?}");
-    assert_eq!(a.board(&fx.board), b.board(&fx.board));
+    // Копию конфликта каждое устройство создаёт само, по своим часам: её
+    // createdAt расходится на миллисекунды. У остальных карточек он приходит
+    // из образа и обязан совпасть.
+    let copy_id: String =
+        a.ws.read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT n.card_id FROM note_cards n WHERE n.plain_text LIKE 'Conflict copy%'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    let (mut board_a, mut board_b) = (a.board(&fx.board), b.board(&fx.board));
+    strip_card_created_at(&mut board_a, &copy_id);
+    strip_card_created_at(&mut board_b, &copy_id);
+    assert_eq!(board_a, board_b);
 }
 
 #[test]

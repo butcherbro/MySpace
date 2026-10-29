@@ -40,6 +40,7 @@ function note(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     documentJson: { type: "doc", content: [] },
     plainText: "",
     colorToken: "default",
@@ -56,6 +57,7 @@ function portal(overrides: Partial<BoardPortalDto> = {}): BoardPortalDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     target: {
       id: "board-A",
       boardRevision: 1,
@@ -79,6 +81,7 @@ function shortcut(overrides: Partial<BoardShortcutDto> = {}): BoardShortcutDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     targetBoardId: "board-A",
     target: {
       id: "board-A",
@@ -101,6 +104,7 @@ function alias(overrides: Partial<FilesystemAliasDto> = {}): FilesystemAliasDto 
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     targetKind: "folder",
     pathHint: "/Users/x/Folder",
     displayName: "Folder",

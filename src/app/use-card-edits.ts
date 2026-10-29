@@ -213,6 +213,7 @@ export function useCardEdits(deps: CardEditsOptions): CardEditsController {
         zIndex: beside.zIndex + 1,
         revision: 1,
         groupId: null,
+        createdAt: Date.now(),
         documentJson,
         plainText: documentToPlainText(documentJson),
         colorToken: "default",
