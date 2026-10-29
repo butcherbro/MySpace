@@ -44,7 +44,7 @@ export class UuidV7Generator implements IdGenerator {
  * it is missing (e.g. a non-secure Tauri WebView custom scheme). The fallback
  * is not cryptographic, which is acceptable for local board/card IDs.
  */
-function fillRandom(out: Uint8Array): void {
+function fillRandom(out: Uint8Array<ArrayBuffer>): void {
   const getRandomValues = globalThis.crypto?.getRandomValues;
   if (getRandomValues) {
     getRandomValues.call(globalThis.crypto, out);
