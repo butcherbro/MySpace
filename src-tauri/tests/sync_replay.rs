@@ -1720,3 +1720,159 @@ fn a_card_created_from_an_image_without_group_id_has_no_group() {
     assert_eq!(report.applied, 1, "{report:?}");
     assert_eq!(stored_group(&b, &n1), None);
 }
+
+/// Строка ассета от `peerx` с образом `state`.
+fn peer_asset_row(id: &str, hlc: &str, state: Value) -> ChangeRow {
+    ChangeRow {
+        origin_device_id: "peerx".into(),
+        hlc: hlc.into(),
+        entity_kind: "asset".into(),
+        entity_id: id.into(),
+        op: "asset.insert".into(),
+        payload_json: serde_json::json!({ "v": 1, "clocks": { "body": hlc }, "state": state })
+            .to_string(),
+    }
+}
+
+fn asset_state(path: &str) -> Value {
+    serde_json::json!({
+        "file_path": path,
+        "mime_type": "image/png",
+        "file_name": "forged.png",
+        "width": 1,
+        "height": 1,
+        "size_bytes": 3,
+        "created_at": 1,
+        "sha256": SHA,
+    })
+}
+
+/// Файл ассета от пира обязан называться `<свой id>.<ext>` в каноническом
+/// виде: иначе ряд может назвать чужой файл (в том числе другим регистром или
+/// с точкой в конце — macOS и Windows считают это тем же файлом), и сборка
+/// сирот по нему сотрёт чужую картинку. Честный ряд и его повтор проходят.
+#[test]
+fn an_asset_row_must_name_its_own_canonical_file() {
+    let a = Replica::new("a");
+    populate(&a);
+    let (owner, file_path): (String, String) =
+        a.ws.read_blocking(|c| {
+            Ok(
+                c.query_row("SELECT id, file_path FROM assets LIMIT 1", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?,
+            )
+        })
+        .unwrap();
+    assert_eq!(file_path, format!("{owner}.png"));
+
+    let forged = new_id();
+    let upper = owner.to_uppercase();
+    let refused = [
+        // Чужой файл байт в байт.
+        (forged.clone(), file_path.clone()),
+        // Тот же файл на нечувствительной к регистру ФС.
+        (upper.clone(), format!("{upper}.png")),
+        (forged.clone(), format!("{upper}.png")),
+        (forged.clone(), format!("{owner}.PNG")),
+        // Windows отбрасывает точку в конце.
+        (forged.clone(), format!("{file_path}.")),
+        (forged.clone(), format!("{forged}.png.")),
+        // Не свой id, слишком длинное имя, пустой хвост, не UUID.
+        (forged.clone(), format!("{forged}.{}", "a".repeat(124))),
+        (forged.clone(), format!("{forged}.")),
+        (forged.clone(), format!("{}.png", new_id())),
+        (forged.clone(), forged.clone()),
+        ("pic".to_string(), "pic.png".to_string()),
+    ];
+    for (counter, (id, path)) in (0u32..).zip(refused) {
+        let report = a.apply_rows(vec![peer_asset_row(
+            &id,
+            &peer_hlc(60_000, counter),
+            asset_state(&path),
+        )]);
+        assert_eq!(report.rejected, 1, "{id} {path}: {report:?}");
+    }
+    assert_eq!(a.count("SELECT COUNT(*) FROM assets"), 1);
+
+    // Существующий ассет не переезжает на другой файл.
+    let report = a.apply_rows(vec![peer_asset_row(
+        &owner,
+        &peer_hlc(60_000, 100),
+        asset_state(&format!("{owner}.jpg")),
+    )]);
+    assert_eq!(report.rejected, 1, "{report:?}");
+
+    // Повтор ряда того же ассета с тем же файлом применяется.
+    let report = a.apply_rows(vec![peer_asset_row(
+        &owner,
+        &peer_hlc(60_000, 101),
+        asset_state(&file_path),
+    )]);
+    assert_eq!(report.applied, 1, "{report:?}");
+    let name: String = a
+        .scalar("SELECT file_name FROM assets WHERE id = ?1", &owner)
+        .unwrap();
+    assert_eq!(name, "forged.png");
+
+    // Хвосты карточек-файлов 0.3.0 (дефис, кириллица) и имя на пределе длины
+    // проходят.
+    for (counter, tail) in (110u32..).zip(["tar-gz", "пдф", &"a".repeat(123)]) {
+        let id = new_id();
+        let report = a.apply_rows(vec![peer_asset_row(
+            &id,
+            &peer_hlc(60_000, counter),
+            asset_state(&format!("{id}.{tail}")),
+        )]);
+        assert_eq!(report.applied, 1, "{tail}: {report:?}");
+    }
+
+    // Честный новый ряд проходит, его новая версия в следующем батче — тоже.
+    let fresh = new_id();
+    for counter in [102, 103] {
+        let report = a.apply_rows(vec![peer_asset_row(
+            &fresh,
+            &peer_hlc(60_000, counter),
+            asset_state(&format!("{fresh}.png")),
+        )]);
+        assert_eq!(report.applied, 1, "{report:?}");
+    }
+}
+
+/// Восстановление ассета из журнала пропускает отклонённую подделку, даже
+/// когда она новее честного ряда: иначе карточка с картинкой не встанет.
+#[test]
+fn a_restored_asset_skips_a_newer_forged_row() {
+    let (a, b) = (Replica::new("a"), Replica::new("b"));
+    let fx = populate(&a);
+    let rows = a.export_for(&b);
+    let (assets, rest): (Vec<ChangeRow>, Vec<ChangeRow>) =
+        rows.into_iter().partition(|r| r.entity_kind == "asset");
+    let asset = assets[0].entity_id.clone();
+    let file_path: String = serde_json::from_str::<Value>(&assets[0].payload_json).unwrap()
+        ["state"]["file_path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(b.apply_rows(assets).pending, 0);
+    let forged = b.apply_rows(vec![peer_asset_row(
+        &asset,
+        &peer_hlc(60_000, 0),
+        asset_state(&format!("{}.png", new_id())),
+    )]);
+    assert_eq!(forged.rejected, 1, "{forged:?}");
+    let collected = b
+        .apply(Mutation::CollectOrphanedAssets)
+        .into_count()
+        .unwrap();
+    assert_eq!(collected, 1);
+
+    let report = b.apply_rows(rest);
+    assert_eq!(report.pending, 0, "{report:?}");
+    assert_eq!(report.rejected, 0, "{report:?}");
+    assert_eq!(b.board(&fx.board), a.board(&fx.board));
+    let stored: String = b
+        .scalar("SELECT file_path FROM assets WHERE id = ?1", &asset)
+        .unwrap();
+    assert_eq!(stored, file_path);
+}

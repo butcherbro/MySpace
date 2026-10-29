@@ -662,12 +662,34 @@ pub fn touch_board(conn: &Connection, id: &str, now: i64) -> Result<(), Workspac
     Ok(())
 }
 
-/// Inserts or updates an asset row. The file name must be a single safe path
-/// component: a peer can never make this device read or write outside its
-/// asset directory.
+/// Вставляет или обновляет ряд ассета. Имя файла обязано быть ровно
+/// `<id>.<ext>` этого же ассета (`is_canonical_asset_file`): пир не может
+/// заставить устройство читать или писать вне каталога ассетов или назвать
+/// (на любой ФС) файл другого ассета. Ряд, переносящий существующий ассет на
+/// другой файл, тоже отклоняется.
 pub fn upsert_asset(conn: &Connection, id: &str, state: &Value) -> Result<(), WorkspaceError> {
     let file_path = get_str(state, "file_path")?;
-    if !crate::is_safe_asset_name(file_path) {
+    if !crate::domain::asset_service::is_canonical_asset_file(id, file_path) {
+        tracing::warn!(
+            asset_id = id,
+            error_code = "sync_asset_path_refused",
+            "sync: refused an asset row whose file is not named after its id"
+        );
+        return Err(invalid("file_path"));
+    }
+    // Файл ассета неизменяем: смена имени у существующего id оставила бы
+    // старый файл без владельца и подсунула бы ряду чужой.
+    let stored: Option<String> = conn
+        .query_row("SELECT file_path FROM assets WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if stored.is_some_and(|stored| stored != file_path) {
+        tracing::warn!(
+            asset_id = id,
+            error_code = "sync_asset_path_refused",
+            "sync: refused an asset row moving an asset to another file"
+        );
         return Err(invalid("file_path"));
     }
     if let Some(sha) = get_opt_str(state, "sha256")? {
