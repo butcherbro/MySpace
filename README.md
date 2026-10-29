@@ -163,11 +163,16 @@ shown (5 guesses out of 10^8); they cannot read or change the workspace
 without being paired. When both devices run a build with this pairing (after
 0.3.0), an attacker who intercepts traffic during pairing learns nothing that
 lets them test codes offline: each guess is an online attempt and uses up one
-of the 5. Mixed versions do not pair at all: an older build accepts only 6
-digits and refuses the 8-digit code before sending anything derived from it;
-a newer build refuses a 6-digit code and a device that does not offer this
-pairing, asking to update MySpace on the other device; a newer device answers
-an older one's pairing request with "update MySpace". Two older builds
+of the 5. Mixed versions are not meant to pair: an older build cannot accept
+the 8-digit code as displayed or pasted (its input keeps 7 characters, and
+the first 7 of "12 345 678" hold only 5 digits); a newer build refuses a
+6-digit code and a device that does not offer this pairing, asking to update
+MySpace on the other device; a newer device answers an older one's pairing
+request with "update MySpace". One case remains: a user on an older build who
+types exactly the first 6 digits of a new code and presses Pair. If an active
+man-in-the-middle is present at that moment, it learns those 6 digits and has
+about a 5% chance (5 attempts over the 100 remaining codes) of being stored by
+the newer device. Update both devices before pairing. Two older builds
 pairing with each other keep the old weakness (the code can be brute-forced
 offline from their HMAC proof). Devices that are already paired keep syncing
 across versions. A code is only as secret as the screen it is shown on.

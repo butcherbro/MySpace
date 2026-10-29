@@ -235,6 +235,9 @@ impl PairingWindow {
         }
         let active = self.active.as_mut().expect("checked above");
         if active.attempts >= MAX_ATTEMPTS {
+            // Все попытки розданы: код больше не может сработать честно,
+            // A не должен показывать мёртвый код дальше.
+            self.burn();
             return Err(PairRefusal::TooManyAttempts);
         }
         // Сбой start — наша ошибка, попытку не тратит; сообщение пира
@@ -390,16 +393,33 @@ mod tests {
             );
         }
         let (id, key) = bob(&mut w, wrong).unwrap();
-        assert!(matches!(
-            bob(&mut w, &code),
-            Err(PairRefusal::TooManyAttempts)
-        ));
         assert_eq!(
             w.attempt(&id, "b", "a", &proof(&key[..], "b", "a")),
             Err(PairRefusal::TooManyAttempts)
         );
         // Burnt: even the right code is refused now.
         assert!(matches!(bob(&mut w, &code), Err(PairRefusal::NoActiveCode)));
+    }
+
+    #[test]
+    fn a_begin_past_the_limit_burns_the_code() {
+        let mut w = PairingWindow::default();
+        let code = w.begin(0).code;
+        let mut pending = Vec::new();
+        for _ in 0..MAX_ATTEMPTS {
+            pending.push(bob(&mut w, &code).unwrap());
+        }
+        assert!(matches!(
+            bob(&mut w, &code),
+            Err(PairRefusal::TooManyAttempts)
+        ));
+        assert!(w.active().is_none());
+        // Начатые сессии сгорели вместе с кодом.
+        let (id, key) = pending.pop().unwrap();
+        assert_eq!(
+            w.attempt(&id, "b", "a", &proof(&key[..], "b", "a")),
+            Err(PairRefusal::NoActiveCode)
+        );
     }
 
     #[test]

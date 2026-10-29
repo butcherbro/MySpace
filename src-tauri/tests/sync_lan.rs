@@ -883,12 +883,13 @@ async fn a_begin_without_confirm_uses_up_an_attempt() {
     }
     let resp = begin_as(&http, m.lan.fingerprint(), &a, "00000000").await;
     assert_eq!(resp.status(), 429);
+    // The begin past the limit burnt the code: A no longer shows it.
     let err = b
         .lan
         .pair_with(None, Some(&a.addr()), &code)
         .await
         .unwrap_err();
-    assert!(format!("{err}").contains("too many attempts"), "{err}");
+    assert!(format!("{err}").contains("not showing"), "{err}");
     assert!(a.peer_ids().await.is_empty());
 
     // An undecodable message also counts: after it only four begins pass.

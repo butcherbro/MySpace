@@ -2109,7 +2109,14 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   syncPairWith(input: PairWithInput): Promise<SyncPeerState> {
-    if (input.code.replace(/\s|-/g, "") !== MOCK_PAIRING_CODE) {
+    const digits = input.code.replace(/\s|-/g, "");
+    if (digits.length === 6) {
+      return Promise.reject({
+        code: "constraint_violation",
+        message: "that is a 6-digit code from an older MySpace; update MySpace on the other device to pair",
+      });
+    }
+    if (digits !== MOCK_PAIRING_CODE) {
       return Promise.reject({
         code: "sync",
         message: "wrong code, or another device is trying to pair — make a new code on the other device",

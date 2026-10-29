@@ -45,5 +45,5 @@ test("the Devices dialog opens from the Trash drawer and shows the pairing code"
   const dialog = page.getByTestId("devices-dialog");
   await expect(dialog).toBeVisible();
   await dialog.getByTestId("devices-begin-pairing").click();
-  await expect(dialog.getByTestId("devices-pairing-code")).toHaveText("1234 5678");
+  await expect(dialog.getByTestId("devices-pairing-code")).toHaveText("12 345 678");
 });

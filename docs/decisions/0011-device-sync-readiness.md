@@ -444,7 +444,8 @@ is a 500 and costs nothing), so a session is at most one guess
 and at most 5 sessions exist per code. A session lives 60 s, belongs to the
 client certificate that began it, is confirmed at most once, and disappears
 with the code (new code, cancel, expiry, success, burn). A begin after 5 is
-refused (429); a wrong proof on the last attempt burns the code (429). An
+refused and burns the code (429), so A stops accepting a code that can no
+longer succeed; a wrong proof on the last attempt burns the code (429). An
 undecodable message still costs its attempt (400). An unknown or expired
 session, or one begun under another client certificate, is 409. B words a
 403, and a 429 on begin (attempts used up by sessions it did not run), as
@@ -456,9 +457,17 @@ a man-in-the-middle brute-forces the code offline, then runs a correct
 SPAKE2 with the new device (one attempt) and is stored. 426 never fires in
 that attack, since the attacker speaks protocol 2 to A. Hence 8-digit codes:
 builds before protocol 2 accept exactly 6 digits and refuse an 8-digit code
-before computing any HMAC. A new build refuses a 6-digit code locally ("that
-is a 6-digit code from an older MySpace; update MySpace on the other
-device"). On the wire, `GET /pair` advertises `pairing: 2`
+before computing any HMAC. Their code input also keeps only 7 characters and
+pairs at 6 digits, so the code is shown as "12 345 678": its first 7
+characters hold 5 digits, and pasting or typing it as displayed into an old
+build never reaches 6 (a "1234 5678" display would have truncated to
+"1234 56"). A new build lets a 6-digit code through its UI and refuses it in
+the backend ("that is a 6-digit code from an older MySpace; update MySpace on
+the other device"). Residual risk: a user on an old build who types exactly
+the first 6 digits and presses Pair. An active man-in-the-middle at that
+moment learns 6 of 8 digits and has 100 candidates for 5 attempts on the new
+device, about a 5% chance of being stored. Both devices should be updated
+before pairing. On the wire, `GET /pair` advertises `pairing: 2`
 (`PeerInfo` accepts unknown fields, so older clients ignore it). A new client
 refuses a server without it ("the other device runs an older MySpace; update
 MySpace on the other device to pair") and never falls back to the HMAC
