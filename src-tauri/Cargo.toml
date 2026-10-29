@@ -61,6 +61,14 @@ http-body-util = "0.1"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
 # Pairing proofs (MIT OR Apache-2.0); 0.12 matches sha2 0.10.
 hmac = "0.13"
+# SPAKE2 for pairing (BoringSSL's). License: ISC AND (Apache-2.0 OR ISC) AND
+# Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND
+# (Apache-2.0 OR ISC OR MIT-0). Already in the tree as the aws-lc-rs backend;
+# pinned exactly so no second copy builds: bump it together with aws-lc-rs.
+aws-lc-sys = { version = "=0.45.0", default-features = false }
+# Wipes the pairing key and code from memory (Apache-2.0 OR MIT); already in
+# the tree through aws-lc-rs.
+zeroize = "1.8"
 # mDNS discovery (MIT OR Apache-2.0).
 mdns-sd = "0.21"
 # Local addresses shown for "Add by address" (MIT OR BSD-3-Clause; via mdns-sd).

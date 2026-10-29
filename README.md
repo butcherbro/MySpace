@@ -122,7 +122,7 @@ one shows up on the other within about a second (a few seconds at most).
 **Pairing (once per pair of computers):**
 
 1. On computer A: Trash → **Devices…** (or the sync pill right of the search
-   box) → **Pair a device**. A 6-digit code appears, valid for 5 minutes.
+   box) → **Pair a device**. An 8-digit code appears, valid for 5 minutes.
 2. On computer B: open **Devices…**; A is listed under *On this network*.
    Click **Pair…**, type A's code, **Pair**.
 3. Both now list each other under *Paired devices* and sync right away. A
@@ -154,16 +154,24 @@ name when they talk), and the pairing itself.
 (stored in its database, `local_meta`); its SHA-256 fingerprint is the
 device's identity. All traffic is TLS 1.3 with client certificates both ways;
 a request is served only if the client certificate's fingerprint is a paired
-device's. Pairing exchanges fingerprints under HMAC proofs keyed by the
-6-digit code (5 attempts per code, then it is void). Someone else on the same
-Wi-Fi can see that MySpace runs here (device name, id and fingerprint are
-advertised by mDNS) and can try to pair while a code is shown (5 guesses out
-of a million); they cannot read or change the workspace without being paired.
-A code is only as secret as the screen it is shown on, and an attacker who can
-actively intercept traffic *during* the pairing minute could brute-force the
-code offline from the proof and pair in the middle (a PAKE would close this;
-see `tasks/todo.md`). After pairing, fingerprints are pinned: interception is
-detected. The private key lives in the workspace database, so a backup of the
+device's. Pairing runs SPAKE2 keyed by the 8-digit code, with both
+certificate fingerprints bound in, and exchanges fingerprints under proofs
+keyed by the resulting shared key (5 attempts per code, then it is void).
+Someone else on the same Wi-Fi can see that MySpace runs here (device name, id
+and fingerprint are advertised by mDNS) and can try to pair while a code is
+shown (5 guesses out of 10^8); they cannot read or change the workspace
+without being paired. When both devices run a build with this pairing (after
+0.3.0), an attacker who intercepts traffic during pairing learns nothing that
+lets them test codes offline: each guess is an online attempt and uses up one
+of the 5. Mixed versions do not pair at all: an older build accepts only 6
+digits and refuses the 8-digit code before sending anything derived from it;
+a newer build refuses a 6-digit code and a device that does not offer this
+pairing, asking to update MySpace on the other device; a newer device answers
+an older one's pairing request with "update MySpace". Two older builds
+pairing with each other keep the old weakness (the code can be brute-forced
+offline from their HMAC proof). Devices that are already paired keep syncing
+across versions. A code is only as secret as the screen it is shown on.
+After pairing, fingerprints are pinned: interception is detected. The private key lives in the workspace database, so a backup of the
 database contains it; a database copied to another machine gets a new device
 id and a new certificate.
 

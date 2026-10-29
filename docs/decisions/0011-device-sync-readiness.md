@@ -184,7 +184,8 @@ pill), README "Sync (LAN)".
   verifies before storing A. Deviation: the messages also carry the server
   port so each side can reach the other without mDNS. Known weakness: the
   proof lets an active man-in-the-middle during the pairing minute brute-force
-  the 6-digit code offline; a PAKE (SPAKE2/CPace) would close it.
+  the 6-digit code offline; a PAKE (SPAKE2/CPace) would close it. Closed by
+  the 2026-10-29 amendment (SPAKE2, pairing protocol 2).
 - **Discovery:** `mdns-sd`, `_myspace-sync._tcp.local.` with TXT `device_id`,
   `name`, `fp`; re-advertised on rename. Failure → state "discovery
   unavailable", pairing by `host:port` still works; each peer's last working
@@ -405,3 +406,78 @@ unknown card kind is deferred and its later tombstone still purges it; an
 unknown register applies the known ones and waits for the rest; a `place`
 without `group_id` keeps the membership; compaction keeps the row that carries
 the membership and a bootstrapped replica has it.
+
+## Amendment 2026-10-29: SPAKE2 pairing (accepted, implemented)
+
+**Problem.** The 2026-09 pairing sent `HMAC(code, fp_B ‖ fp_A)`. An active
+man-in-the-middle terminating B's TLS (B accepts any certificate on
+`GET /pair`; "Add by address" has no pin) received that proof, brute-forced
+the 10^6 codes offline in about a second, answered within B's 30 s timeout,
+and B pinned the attacker's fingerprint as A.
+
+**Decision.** Pairing protocol 2 replaces the code-keyed HMAC with SPAKE2
+(BoringSSL's implementation in `aws-lc-sys`, already in the tree as the
+aws-lc-rs backend; no new crate, `sync/spake2.rs` is a small safe wrapper).
+A (showing the code) is Alice, B (typing it) is Bob; the SPAKE2 names are the
+two certificate fingerprints as seen on the TLS channel, the password is the
+code, the output is a 64-byte key K (wiped from memory on drop, like the code
+when it is burnt). Codes have 8 digits instead of 6, for the version gate
+below.
+
+```text
+B → A  GET  /pair        → {deviceId, name, fingerprint, protocol: 1, pairing: 2}
+B → A  POST /pair/begin  {msg: msg_B}  → {msg: msg_A, session}
+B → A  POST /pair        {session, deviceId, name, fingerprint, port,
+                          proof = HMAC-SHA256(K, fp_B ‖ fp_A)}
+A → B  {deviceId, name, fingerprint, port, proof = HMAC-SHA256(K, fp_A ‖ fp_B)}
+```
+
+A stores B only after a valid `proof_B`; B stores A only after a valid
+`proof_A`. Between two protocol-2 devices, a relay with its own certificates
+derives a different K on each side, and an attacker who runs SPAKE2 itself
+gets one online guess per session; the transcript gives nothing to test
+offline.
+
+**Attempt accounting.** Each `POST /pair/begin` uses up one of the code's 5
+attempts when it starts, confirmed or not (a SPAKE2 failure on A's own side
+is a 500 and costs nothing), so a session is at most one guess
+and at most 5 sessions exist per code. A session lives 60 s, belongs to the
+client certificate that began it, is confirmed at most once, and disappears
+with the code (new code, cancel, expiry, success, burn). A begin after 5 is
+refused (429); a wrong proof on the last attempt burns the code (429). An
+undecodable message still costs its attempt (400). An unknown or expired
+session, or one begun under another client certificate, is 409. B words a
+403, and a 429 on begin (attempts used up by sessions it did not run), as
+"wrong code, or another device is trying to pair — make a new code".
+
+**Version gate, no fallback.** Mixed versions must not pair, because an old
+typing device sends `HMAC(code, fp_B ‖ fp_M)` to whoever terminates its TLS:
+a man-in-the-middle brute-forces the code offline, then runs a correct
+SPAKE2 with the new device (one attempt) and is stored. 426 never fires in
+that attack, since the attacker speaks protocol 2 to A. Hence 8-digit codes:
+builds before protocol 2 accept exactly 6 digits and refuse an 8-digit code
+before computing any HMAC. A new build refuses a 6-digit code locally ("that
+is a 6-digit code from an older MySpace; update MySpace on the other
+device"). On the wire, `GET /pair` advertises `pairing: 2`
+(`PeerInfo` accepts unknown fields, so older clients ignore it). A new client
+refuses a server without it ("the other device runs an older MySpace; update
+MySpace on the other device to pair") and never falls back to the HMAC
+exchange, which an attacker could otherwise force by hiding the field. A new
+server answers the old `POST /pair` body (no `session`) with 426 and an
+`error` text the old client shows as is; 403/410 are avoided because the old
+client maps them to "wrong code" / "no code shown". Already paired devices are
+unaffected: `/v1` and `PROTOCOL_VERSION = 1` are unchanged. Two old builds
+pairing with each other keep the old weakness.
+
+**Tests.** `sync/spake2.rs` (same code → same key, different code or names →
+different keys, garbage refused), `sync/pairing.rs` (session accounting) and
+`src-tauri/tests/sync_lan.rs`: pairing in both directions, the `pairing: 2`
+advert, a begin without confirm and an undecodable message each count, a
+session cannot be confirmed under another certificate, a relay that does not
+know the code completes neither side (relaying, or guessing on both sides),
+an old client gets 426, a new client refuses a server without `pairing: 2`
+and a 6-digit code. Session expiry is a unit test in `pairing.rs`.
+
+**Not covered.** The private key still lives in `local_meta` (separate
+backlog item). Windows linking of the `aws-lc-sys` SPAKE2 symbols is checked
+by CI only (the bindings for `x86_64-pc-windows-msvc` export them).
