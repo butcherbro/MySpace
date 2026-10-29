@@ -51,6 +51,7 @@ function note(overrides: Partial<NoteCardDto> = {}): NoteCardDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     documentJson: { type: "doc", content: [] },
     plainText: "",
     colorToken: "default",
@@ -67,6 +68,7 @@ function portal(overrides: Partial<BoardPortalDto> = {}): BoardPortalDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     target: {
       id: "board-A",
       boardRevision: 1,

@@ -13,6 +13,7 @@ function portal(overrides: Partial<BoardPortalDto["target"]> = {}): BoardPortalD
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     target: {
       id: "board-1",
       boardRevision: 1,

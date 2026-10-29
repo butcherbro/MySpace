@@ -6,7 +6,8 @@
 use rusqlite::{Connection, Row};
 
 use super::{
-    card_frame, card_group_id, load_board_rows, load_one_row, DetailTable, AFTER_CARD, CARD_COLUMNS,
+    card_created_at, card_frame, card_group_id, load_board_rows, load_one_row, DetailTable,
+    AFTER_CARD, CARD_COLUMNS,
 };
 use crate::domain::card_kind::{
     CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
@@ -37,6 +38,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<CardDto> {
         z_index: row.get(6)?,
         revision: row.get(7)?,
         group_id: card_group_id(row)?,
+        created_at: card_created_at(row)?,
         title: row.get(AFTER_CARD)?,
         color_token: row.get(AFTER_CARD + 1)?,
     }))

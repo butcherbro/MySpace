@@ -331,6 +331,7 @@ fn the_snapshot_shows_the_group_with_kind_group() {
         .find(|c| c["id"] == "g")
         .expect("the group is on the canvas")
         .clone();
+    assert!(wire["createdAt"].as_i64().unwrap() > 0, "{wire}");
     assert_eq!(
         wire,
         serde_json::json!({
@@ -341,6 +342,7 @@ fn the_snapshot_shows_the_group_with_kind_group() {
             "zIndex": 0,
             "revision": 1,
             "groupId": null,
+            "createdAt": wire["createdAt"],
             "title": "Sources",
             "colorToken": "green",
         })
@@ -951,6 +953,7 @@ fn membership_inputs_deserialize_from_the_wire_names() {
             z_index: 0,
             revision: 1,
             group_id: None,
+            created_at: 0,
             title: String::new(),
             color_token: "default".into(),
         }),

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FilesystemAliasDto, FolderPreviewDto } from "../../services/workspace-gateway";
 import { FolderShortcutCard } from "./FolderShortcutCard";
 
-const alias = (overrides: Partial<FilesystemAliasDto> = {}): FilesystemAliasDto => ({ kind: "filesystem_alias", id: "folder-1", boardId: "home", frame: { x: 0, y: 0, width: 360, height: 300 }, zIndex: 0, revision: 1, groupId: null, targetKind: "folder", pathHint: "/Users/me/Video project", displayName: "Video project", originDeviceId: "this-mac", originDeviceName: "This Mac", local: true, ...overrides });
+const alias = (overrides: Partial<FilesystemAliasDto> = {}): FilesystemAliasDto => ({ kind: "filesystem_alias", id: "folder-1", boardId: "home", frame: { x: 0, y: 0, width: 360, height: 300 }, zIndex: 0, revision: 1, groupId: null, createdAt: 0, targetKind: "folder", pathHint: "/Users/me/Video project", displayName: "Video project", originDeviceId: "this-mac", originDeviceName: "This Mac", local: true, ...overrides });
 const ready: FolderPreviewDto = { status: "ready", entries: [{ name: "Footage", kind: "folder", sizeBytes: null, childCount: 6 }, { name: "an-extremely-long-file-name-that-must-truncate.mov", kind: "file", sizeBytes: 1024, childCount: null }, { name: "shots.csv", kind: "file", sizeBytes: 42, childCount: null }], hasMore: true, displayName: "Video project", pathHint: "/Users/me/Video project" };
 
 describe("FolderShortcutCard", () => {

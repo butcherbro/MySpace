@@ -24,7 +24,7 @@ import { useBoardRefresh } from "./app/use-board-refresh";
 import { createStaleRevisionReload } from "./app/stale-revision-reload";
 import { useCreationDrag } from "./app/use-creation-drag";
 import { useTrashController } from "./app/use-trash-controller";
-import { useErrorReports } from "./app/error-reports";
+import { APP_VERSION, useErrorReports } from "./app/error-reports";
 import { CanvasAdapter } from "./canvas/CanvasAdapter";
 import { useCrossBoardDragSession } from "./canvas/use-cross-board-drag";
 import type { CanvasCard, CanvasConnector } from "./canvas/canvas-types";
@@ -42,6 +42,7 @@ import { UpdatePrompt } from "./updates/UpdatePrompt";
 import { useUpdateCheck } from "./updates/use-update-check";
 import { SyncStatusPill } from "./sync/SyncStatusPill";
 import { ContextMenu, type ContextMenuAction } from "./components/context-menu/ContextMenu";
+import { formatCreatedDate } from "./components/context-menu/menu-format";
 import { SearchBar } from "./search/SearchBar";
 import { useSearchController } from "./search/use-search-controller";
 import { useViewportController } from "./state/use-viewport-controller";
@@ -718,29 +719,37 @@ function App() {
             const isFolderAlias = card?.kind === "filesystem_alias";
             const isFileCard = card?.kind === "file";
             const isLinkCard = card?.kind === "embed";
+            const footer = card ? formatCreatedDate(card.createdAt) : undefined;
+            const deleteAction: ContextMenuAction = {
+              id: "delete",
+              label: "Delete",
+              onSelect: handleContextDelete,
+              section: "delete",
+              shortcut: "Delete",
+              danger: true,
+            };
             if (card?.kind === "group") {
               return (
                 <ContextMenu
                   x={contextMenu.x}
                   y={contextMenu.y}
-                  actions={[
-                    ...groupActions.groupMenuActions(card),
-                    { id: "delete", label: "Delete", onSelect: handleContextDelete },
-                  ]}
+                  actions={[...groupActions.groupMenuActions(card), deleteAction]}
                   onClose={() => setContextMenu(null)}
+                  footer={footer}
                 />
               );
             }
             const actions: ContextMenuAction[] = [
-              { id: "copy-link", label: "Copy MySpace Link", onSelect: () => void handleCopyLink() },
+              { id: "copy-link", label: "Copy MySpace Link", onSelect: () => void handleCopyLink(), section: "copy" },
             ];
             if (isLinkCard) {
-              actions.push({ id: "copy-url", label: "Copy URL", onSelect: () => void handleCopySourceUrl() });
+              actions.push({ id: "copy-url", label: "Copy URL", onSelect: () => void handleCopySourceUrl(), section: "copy" });
             }
             if (isImage) {
               actions.push(
-                { id: "copy-file-path", label: "Copy File Path", onSelect: () => void handleCopyFilePath() },
-                { id: "copy-image", label: "Copy Image", onSelect: handleCopySelectionImages },
+                { id: "copy-file-path", label: "Copy File Path", onSelect: () => void handleCopyFilePath(), section: "copy" },
+                // Cmd+C тоже кладёт картинки выделения в системный буфер (handleCopySelection).
+                { id: "copy-image", label: "Copy Image", onSelect: handleCopySelectionImages, section: "copy", shortcut: "Mod+C" },
               );
             }
             if (isFolderAlias && card.local) {
@@ -748,6 +757,7 @@ function App() {
                 id: "show-in-finder",
                 label: "Show in Finder",
                 onSelect: () => handleOpenFolderInFinder(card.id),
+                section: "open",
               });
             }
             if (isFolderAlias && !card.local) {
@@ -755,6 +765,7 @@ function App() {
                 id: "point-to-local-folder",
                 label: "Point to a folder on this computer…",
                 onSelect: () => handlePointFolderShortcutHere(card.id),
+                section: "open",
               });
             }
             if (isFileCard) {
@@ -763,23 +774,25 @@ function App() {
                   id: "open-file",
                   label: "Open",
                   onSelect: () => openFileCard(card.id),
+                  section: "open",
                 },
                 {
                   id: "reveal-file",
                   label: "Reveal in Finder",
                   onSelect: () => revealFileCard(card.id),
+                  section: "open",
                 },
               );
             }
             if (isPortal) {
               actions.push(
-                { id: "duplicate", label: "Duplicate", onSelect: () => handleDuplicatePortal(card as BoardPortalDto) },
-                { id: "create-shortcut", label: "Create Shortcut", onSelect: () => handleCreateShortcut(card as BoardPortalDto) },
-                { id: "set-cover-clipboard", label: "Set Cover from Clipboard", onSelect: () => void handleSetCoverFromClipboard() },
-                { id: "choose-cover", label: "Choose Cover…", onSelect: () => void handleChooseCover() },
+                { id: "duplicate", label: "Duplicate", onSelect: () => handleDuplicatePortal(card as BoardPortalDto), section: "board" },
+                { id: "create-shortcut", label: "Create Shortcut", onSelect: () => handleCreateShortcut(card as BoardPortalDto), section: "board" },
+                { id: "set-cover-clipboard", label: "Set Cover from Clipboard", onSelect: () => void handleSetCoverFromClipboard(), section: "cover" },
+                { id: "choose-cover", label: "Choose Cover…", onSelect: () => void handleChooseCover(), section: "cover" },
               );
               if ((card as BoardPortalDto).target.coverAsset !== null) {
-                actions.push({ id: "remove-cover", label: "Remove Cover", onSelect: () => void handleRemoveCover() });
+                actions.push({ id: "remove-cover", label: "Remove Cover", onSelect: () => void handleRemoveCover(), section: "cover" });
               }
             }
             if (isShortcut && (card as BoardShortcutDto).target !== null) {
@@ -787,18 +800,26 @@ function App() {
                 id: "create-shortcut",
                 label: "Create Shortcut",
                 onSelect: () => handleCreateShortcut(card as BoardShortcutDto),
+                section: "board",
               });
             }
             if (state.selection.length > 0) {
-              actions.push({ id: "group", label: "Group", onSelect: () => void groupActions.groupSelection() });
+              actions.push({
+                id: "group",
+                label: "Group",
+                onSelect: () => void groupActions.groupSelection(),
+                section: "arrange",
+                shortcut: "Mod+G",
+              });
             }
-            actions.push({ id: "delete", label: "Delete", onSelect: handleContextDelete });
+            actions.push(deleteAction);
             return (
               <ContextMenu
                 x={contextMenu.x}
                 y={contextMenu.y}
                 actions={actions}
                 onClose={() => setContextMenu(null)}
+                footer={footer}
               />
             );
           })()}
@@ -820,20 +841,28 @@ function App() {
                 id: "add-note",
                 label: "Add Note",
                 onSelect: () => void handleCreateNote({ x: paneContextMenu.flowX, y: paneContextMenu.flowY }),
+                section: "add",
               },
               {
                 id: "add-board",
                 label: "Add Board",
                 onSelect: () =>
                   void handleCreateChildBoard({ x: paneContextMenu.flowX, y: paneContextMenu.flowY }),
+                section: "add",
               },
               {
                 id: "add-folder-shortcut",
                 label: "Add Folder Shortcut…",
                 onSelect: () =>
                   void handleAddFolderShortcutViaDialog(paneContextMenu.flowX, paneContextMenu.flowY),
+                section: "add",
               },
-              { id: "copy-board-link", label: "Copy MySpace Link", onSelect: () => void handleCopyBoardLink() },
+              {
+                id: "copy-board-link",
+                label: "Copy MySpace Link",
+                onSelect: () => void handleCopyBoardLink(),
+                section: "copy",
+              },
             ]}
             onClose={() => setPaneContextMenu(null)}
             testId="pane-context-menu"
@@ -858,6 +887,7 @@ function App() {
             onRestoreFromBackup={() => setRestoreDialogOpen(true)}
             onOpenDevices={() => setDevicesDialogOpen(true)}
             onCheckForUpdates={updates.supported ? () => void updates.checkNow() : undefined}
+            appVersion={APP_VERSION}
           />
         )}
         <UpdatePrompt controller={updates} />

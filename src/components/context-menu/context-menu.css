@@ -1,28 +1,77 @@
 .context-menu {
   position: fixed;
   z-index: 1000;
-  min-width: 140px;
+  /* Ширина по содержимому, а не по месту до края окна: иначе у правого края
+     меню сжимается до замера и подписи обрезаются многоточием. */
+  width: max-content;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   background: var(--paper-raised);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--radius-menu);
   box-shadow: var(--shadow-menu);
-  padding: 4px;
+  padding: 6px;
+  font: 400 13px/1.3 var(--font-ui);
+  color: var(--ink-secondary);
 }
 
 .context-menu__item {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   width: 100%;
+  min-height: 28px;
+  padding: 4px 10px;
   text-align: left;
   border: none;
   background: none;
-  padding: 8px 12px;
   border-radius: var(--radius-control);
   cursor: pointer;
+  font: inherit;
   color: var(--ink);
 }
 
 .context-menu__item:hover {
   background: color-mix(in srgb, var(--desk) 60%, transparent);
+}
+
+.context-menu__item--danger {
+  color: var(--danger);
+}
+
+.context-menu__item--danger:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.context-menu__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-menu__shortcut {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  font: 500 11px/1.4 var(--font-ui);
+  color: var(--ink-tertiary);
+}
+
+.context-menu__divider {
+  height: 1px;
+  margin: 4px 4px;
+  background: var(--edge-subtle);
+}
+
+.context-menu__footer {
+  margin: 0;
+  padding: 4px 10px 2px;
+  font: 400 11px/1.4 var(--font-ui);
+  color: var(--ink-tertiary);
 }
 
 .context-menu__backdrop {

@@ -13,6 +13,7 @@ function shortcut(overrides: Partial<NonNullable<BoardShortcutDto["target"]>> = 
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     targetBoardId: "board-1",
     target: {
       id: "board-1",
@@ -35,6 +36,7 @@ function brokenShortcut(): BoardShortcutDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     targetBoardId: "board-gone",
     target: null,
   };

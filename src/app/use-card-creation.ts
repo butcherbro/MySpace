@@ -104,6 +104,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
         zIndex: notes.length,
         revision: 1,
         groupId: null,
+        createdAt: Date.now(),
         documentJson,
         plainText,
         colorToken: "default",
@@ -167,6 +168,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
         zIndex: 0,
         revision: 1,
         groupId: null,
+        createdAt: Date.now(),
         target: {
           id: boardId,
           boardRevision: 1,
@@ -218,6 +220,7 @@ export function useCardCreation(deps: CardCreationDeps): CardCreationController 
           zIndex: cardsRef.current.length,
           revision: 1,
           groupId: null,
+          createdAt: Date.now(),
           asset,
           captionJson: plainTextToDocument(""),
           captionPlainText: "",

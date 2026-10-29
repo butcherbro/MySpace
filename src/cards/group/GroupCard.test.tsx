@@ -11,6 +11,7 @@ const group: GroupCardDto = {
   zIndex: 0,
   revision: 1,
   groupId: null,
+  createdAt: 0,
   title: "Проект",
   colorToken: "pink",
 };

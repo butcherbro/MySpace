@@ -42,6 +42,7 @@ function makeImage(overrides: Partial<ImageCardDto> = {}): ImageCardDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     asset: {
       id: "asset-1",
       fileName: "photo.png",

@@ -115,6 +115,9 @@ pub struct NoteCardDto {
     /// The group the card belongs to (ADR-0013), normalized by the loader:
     /// `None` unless it is a live group on the same board.
     pub group_id: Option<String>,
+    /// `cards.created_at`, Unix millis (context-menu footer). Synced rows keep
+    /// the origin device's value, so every device shows the same date.
+    pub created_at: i64,
     pub document_json: Value,
     pub plain_text: String,
     /// Semantic background-color preset id (`default`, `yellow`, …).
@@ -138,6 +141,9 @@ pub struct BoardPortalDto {
     /// The group the card belongs to (ADR-0013), normalized by the loader:
     /// `None` unless it is a live group on the same board.
     pub group_id: Option<String>,
+    /// `cards.created_at`, Unix millis (context-menu footer). Synced rows keep
+    /// the origin device's value, so every device shows the same date.
+    pub created_at: i64,
     pub target: PortalTarget,
 }
 
@@ -153,6 +159,9 @@ pub struct ImageCardDto {
     /// The group the card belongs to (ADR-0013), normalized by the loader:
     /// `None` unless it is a live group on the same board.
     pub group_id: Option<String>,
+    /// `cards.created_at`, Unix millis (context-menu footer). Synced rows keep
+    /// the origin device's value, so every device shows the same date.
+    pub created_at: i64,
     pub asset: AssetDto,
     pub caption_json: Value,
     pub caption_plain_text: String,
@@ -176,6 +185,9 @@ pub struct EmbedCardDto {
     /// The group the card belongs to (ADR-0013), normalized by the loader:
     /// `None` unless it is a live group on the same board.
     pub group_id: Option<String>,
+    /// `cards.created_at`, Unix millis (context-menu footer). Synced rows keep
+    /// the origin device's value, so every device shows the same date.
+    pub created_at: i64,
     pub source_url: String,
     pub display_url: String,
     pub site_name: Option<String>,
@@ -215,6 +227,9 @@ pub struct FilesystemAliasDto {
     /// The group the card belongs to (ADR-0013), normalized by the loader:
     /// `None` unless it is a live group on the same board.
     pub group_id: Option<String>,
+    /// `cards.created_at`, Unix millis (context-menu footer). Synced rows keep
+    /// the origin device's value, so every device shows the same date.
+    pub created_at: i64,
     pub target_kind: String,
     pub path_hint: String,
     pub display_name: String,
@@ -255,6 +270,9 @@ pub struct BoardShortcutDto {
     /// The group the card belongs to (ADR-0013), normalized by the loader:
     /// `None` unless it is a live group on the same board.
     pub group_id: Option<String>,
+    /// `cards.created_at`, Unix millis (context-menu footer). Synced rows keep
+    /// the origin device's value, so every device shows the same date.
+    pub created_at: i64,
     pub target_board_id: String,
     pub target: Option<BoardShortcutTarget>,
 }
@@ -285,6 +303,9 @@ pub struct GroupCardDto {
     /// The group the card belongs to (ADR-0013), normalized by the loader:
     /// `None` unless it is a live group on the same board.
     pub group_id: Option<String>,
+    /// `cards.created_at`, Unix millis (context-menu footer). Synced rows keep
+    /// the origin device's value, so every device shows the same date.
+    pub created_at: i64,
     /// `''` is a valid, untitled group; the UI renders the fallback label.
     pub title: String,
     /// Note palette preset id (`default`, `yellow`, …).
@@ -400,6 +421,9 @@ pub struct FileCardDto {
     /// The group the card belongs to (ADR-0013), normalized by the loader:
     /// `None` unless it is a live group on the same board.
     pub group_id: Option<String>,
+    /// `cards.created_at`, Unix millis (context-menu footer). Synced rows keep
+    /// the origin device's value, so every device shows the same date.
+    pub created_at: i64,
     pub asset: AssetDto,
     pub preview_text: String,
     /// Generated thumbnail (PDF/office/HTML) when available.

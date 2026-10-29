@@ -5,8 +5,8 @@
 use rusqlite::{params, Connection, Row};
 
 use super::{
-    asset_at, asset_columns, card_frame, card_group_id, load_board_rows, load_one_row, DetailTable,
-    AFTER_CARD, CARD_COLUMNS,
+    asset_at, asset_columns, card_created_at, card_frame, card_group_id, load_board_rows,
+    load_one_row, DetailTable, AFTER_CARD, CARD_COLUMNS,
 };
 use crate::domain::card_kind::{
     CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
@@ -55,6 +55,7 @@ fn map_portal(row: &Row<'_>) -> rusqlite::Result<BoardPortalDto> {
         z_index: row.get(6)?,
         revision: row.get(7)?,
         group_id: card_group_id(row)?,
+        created_at: card_created_at(row)?,
         target: PortalTarget {
             id: row.get(p)?,
             board_revision: row.get(p + 1)?,
