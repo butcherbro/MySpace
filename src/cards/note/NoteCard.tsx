@@ -159,6 +159,10 @@ export const NoteCard = memo(function NoteCard({
     contentHeightRef.current = el.scrollHeight;
     if (!fitsContent) return;
     if (previous !== null && el.scrollHeight <= previous + CONTENT_GROWTH_TOLERANCE_PX) return;
+    // Текст уже не помещался до этой правки — карточку сжали вручную ниже
+    // содержимого. Растить нельзя: одна напечатанная буква вернула бы весь
+    // скрытый текст. Он прокручивается внутри, пока идёт правка.
+    if (previous !== null && previous > el.clientHeight + CONTENT_GROWTH_TOLERANCE_PX) return;
     const needed = autoGrowTarget(appliedHeight, el.scrollHeight - el.clientHeight);
     if (needed === null) return;
     setAutoGrowHeight((prev) => (prev === null || needed > prev ? needed : prev));
