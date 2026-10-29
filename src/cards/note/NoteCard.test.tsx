@@ -249,6 +249,39 @@ describe("NoteCard", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a manually shrunk note short when its text is edited", () => {
+    vi.useFakeTimers();
+    const onResize = vi.fn();
+    const props = { editing: true, onDeactivate: vi.fn(), onUpdate: vi.fn().mockResolvedValue(undefined), onContextMenu: vi.fn(), onResize };
+    const { rerender } = render(<NoteCard note={makeNote()} {...props} />);
+
+    // The note grows to fit 220px of text, as in the tests above.
+    const card = screen.getByTestId("note-card-body");
+    Object.defineProperty(card, "clientHeight", { configurable: true, value: 80 });
+    Object.defineProperty(card, "scrollHeight", { configurable: true, value: 220 });
+    act(() => lastEditorProps()?.onChange(changedDoc));
+    act(() => vi.advanceTimersByTime(250));
+    Object.defineProperty(card, "clientHeight", { configurable: true, value: 220 });
+    rerender(<NoteCard note={makeNote({ frame: { x: 0, y: 0, width: 200, height: 220 } })} {...props} />);
+
+    // Then the user drags it down to 100px, below its content.
+    const handle = screen.getByTestId("note-resize");
+    (handle as unknown as { setPointerCapture: () => void }).setPointerCapture = vi.fn();
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 220 });
+    fireEvent.pointerMove(window, { clientX: 0, clientY: 100 });
+    fireEvent.pointerUp(window);
+    Object.defineProperty(card, "clientHeight", { configurable: true, value: 100 });
+    rerender(<NoteCard note={makeNote({ frame: { x: 0, y: 0, width: 200, height: 100 } })} {...props} />);
+    onResize.mockClear();
+
+    // Typing adds a line: the text grows, but it already did not fit.
+    Object.defineProperty(card, "scrollHeight", { configurable: true, value: 240 });
+    act(() => lastEditorProps()?.onChange({ ...changedDoc, content: [...(changedDoc.content ?? []), { type: "paragraph" }] }));
+    act(() => vi.advanceTimersByTime(1000));
+    expect(onResize).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it("adopts an external document change only while clean", async () => {
     vi.useFakeTimers();
     const onUpdate = vi.fn().mockResolvedValue(undefined);
