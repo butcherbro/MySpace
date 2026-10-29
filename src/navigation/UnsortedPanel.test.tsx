@@ -13,6 +13,7 @@ function note(id: string, text = "hello"): CardDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     documentJson: { type: "doc" },
     plainText: text,
     colorToken: "default",
@@ -28,6 +29,7 @@ function folder(id: string): CardDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: 0,
     targetKind: "folder",
     pathHint: "/Volumes/Studio/Video project",
     displayName: "Video project",
@@ -65,6 +67,7 @@ describe("UnsortedPanel", () => {
       zIndex: 0,
       revision: 1,
       groupId: null,
+      createdAt: 0,
       title,
       colorToken: "default",
     });

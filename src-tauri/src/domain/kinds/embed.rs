@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension, Row};
 
 use super::{
-    asset_at, asset_columns, card_frame, card_group_id, document_at, load_board_rows, load_one_row,
-    DetailTable, AFTER_CARD, ASSET_WIDTH, CARD_COLUMNS,
+    asset_at, asset_columns, card_created_at, card_frame, card_group_id, document_at,
+    load_board_rows, load_one_row, DetailTable, AFTER_CARD, ASSET_WIDTH, CARD_COLUMNS,
 };
 use crate::domain::card_kind::{
     CardKind, CardKindHandler, CopyContext, SearchCandidate, SearchHit,
@@ -67,6 +67,7 @@ fn map_embed(row: &Row<'_>) -> rusqlite::Result<EmbedCardDto> {
         z_index: row.get(6)?,
         revision: row.get(7)?,
         group_id: card_group_id(row)?,
+        created_at: card_created_at(row)?,
         source_url: row.get(e)?,
         display_url: row.get(e + 1)?,
         site_name: row.get(e + 2)?,

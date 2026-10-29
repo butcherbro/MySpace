@@ -118,6 +118,37 @@ describe("useWorkspaceShortcuts", () => {
     expect(deps.handleUngroupSelection).toHaveBeenCalledTimes(1);
   });
 
+  it("works on the Russian layout by physical key: Cmd+п groups, Cmd+Shift+П ungroups, Cmd+с copies", () => {
+    const deps = makeDeps({ handleGroupSelection: vi.fn(async () => {}), handleUngroupSelection: vi.fn(async () => {}) });
+    renderHook(() => useWorkspaceShortcuts(deps));
+
+    act(() => {
+      dispatchKeyDown({ key: "п", code: "KeyG", metaKey: true });
+      dispatchKeyDown({ key: "П", code: "KeyG", metaKey: true, shiftKey: true });
+      dispatchKeyDown({ key: "с", code: "KeyC", ctrlKey: true });
+      dispatchKeyDown({ key: "я", code: "KeyZ", metaKey: true });
+      dispatchKeyDown({ key: "х", code: "BracketLeft", metaKey: true });
+    });
+
+    expect(deps.handleGroupSelection).toHaveBeenCalledTimes(1);
+    expect(deps.handleUngroupSelection).toHaveBeenCalledTimes(1);
+    expect(deps.handleCopySelection).toHaveBeenCalledTimes(1);
+    expect(deps.handleWorkspaceUndo).toHaveBeenCalledTimes(1);
+    expect(deps.handleNavigateBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("on a Latin layout the character wins over the physical key (AZERTY Cmd+Z sits on KeyW)", () => {
+    const deps = makeDeps();
+    renderHook(() => useWorkspaceShortcuts(deps));
+
+    act(() => {
+      dispatchKeyDown({ key: "z", code: "KeyW", metaKey: true });
+      dispatchKeyDown({ key: "w", code: "KeyZ", metaKey: true });
+    });
+
+    expect(deps.handleWorkspaceUndo).toHaveBeenCalledTimes(1);
+  });
+
   it("Cmd+G does nothing while a text field has focus", () => {
     const deps = makeDeps({ handleGroupSelection: vi.fn(async () => {}) });
     renderHook(() => useWorkspaceShortcuts(deps));

@@ -158,17 +158,41 @@ export function useConnectorActions(deps: ConnectorActionsDeps): ConnectorAction
           id: `color-${option.id}`,
           label: CONNECTOR_COLOR_LABELS[option.id],
           onSelect: () => update(menuConnector, { colorToken: option.id }),
+          section: "color",
         })),
-        { id: "arrow-end", label: "Arrow at end", onSelect: () => update(menuConnector, { arrowEnds: "end" }) },
-        { id: "arrow-both", label: "Arrows both ends", onSelect: () => update(menuConnector, { arrowEnds: "both" }) },
-        { id: "arrow-none", label: "No arrows", onSelect: () => update(menuConnector, { arrowEnds: "none" }) },
+        {
+          id: "arrow-end",
+          label: "Arrow at end",
+          onSelect: () => update(menuConnector, { arrowEnds: "end" }),
+          section: "arrows",
+        },
+        {
+          id: "arrow-both",
+          label: "Arrows both ends",
+          onSelect: () => update(menuConnector, { arrowEnds: "both" }),
+          section: "arrows",
+        },
+        {
+          id: "arrow-none",
+          label: "No arrows",
+          onSelect: () => update(menuConnector, { arrowEnds: "none" }),
+          section: "arrows",
+        },
         {
           id: "reverse",
           label: "Reverse direction",
           onSelect: () =>
             update(menuConnector, { fromCardId: menuConnector.toCardId, toCardId: menuConnector.fromCardId }),
+          section: "arrows",
         },
-        { id: "delete-connector", label: "Delete connector", onSelect: () => void remove([menuConnector.id]) },
+        // Без подсказки Delete: правый клик не выделяет связь, клавиша её не удалит.
+        {
+          id: "delete-connector",
+          label: "Delete connector",
+          onSelect: () => void remove([menuConnector.id]),
+          section: "delete",
+          danger: true,
+        },
       ]
     : [];
 

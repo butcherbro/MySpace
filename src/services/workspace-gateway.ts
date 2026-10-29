@@ -55,6 +55,8 @@ export interface NoteCardDto {
   revision: number;
   /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
   groupId: string | null;
+  /** `cards.created_at`, Unix ms (подвал контекстного меню). Приходит с устройства-автора. */
+  createdAt: number;
   documentJson: unknown;
   plainText: string;
   /** Semantic background-color preset id (`default`, `yellow`, …). */
@@ -77,6 +79,8 @@ export interface BoardPortalDto {
   revision: number;
   /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
   groupId: string | null;
+  /** `cards.created_at`, Unix ms (подвал контекстного меню). Приходит с устройства-автора. */
+  createdAt: number;
   target: {
     id: string;
     boardRevision: number;
@@ -106,6 +110,8 @@ export interface BoardShortcutDto {
   revision: number;
   /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
   groupId: string | null;
+  /** `cards.created_at`, Unix ms (подвал контекстного меню). Приходит с устройства-автора. */
+  createdAt: number;
   targetBoardId: string;
   target: {
     id: string;
@@ -131,6 +137,8 @@ export interface GroupCardDto {
   revision: number;
   /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
   groupId: string | null;
+  /** `cards.created_at`, Unix ms (подвал контекстного меню). Приходит с устройства-автора. */
+  createdAt: number;
   /** '' допустим: UI показывает «Группа без названия». */
   title: string;
   /** Id пресета цвета заметки ('default' | 'yellow' | 'pink' | …). */
@@ -198,6 +206,8 @@ export interface ImageCardDto {
   revision: number;
   /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
   groupId: string | null;
+  /** `cards.created_at`, Unix ms (подвал контекстного меню). Приходит с устройства-автора. */
+  createdAt: number;
   asset: AssetDto;
   captionJson: unknown;
   captionPlainText: string;
@@ -225,6 +235,8 @@ export interface EmbedCardDto {
   revision: number;
   /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
   groupId: string | null;
+  /** `cards.created_at`, Unix ms (подвал контекстного меню). Приходит с устройства-автора. */
+  createdAt: number;
   sourceUrl: string;
   displayUrl: string;
   siteName: string | null;
@@ -257,6 +269,8 @@ export interface FilesystemAliasDto {
   revision: number;
   /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
   groupId: string | null;
+  /** `cards.created_at`, Unix ms (подвал контекстного меню). Приходит с устройства-автора. */
+  createdAt: number;
   targetKind: "folder" | "file";
   /**
    * Display path only, as written by the origin device; bookmark bytes remain
@@ -292,6 +306,8 @@ export interface FileCardDto {
   revision: number;
   /** Группа, в которой карточка состоит (ADR-0013, хранимый состав); `null` — ни в какой. */
   groupId: string | null;
+  /** `cards.created_at`, Unix ms (подвал контекстного меню). Приходит с устройства-автора. */
+  createdAt: number;
   asset: AssetDto;
   previewText: string;
   /** Generated thumbnail (PDF/office/HTML) when available. */

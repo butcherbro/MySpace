@@ -911,6 +911,7 @@ describe("CanvasAdapter", () => {
       zIndex: 0,
       revision: 1,
       groupId: null,
+      createdAt: 0,
       asset: {
         id: "asset-1",
         fileName: "shot.png",

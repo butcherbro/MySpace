@@ -26,6 +26,19 @@ export interface WorkspaceShortcutsDeps {
   closeTrashDrawer: () => void;
 }
 
+/**
+ * Whether `e` is the shortcut key `char` (physical key `code` on a US layout).
+ *
+ * Латинскую раскладку (QWERTY, AZERTY, Dvorak) узнаём по символу, как меню
+ * macOS. На нелатинской (русская: Cmd+G даёт «п», Cmd+[ — «х») символ не
+ * совпадёт никогда, поэтому там — по физической клавише.
+ */
+export function isShortcutKey(e: Pick<KeyboardEvent, "key" | "code">, char: string, code: string): boolean {
+  if (e.key.toLowerCase() === char) return true;
+  const printableAscii = /^[\x20-\x7e]$/.test(e.key);
+  return !printableAscii && e.code === code;
+}
+
 export function useWorkspaceShortcuts(deps: WorkspaceShortcutsDeps): void {
   const {
     handleNavigateBack,
@@ -79,13 +92,13 @@ export function useWorkspaceShortcuts(deps: WorkspaceShortcutsDeps): void {
         return;
       }
       if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key === "[") {
+      if (isShortcutKey(e, "[", "BracketLeft")) {
         e.preventDefault();
         handleNavigateBack();
-      } else if (e.key === "]") {
+      } else if (isShortcutKey(e, "]", "BracketRight")) {
         e.preventDefault();
         handleNavigateForward();
-      } else if (e.key.toLowerCase() === "z") {
+      } else if (isShortcutKey(e, "z", "KeyZ")) {
         if (editingText) return;
         e.preventDefault();
         if (e.shiftKey) {
@@ -93,10 +106,10 @@ export function useWorkspaceShortcuts(deps: WorkspaceShortcutsDeps): void {
         } else {
           void handleWorkspaceUndo();
         }
-      } else if (e.key.toLowerCase() === "c") {
+      } else if (isShortcutKey(e, "c", "KeyC")) {
         e.preventDefault();
         handleCopySelection();
-      } else if (e.key.toLowerCase() === "g") {
+      } else if (isShortcutKey(e, "g", "KeyG")) {
         if (editingText) return;
         e.preventDefault();
         if (e.repeat) return;

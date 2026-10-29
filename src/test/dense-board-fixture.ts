@@ -8,6 +8,8 @@ import type {
   NoteCardDto,
 } from "../services/workspace-gateway";
 
+const FIXTURE_CREATED_AT = Date.UTC(2025, 7, 24, 10, 0);
+
 // Test-only deterministic dense board. Activated only via the browser-test
 // `?fixture=dense` query parameter — never seeded into real user data.
 
@@ -30,6 +32,7 @@ function portal(id: string, x: number, y: number, color: string, symbol: string 
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: FIXTURE_CREATED_AT,
     target: {
       id: `board-${id}`,
       boardRevision: 1,
@@ -52,6 +55,7 @@ function note(id: string, x: number, y: number, text: string): NoteCardDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: FIXTURE_CREATED_AT,
     documentJson: { type: "doc" },
     plainText: text,
     colorToken: "default",
@@ -67,6 +71,7 @@ function image(id: string, x: number, y: number, caption: string): ImageCardDto 
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: FIXTURE_CREATED_AT,
     asset: fakeAsset,
     captionJson: { type: "doc" },
     captionPlainText: caption,
@@ -82,6 +87,7 @@ function folderAlias(id: string, x: number, y: number, pathHint: string, display
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: FIXTURE_CREATED_AT,
     targetKind: "folder",
     pathHint,
     displayName,
@@ -100,6 +106,7 @@ function link(id: string, x: number, y: number, title: string): EmbedCardDto {
     zIndex: 0,
     revision: 1,
     groupId: null,
+    createdAt: FIXTURE_CREATED_AT,
     sourceUrl: "https://example.com",
     displayUrl: "example.com",
     siteName: "Example",

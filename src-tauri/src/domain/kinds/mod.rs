@@ -44,8 +44,8 @@ pub fn handler(kind: CardKind) -> &'static dyn CardKindHandler {
     }
 }
 
-/// The nine `cards` columns every projection starts with (indices 0..=8);
-/// read back by [`card_frame`], [`card_group_id`] and the
+/// The ten `cards` columns every projection starts with (indices 0..=9);
+/// read back by [`card_frame`], [`card_group_id`], [`card_created_at`] and the
 /// `id/board_id/z_index/revision` getters.
 ///
 /// Колонка 8 — `group_id` в нормализованном виде (ADR-0013): хранимое значение
@@ -59,10 +59,11 @@ pub(crate) const CARD_COLUMNS: &str =
     "c.id, c.board_id, c.x, c.y, c.width, c.height, c.z_index, c.revision,
      (SELECT grp.id FROM cards grp
       WHERE c.unsorted = 0 AND grp.id = c.group_id AND grp.kind = 'group'
-        AND grp.board_id = c.board_id AND grp.deleted_at IS NULL AND grp.unsorted = 0) AS group_id";
+        AND grp.board_id = c.board_id AND grp.deleted_at IS NULL AND grp.unsorted = 0) AS group_id,
+     c.created_at";
 
 /// Index of the first column after [`CARD_COLUMNS`].
-pub(crate) const AFTER_CARD: usize = 9;
+pub(crate) const AFTER_CARD: usize = 10;
 
 /// Row filter for a board's cards (`?1` board id, `?2` unsorted flag).
 const BOARD_FILTER: &str =
@@ -84,6 +85,11 @@ pub(crate) fn card_frame(row: &Row<'_>) -> rusqlite::Result<Frame> {
 /// The normalized `group_id` at [`CARD_COLUMNS`] position 8.
 pub(crate) fn card_group_id(row: &Row<'_>) -> rusqlite::Result<Option<String>> {
     row.get(8)
+}
+
+/// `cards.created_at` (Unix millis) at [`CARD_COLUMNS`] position 9.
+pub(crate) fn card_created_at(row: &Row<'_>) -> rusqlite::Result<i64> {
+    row.get(9)
 }
 
 /// Eight asset columns for the joined `assets` alias, in the order

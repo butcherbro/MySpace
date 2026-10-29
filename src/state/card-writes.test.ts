@@ -14,6 +14,7 @@ function note(id: string, revision: number): NoteCardDto {
     zIndex: 0,
     revision,
     groupId: null,
+    createdAt: 0,
     documentJson: { type: "doc" },
     plainText: "",
     colorToken: "default",

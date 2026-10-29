@@ -33,6 +33,7 @@ import {
 import { connectorsToEdgeLikes } from "./connector-mapping";
 import { descendantGroupIds, groupForDrop, groupMembers } from "./group-membership";
 import { ConnectorEdge, type ConnectorEdgeType } from "./ConnectorEdge";
+import { isShortcutKey } from "../app/use-workspace-shortcuts";
 import type {
   CanvasCard,
   CanvasConnector,
@@ -837,7 +838,7 @@ export function CanvasAdapter({
   };
 
   const handleCanvasKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+    if ((e.metaKey || e.ctrlKey) && isShortcutKey(e, "a", "KeyA")) {
       const target = e.target as HTMLElement;
       const isEditing = target.tagName === "TEXTAREA" || target.isContentEditable;
       if (!isEditing) {
