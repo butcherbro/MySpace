@@ -31,7 +31,7 @@ npm run test:e2e        # Playwright против mock-бэкенда в бра�
 ## Запуск
 - Dev: `npm run tauri dev` (горячая перезагрузка фронта, Rust пересобирается при изменениях).
 - Браузер без Rust: `npm run dev` → http://localhost:1420, работает mock-бэкенд; фикстуры через `?fixture=...`
-  (`dense-board`, `corrupt-note`, `foreign-shortcut`, `sync-peers`, `startup-failure`).
+  (`dense-board`, `corrupt-note`, `foreign-shortcut`, `sync-peers`, `startup-failure`, `typography`).
 - Данные приложения: macOS `~/Library/Application Support/com.bro.myspace`, Windows `%APPDATA%\com.bro.myspace`.
   Логи — `logs/myspace.log.<YYYY-MM-DD>` там же (JSON, по дню на файл). Dev и установленная версия делят одну базу.
 

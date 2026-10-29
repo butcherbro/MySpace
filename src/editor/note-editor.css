@@ -8,7 +8,7 @@
   font-size: var(--text-note-size);
   line-height: var(--text-note-leading);
   letter-spacing: var(--text-note-tracking);
-  color: var(--ink);
+  color: var(--text-note-color);
   outline: none;
 }
 
@@ -24,7 +24,7 @@
 }
 
 .note-editor .ProseMirror p {
-  margin: 0 0 0.6em;
+  margin: 0 0 var(--text-note-paragraph-gap);
 }
 
 .note-editor .ProseMirror > :last-child {
