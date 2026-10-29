@@ -2058,7 +2058,7 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
 
   // ---- device sync (ADR-0011 S3) ----------------------------------------
   // In-memory: `?fixture=sync-peers` shows two devices "on the network";
-  // pairing succeeds with the code `123456`; `syncNow` stamps lastSyncAt.
+  // pairing succeeds with the code `12345678`; `syncNow` stamps lastSyncAt.
 
   private syncPeers: SyncPeerState[] = [];
   private syncStateListeners = new Set<(state: SyncState) => void>();
@@ -2109,8 +2109,18 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
   }
 
   syncPairWith(input: PairWithInput): Promise<SyncPeerState> {
-    if (input.code.replace(/\s|-/g, "") !== MOCK_PAIRING_CODE) {
-      return Promise.reject({ code: "sync", message: "wrong code" });
+    const digits = input.code.replace(/\s|-/g, "");
+    if (digits.length === 6) {
+      return Promise.reject({
+        code: "constraint_violation",
+        message: "that is a 6-digit code from an older MySpace; update MySpace on the other device to pair",
+      });
+    }
+    if (digits !== MOCK_PAIRING_CODE) {
+      return Promise.reject({
+        code: "sync",
+        message: "wrong code, or another device is trying to pair — make a new code on the other device",
+      });
     }
     const found = input.deviceId ? MOCK_DISCOVERED.find((d) => d.deviceId === input.deviceId) : undefined;
     if (!found && !input.address) {
@@ -2186,7 +2196,7 @@ function fixtureParam(): string | null {
 }
 
 /** The code that pairs in the mock (ADR-0011 S3). */
-export const MOCK_PAIRING_CODE = "123456";
+export const MOCK_PAIRING_CODE = "12345678";
 
 /** Devices "on the network" under `?fixture=sync-peers`. */
 const MOCK_DISCOVERED: DiscoveredDevice[] = [

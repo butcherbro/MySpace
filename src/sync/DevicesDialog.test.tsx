@@ -35,7 +35,7 @@ describe("DevicesDialog", () => {
   it("shows a pairing code in large type after 'Pair a device'", async () => {
     const { user } = setup();
     await user.click(await screen.findByTestId("devices-begin-pairing"));
-    expect(await screen.findByTestId("devices-pairing-code")).toHaveTextContent("123 456");
+    expect(await screen.findByTestId("devices-pairing-code")).toHaveTextContent("12 345 678");
     expect(screen.getByTestId("devices-pairing")).toHaveTextContent(/Expires in [45]:\d\d/);
     await user.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.queryByTestId("devices-pairing-code")).not.toBeInTheDocument();
@@ -48,12 +48,12 @@ describe("DevicesDialog", () => {
     )!;
     await user.click(within(row).getByTestId("discovered-pair"));
     const input = within(row).getByTestId("pair-code-input");
-    await user.type(input, "999999");
+    await user.type(input, "99999999");
     await user.click(within(row).getByTestId("pair-submit"));
     expect(await screen.findByTestId("devices-error")).toHaveTextContent("wrong code");
 
     await user.clear(input);
-    await user.type(input, "123 456");
+    await user.type(input, "12 345 678");
     await user.click(within(row).getByTestId("pair-submit"));
     const paired = await screen.findByTestId("paired-row");
     expect(paired).toHaveTextContent("Windows PC");
@@ -69,7 +69,7 @@ describe("DevicesDialog", () => {
 
   it("'Sync now' stamps the last sync time and 'Unpair' removes the device", async () => {
     const { gateway, user } = setup();
-    await gateway.syncPairWith({ deviceId: "mock-studio-mac", code: "123456" });
+    await gateway.syncPairWith({ deviceId: "mock-studio-mac", code: "12345678" });
     const paired = await screen.findByTestId("paired-row");
     await user.click(within(paired).getByTestId("paired-sync-now"));
     await waitFor(() =>
@@ -86,9 +86,25 @@ describe("DevicesDialog", () => {
     await user.type(await screen.findByTestId("devices-address-input"), "10.0.0.5:52010");
     const submit = screen.getByTestId("devices-address-submit");
     expect(submit).toBeDisabled();
-    await user.type(screen.getByTestId("devices-address-code"), "123456");
+    await user.type(screen.getByTestId("devices-address-code"), "12345678");
     await user.click(submit);
     expect(await screen.findByTestId("paired-row")).toHaveTextContent("10.0.0.5:52010");
+  });
+
+  it("sends a 6-digit (older MySpace) code and shows the update hint", async () => {
+    const { user } = setup();
+    await user.type(await screen.findByTestId("devices-address-input"), "10.0.0.5:52010");
+    const code = screen.getByTestId("devices-address-code");
+    const submit = screen.getByTestId("devices-address-submit");
+    await user.type(code, "12345");
+    expect(submit).toBeDisabled();
+    await user.type(code, "6");
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    expect(await screen.findByTestId("devices-error")).toHaveTextContent(
+      "update MySpace on the other device",
+    );
+    expect(screen.queryByTestId("paired-row")).not.toBeInTheDocument();
   });
 
   it("renames this device inline", async () => {

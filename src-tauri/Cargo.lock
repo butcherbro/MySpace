@@ -2645,6 +2645,7 @@ name = "myspace"
 version = "0.3.0"
 dependencies = [
  "arboard",
+ "aws-lc-sys",
  "dunce",
  "gethostname",
  "hmac",
@@ -2680,6 +2681,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

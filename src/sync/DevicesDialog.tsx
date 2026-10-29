@@ -7,6 +7,7 @@ import type {
   WorkspaceGateway,
 } from "../services/workspace-gateway";
 import { errorMessage } from "../services/error-message";
+import { canSubmitCode, formatCode } from "./pairing-code";
 import { formatLastSync, syncErrorText, useSyncState } from "./use-sync-state";
 import "./devices-dialog.css";
 
@@ -22,10 +23,6 @@ function describeError(e: unknown): string {
   return syncErrorText(errorMessage(e));
 }
 
-function formatCode(code: string): string {
-  return code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
-}
-
 function formatRemaining(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
@@ -33,7 +30,7 @@ function formatRemaining(ms: number): string {
 
 /**
  * Devices and LAN sync (ADR-0011 S3): this device's name, "Pair a device"
- * (shows a 6-digit code for the other device to type), devices seen on the
+ * (shows an 8-digit code for the other device to type), devices seen on the
  * network, paired devices with their sync status, and pairing by address.
  */
 export function DevicesDialog({ gateway, onClose }: DevicesDialogProps) {
@@ -334,8 +331,8 @@ export function DevicesDialog({ gateway, onClose }: DevicesDialogProps) {
                       data-testid="pair-code-input"
                       inputMode="numeric"
                       autoComplete="off"
-                      placeholder="123 456"
-                      maxLength={7}
+                      placeholder="12 345 678"
+                      maxLength={10}
                       autoFocus
                       value={codeDraft}
                       onChange={(e) => setCodeDraft(e.target.value)}
@@ -344,7 +341,7 @@ export function DevicesDialog({ gateway, onClose }: DevicesDialogProps) {
                       type="submit"
                       className="devices-dialog__button devices-dialog__button--primary"
                       data-testid="pair-submit"
-                      disabled={busy === "pair" || codeDraft.replace(/\s/g, "").length !== 6}
+                      disabled={busy === "pair" || !canSubmitCode(codeDraft)}
                     >
                       {busy === "pair" ? "Pairing…" : "Pair"}
                     </button>
@@ -392,8 +389,8 @@ export function DevicesDialog({ gateway, onClose }: DevicesDialogProps) {
             data-testid="devices-address-code"
             inputMode="numeric"
             autoComplete="off"
-            placeholder="123 456"
-            maxLength={7}
+            placeholder="12 345 678"
+            maxLength={10}
             value={addressCode}
             onChange={(e) => setAddressCode(e.target.value)}
           />
@@ -401,7 +398,7 @@ export function DevicesDialog({ gateway, onClose }: DevicesDialogProps) {
             type="submit"
             className="devices-dialog__button"
             data-testid="devices-address-submit"
-            disabled={busy === "address" || !address.trim() || addressCode.replace(/\s/g, "").length !== 6}
+            disabled={busy === "address" || !address.trim() || !canSubmitCode(addressCode)}
           >
             Pair
           </button>

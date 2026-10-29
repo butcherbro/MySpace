@@ -497,7 +497,12 @@ impl LanSync {
         code: &str,
     ) -> Result<PeerState, WorkspaceError> {
         let code = pairing::normalize_code(code).ok_or_else(|| {
-            WorkspaceError::ConstraintViolation("the pairing code has 6 digits".into())
+            WorkspaceError::ConstraintViolation(if pairing::is_old_code(code) {
+                // 6 цифр показывает только сборка до SPAKE2: подсказываем обновиться.
+                "that is a 6-digit code from an older MySpace; update MySpace on the other device to pair".into()
+            } else {
+                "the pairing code has 8 digits".into()
+            })
         })?;
         let (addrs, expected_fp, expected_device) = match (device_id, address) {
             (Some(id), _) => {

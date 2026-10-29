@@ -3,8 +3,9 @@
 //!
 //! | Route                  | Auth          | Answer                                  |
 //! |------------------------|---------------|-----------------------------------------|
-//! | `GET  /pair`           | any client cert | `{deviceId, name, fingerprint}` (public, same as the mDNS advert) |
-//! | `POST /pair`           | any client cert | pairing handshake (`pairing.rs`)      |
+//! | `GET  /pair`           | any client cert | `{deviceId, name, fingerprint, pairing: 2}` (public, same as the mDNS advert) |
+//! | `POST /pair/begin`     | any client cert | `{msg}` → `{msg, session}`, SPAKE2 (`pairing.rs`) |
+//! | `POST /pair`           | any client cert | key confirmation (`pairing.rs`); 426 for the pre-SPAKE2 body |
 //! | `GET  /v1/info`        | paired peer   | `{deviceId, name, protocol: 1}`         |
 //! | `GET  /v1/cursors`     | paired peer   | this device's cursors                   |
 //! | `POST /v1/changes`     | paired peer   | `{cursors, limit}` → `{rows, next}`     |
@@ -49,6 +50,9 @@ use super::tls;
 
 /// Wire protocol version (`/v1/info`).
 pub const PROTOCOL_VERSION: u32 = 1;
+/// Pairing protocol version (`GET /pair`): 2 = SPAKE2. Absent (0) on
+/// MySpace builds that pair with a bare HMAC of the code.
+pub const PAIRING_VERSION: u32 = 2;
 /// Header naming the requesting device.
 pub const DEVICE_HEADER: &str = "x-myspace-device";
 
@@ -74,6 +78,27 @@ pub struct PeerInfo {
     pub protocol: u32,
     #[serde(default)]
     pub fingerprint: Option<String>,
+    /// [`PAIRING_VERSION`] on `GET /pair`; not sent on `/v1/info`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pairing: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
+/// `POST /pair/begin` body: B's SPAKE2 message, lowercase hex.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairBeginRequest {
+    pub msg: String,
+}
+
+/// `POST /pair/begin` answer: A's SPAKE2 message and the session that
+/// `POST /pair` must name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairBeginAnswer {
+    pub msg: String,
+    pub session: String,
 }
 
 /// `POST /v1/changes` body.
@@ -92,6 +117,10 @@ pub struct ChangesRequest {
 pub struct PairEnvelope {
     #[serde(flatten)]
     pub message: PairMessage,
+    /// The `/pair/begin` session (body only). A body without one comes from
+    /// a build that pairs with a bare HMAC of the code and gets 426.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     #[serde(default)]
     pub port: Option<u16>,
 }
@@ -278,9 +307,11 @@ async fn handle(
                 name,
                 protocol: PROTOCOL_VERSION,
                 fingerprint: Some(state.identity.fingerprint.clone()),
+                pairing: PAIRING_VERSION,
             }),
             Err(e) => internal(e),
         },
+        (&Method::POST, "/pair/begin") => pair_begin(state, client_fp, req).await,
         (&Method::POST, "/pair") => pair(state, client_fp, remote, req).await,
         _ if path.starts_with("/v1/") => {
             let device = req
@@ -319,6 +350,7 @@ async fn v1(
                 name,
                 protocol: PROTOCOL_VERSION,
                 fingerprint: None,
+                pairing: 0,
             }),
             Err(e) => internal(e),
         },
@@ -578,6 +610,47 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for StallGuard<T> {
     }
 }
 
+/// Answer to a refused pairing step.
+fn refusal(refusal: PairRefusal) -> Resp {
+    match refusal {
+        PairRefusal::NoActiveCode => {
+            status(StatusCode::GONE, "no pairing code is active on this device")
+        }
+        PairRefusal::WrongCode => status(StatusCode::FORBIDDEN, "wrong code"),
+        PairRefusal::TooManyAttempts => status(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many attempts (wrong code, or another device is trying to pair); the code is no longer valid",
+        ),
+        PairRefusal::InvalidMessage => status(StatusCode::BAD_REQUEST, "invalid pairing message"),
+        PairRefusal::Internal => status(StatusCode::INTERNAL_SERVER_ERROR, "pairing failed"),
+        PairRefusal::UnknownSession => status(
+            StatusCode::CONFLICT,
+            "the pairing session expired; try again",
+        ),
+    }
+}
+
+async fn pair_begin(state: &ServerState, client_fp: &str, req: Request<Incoming>) -> Resp {
+    let body: PairBeginRequest = match read_json(req).await {
+        Ok(b) => b,
+        Err(resp) => return *resp,
+    };
+    // Неразборчивый hex тоже расходует попытку: begin_session считает её
+    // до проверки сообщения, поэтому пустой вектор отдаём ему же.
+    let peer_msg = pairing::decode_hex(&body.msg).unwrap_or_default();
+    let begun = match state.pairing.lock() {
+        Ok(mut window) => window.begin_session(client_fp, &state.identity.fingerprint, &peer_msg),
+        Err(_) => return status(StatusCode::INTERNAL_SERVER_ERROR, "pairing state"),
+    };
+    match begun {
+        Ok((session, msg)) => json(&PairBeginAnswer {
+            msg: pairing::hex_lower(&msg),
+            session,
+        }),
+        Err(r) => refusal(r),
+    }
+}
+
 async fn pair(
     state: &ServerState,
     client_fp: &str,
@@ -587,6 +660,14 @@ async fn pair(
     let envelope: PairEnvelope = match read_json(req).await {
         Ok(b) => b,
         Err(resp) => return *resp,
+    };
+    // Старый клиент (HMAC от самого кода) получает 426: его read_json покажет
+    // текст как есть, а 403/410 он принял бы за «неверный код».
+    let Some(session) = envelope.session else {
+        return status(
+            StatusCode::UPGRADE_REQUIRED,
+            "the other device runs a newer MySpace; update MySpace on this device to pair",
+        );
     };
     let msg = envelope.message;
     if msg.fingerprint.to_ascii_lowercase() != client_fp {
@@ -603,21 +684,14 @@ async fn pair(
         Err(_) => return status(StatusCode::BAD_REQUEST, "invalid device name"),
     };
     let attempt = match state.pairing.lock() {
-        Ok(mut window) => window.attempt(client_fp, &state.identity.fingerprint, &msg.proof),
+        Ok(mut window) => {
+            window.attempt(&session, client_fp, &state.identity.fingerprint, &msg.proof)
+        }
         Err(_) => return status(StatusCode::INTERNAL_SERVER_ERROR, "pairing state"),
     };
-    let code = match attempt {
-        Ok(code) => code,
-        Err(PairRefusal::NoActiveCode) => {
-            return status(StatusCode::GONE, "no pairing code is active on this device")
-        }
-        Err(PairRefusal::WrongCode) => return status(StatusCode::FORBIDDEN, "wrong code"),
-        Err(PairRefusal::TooManyAttempts) => {
-            return status(
-                StatusCode::TOO_MANY_REQUESTS,
-                "wrong code; too many attempts, the code is no longer valid",
-            )
-        }
+    let key = match attempt {
+        Ok(key) => key,
+        Err(r) => return refusal(r),
     };
     let address = envelope
         .port
@@ -644,8 +718,9 @@ async fn pair(
             device_id: state.identity.device_id.clone(),
             name: own_name,
             fingerprint: state.identity.fingerprint.clone(),
-            proof: pairing::proof(&code, &state.identity.fingerprint, client_fp),
+            proof: pairing::proof(&key[..], &state.identity.fingerprint, client_fp),
         },
+        session: None,
         port: Some(state.port),
     })
 }

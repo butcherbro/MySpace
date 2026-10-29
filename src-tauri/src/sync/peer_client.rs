@@ -16,7 +16,11 @@ use crate::domain::errors::WorkspaceError;
 use super::journal::ChangePage;
 use super::pairing::{self, PairMessage};
 use super::peers::TransportIdentity;
-use super::server::{ChangesRequest, PairEnvelope, PeerInfo, DEVICE_HEADER};
+use super::server::{
+    ChangesRequest, PairBeginAnswer, PairBeginRequest, PairEnvelope, PeerInfo, DEVICE_HEADER,
+    PAIRING_VERSION,
+};
+use super::spake2::{Role, Spake2};
 use super::tls::{self, PairingServerVerifier, PinnedServerVerifier};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -321,40 +325,46 @@ async fn pair_at(
     if expected_device.is_some_and(|d| d != hello.device_id) {
         return Err(sync_err("a different device answered at that address"));
     }
+    // Без отката на старый обмен: иначе MITM просто скрыл бы `pairing: 2`.
+    if hello.pairing < PAIRING_VERSION {
+        return Err(sync_err(
+            "the other device runs an older MySpace; update MySpace on the other device to pair",
+        ));
+    }
 
-    // 2. Our proof, their proof.
+    // 2. SPAKE2: our message, theirs, the shared key.
+    let (run, msg_b) = Spake2::start(Role::Bob, &identity.fingerprint, &server_fp, code)
+        .map_err(|_| sync_err("cannot start pairing"))?;
+    let begun: PairBeginAnswer = read_json(refuse_pairing_status(
+        Step::Begin,
+        post_json(
+            http,
+            base,
+            "/pair/begin",
+            &PairBeginRequest {
+                msg: pairing::hex_lower(&msg_b),
+            },
+        )
+        .await?,
+    )?)
+    .await?;
+    let key = pairing::decode_hex(&begun.msg)
+        .and_then(|msg_a| run.finish(&msg_a).ok())
+        .ok_or_else(|| sync_err("the other device sent an invalid pairing message"))?;
+
+    // 3. Our proof, their proof.
     let request = PairEnvelope {
         message: PairMessage {
             device_id: identity.device_id.clone(),
             name: own_name.to_string(),
             fingerprint: identity.fingerprint.clone(),
-            proof: pairing::proof(code, &identity.fingerprint, &server_fp),
+            proof: pairing::proof(&key[..], &identity.fingerprint, &server_fp),
         },
+        session: Some(begun.session),
         port: Some(own_port),
     };
-    let resp = http
-        .post(format!("{base}/pair"))
-        .timeout(REQUEST_TIMEOUT)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&request).map_err(|e| sync_err(e.to_string()))?)
-        .send()
-        .await
-        .map_err(transport_err)?;
-    match resp.status() {
-        StatusCode::FORBIDDEN => return Err(sync_err("wrong code")),
-        StatusCode::GONE => {
-            return Err(sync_err(
-                "the other device is not showing a pairing code (or it expired)",
-            ))
-        }
-        StatusCode::TOO_MANY_REQUESTS => {
-            return Err(sync_err(
-                "wrong code; too many attempts, start pairing again on the other device",
-            ))
-        }
-        _ => {}
-    }
-    let answer: PairEnvelope = read_json(resp).await?;
+    let resp = post_json(http, base, "/pair", &request).await?;
+    let answer: PairEnvelope = read_json(refuse_pairing_status(Step::Confirm, resp)?).await?;
     let answer_fp = answer.message.fingerprint.to_ascii_lowercase();
     if verifier.seen().as_deref() != Some(server_fp.as_str()) || answer_fp != server_fp {
         return Err(sync_err(
@@ -365,7 +375,7 @@ async fn pair_at(
         return Err(sync_err("the other device changed identity during pairing"));
     }
     if !pairing::verify_proof(
-        code,
+        &key[..],
         &server_fp,
         &identity.fingerprint,
         &answer.message.proof,
@@ -389,4 +399,51 @@ async fn pair_at(
             .zip(answer.port)
             .map(|(ip, port)| SocketAddr::new(ip, port)),
     })
+}
+
+async fn post_json(
+    http: &reqwest::Client,
+    base: &str,
+    path: &str,
+    body: &impl serde::Serialize,
+) -> Result<reqwest::Response, WorkspaceError> {
+    http.post(format!("{base}{path}"))
+        .timeout(REQUEST_TIMEOUT)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(body).map_err(|e| sync_err(e.to_string()))?)
+        .send()
+        .await
+        .map_err(transport_err)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Begin,
+    Confirm,
+}
+
+/// The pairing refusals the user can act on, in their words.
+fn refuse_pairing_status(
+    step: Step,
+    resp: reqwest::Response,
+) -> Result<reqwest::Response, WorkspaceError> {
+    match resp.status() {
+        // Неверный код или чужое устройство подбирает код: в обоих случаях
+        // безопаснее начать с нового кода.
+        StatusCode::FORBIDDEN => Err(sync_err(
+            "wrong code, or another device is trying to pair — make a new code on the other device",
+        )),
+        StatusCode::GONE => Err(sync_err(
+            "the other device is not showing a pairing code (or it expired)",
+        )),
+        // На begin попытки кончились без нашего участия: их съели чужие сессии.
+        StatusCode::TOO_MANY_REQUESTS if step == Step::Begin => Err(sync_err(
+            "too many attempts: wrong code, or another device is trying to pair — make a new code on the other device",
+        )),
+        StatusCode::TOO_MANY_REQUESTS => Err(sync_err(
+            "wrong code; too many attempts, make a new code on the other device",
+        )),
+        StatusCode::CONFLICT => Err(sync_err("the pairing session expired; try again")),
+        _ => Ok(resp),
+    }
 }

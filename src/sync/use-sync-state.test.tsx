@@ -93,7 +93,7 @@ describe("sync status", () => {
     const pill = await screen.findByTestId("sync-status-pill");
     await waitFor(() => expect(pill).toHaveAttribute("data-state", "no-peers"));
     await act(async () => {
-      await gateway.syncPairWith({ address: "10.0.0.2:1", code: "123456" });
+      await gateway.syncPairWith({ address: "10.0.0.2:1", code: "12345678" });
     });
     expect(pill).toHaveAttribute("data-state", "idle");
     expect(pill).toHaveTextContent("Synced");

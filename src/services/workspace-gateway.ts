@@ -794,7 +794,7 @@ export interface WorkspaceGateway {
   syncListPeers(): Promise<SyncPeerState[]>;
   /** Devices mDNS currently sees (never this one). */
   syncListDiscovered(): Promise<DiscoveredDevice[]>;
-  /** Shows a 6-digit code on this device, valid 5 minutes. */
+  /** Shows an 8-digit code on this device, valid 5 minutes. */
   syncBeginPairing(): Promise<PairingCode>;
   syncCancelPairing(): Promise<void>;
   /** Pairs with a discovered device or a `host:port`, using the code the

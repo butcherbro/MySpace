@@ -38,6 +38,7 @@ pub mod peers;
 pub mod replay;
 pub mod server;
 pub mod snapshot;
+pub mod spake2;
 pub mod tls;
 pub mod tracking;
 

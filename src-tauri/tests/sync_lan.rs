@@ -17,8 +17,11 @@ use myspace_lib::domain::mutation::Mutation;
 use myspace_lib::domain::plain_text::plain_text_to_document;
 use myspace_lib::repositories::workspace_repository;
 use myspace_lib::sync::lan::{LanConfig, LanSync, NoEvents, SyncEvents, SyncState};
+use myspace_lib::sync::pairing::{self, PairMessage};
 use myspace_lib::sync::peer_client::PeerClient;
 use myspace_lib::sync::peers::{self, PeerOutcome, PeerWrite, TransportIdentity};
+use myspace_lib::sync::server::{PairBeginAnswer, PairBeginRequest, PairEnvelope};
+use myspace_lib::sync::spake2::{Role, Spake2};
 use myspace_lib::sync::tls;
 
 struct Node {
@@ -374,13 +377,17 @@ async fn a_wrong_code_is_refused_and_five_failures_burn_it() {
     // No code shown on A.
     let err = b
         .lan
-        .pair_with(None, Some(&a.addr()), "123456")
+        .pair_with(None, Some(&a.addr()), "12345678")
         .await
         .unwrap_err();
     assert!(format!("{err}").contains("not showing"), "{err}");
 
     let code = a.lan.begin_pairing().unwrap().code;
-    let wrong = if code == "000000" { "000001" } else { "000000" };
+    let wrong = if code == "00000000" {
+        "00000001"
+    } else {
+        "00000000"
+    };
     let err = b
         .lan
         .pair_with(None, Some(&a.addr()), wrong)
@@ -389,11 +396,21 @@ async fn a_wrong_code_is_refused_and_five_failures_burn_it() {
     assert!(format!("{err}").contains("wrong code"), "{err}");
     assert!(a.peer_ids().await.is_empty());
     assert!(b.peer_ids().await.is_empty());
-    // Malformed codes never reach the network.
+    // Malformed codes never reach the network; a 6-digit one (shown by a
+    // build before SPAKE2) says to update the other device.
     assert!(matches!(
-        b.lan.pair_with(None, Some(&a.addr()), "12345").await,
+        b.lan.pair_with(None, Some(&a.addr()), "1234567").await,
         Err(WorkspaceError::ConstraintViolation(_))
     ));
+    let err = b
+        .lan
+        .pair_with(None, Some(&a.addr()), "123 456")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, WorkspaceError::ConstraintViolation(m) if m.contains("update MySpace on the other device")),
+        "{err}"
+    );
 
     // The right code still works (attempt 2 of 5)...
     b.lan.pair_with(None, Some(&a.addr()), &code).await.unwrap();
@@ -408,7 +425,11 @@ async fn a_wrong_code_is_refused_and_five_failures_burn_it() {
 
     // Five wrong answers burn a code: the right one is refused afterwards.
     let code = a.lan.begin_pairing().unwrap().code;
-    let wrong = if code == "000000" { "000001" } else { "000000" };
+    let wrong = if code == "00000000" {
+        "00000001"
+    } else {
+        "00000000"
+    };
     for _ in 0..4 {
         let err = b
             .lan
@@ -768,6 +789,379 @@ async fn every_journaled_write_by_another_process_triggers_a_pass() {
         // Let the triggered pass (and any own-write pass) finish.
         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     }
+}
+
+// ---- pairing protocol v2 (SPAKE2) ------------------------------------------
+
+/// A pairing-style client presenting `identity`, accepting any server cert.
+fn raw_client(identity: &TransportIdentity) -> reqwest::Client {
+    let config = tls::client_config(identity, tls::PairingServerVerifier::new(None)).unwrap();
+    reqwest::Client::builder()
+        .tls_backend_preconfigured(config)
+        .no_proxy()
+        .build()
+        .unwrap()
+}
+
+async fn post_json(
+    http: &reqwest::Client,
+    node: &Node,
+    path: &str,
+    body: &impl serde::Serialize,
+) -> reqwest::Response {
+    http.post(format!("https://{}{path}", node.addr()))
+        .json(body)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// Runs `/pair/begin` against `server` as `client` (Bob) with `code`.
+async fn begin_as(
+    http: &reqwest::Client,
+    client_fp: &str,
+    server: &Node,
+    code: &str,
+) -> reqwest::Response {
+    let (_run, msg) = Spake2::start(Role::Bob, client_fp, server.lan.fingerprint(), code).unwrap();
+    post_json(
+        http,
+        server,
+        "/pair/begin",
+        &PairBeginRequest {
+            msg: pairing::hex_lower(&msg),
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pairing_works_in_both_directions_and_stores_both_sides() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    pair(&a, &b).await;
+    assert_eq!(a.peer_ids().await, vec![b.lan.device_id().to_string()]);
+    assert_eq!(b.peer_ids().await, vec![a.lan.device_id().to_string()]);
+
+    let c = Node::start("c").await;
+    let d = Node::start("d").await;
+    // D shows the code, C types it.
+    pair(&d, &c).await;
+    assert_eq!(c.peer_ids().await, vec![d.lan.device_id().to_string()]);
+    assert_eq!(d.peer_ids().await, vec![c.lan.device_id().to_string()]);
+    let c_client =
+        PeerClient::pinned(&c.identity().await, d.lan.fingerprint(), d.socket()).unwrap();
+    assert_eq!(c_client.info().await.unwrap().device_id, d.lan.device_id());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_pairing_endpoint_advertises_protocol_two() {
+    let a = Node::start("a").await;
+    let c = Node::start("c").await;
+    let hello: serde_json::Value = raw_client(&c.identity().await)
+        .get(format!("https://{}/pair", a.addr()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(hello["pairing"], 2, "{hello}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_begin_without_confirm_uses_up_an_attempt() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    let m = Node::start("m").await;
+    let http = raw_client(&m.identity().await);
+    let code = a.lan.begin_pairing().unwrap().code;
+    // Each begin is one guess, confirmed or not.
+    for _ in 0..5 {
+        let resp = begin_as(&http, m.lan.fingerprint(), &a, "00000000").await;
+        assert_eq!(resp.status(), 200);
+    }
+    let resp = begin_as(&http, m.lan.fingerprint(), &a, "00000000").await;
+    assert_eq!(resp.status(), 429);
+    // The begin past the limit burnt the code: A no longer shows it.
+    let err = b
+        .lan
+        .pair_with(None, Some(&a.addr()), &code)
+        .await
+        .unwrap_err();
+    assert!(format!("{err}").contains("not showing"), "{err}");
+    assert!(a.peer_ids().await.is_empty());
+
+    // An undecodable message also counts: after it only four begins pass.
+    a.lan.begin_pairing().unwrap();
+    let resp = post_json(
+        &http,
+        &a,
+        "/pair/begin",
+        &PairBeginRequest { msg: "zz".into() },
+    )
+    .await;
+    assert_eq!(resp.status(), 400);
+    for _ in 0..4 {
+        let resp = begin_as(&http, m.lan.fingerprint(), &a, "00000000").await;
+        assert_eq!(resp.status(), 200);
+    }
+    let resp = begin_as(&http, m.lan.fingerprint(), &a, "00000000").await;
+    assert_eq!(resp.status(), 429);
+}
+
+/// `POST /pair` from `http` for `session` with `proof`.
+async fn confirm_as(
+    http: &reqwest::Client,
+    server: &Node,
+    session: String,
+    device_id: &str,
+    client_fp: &str,
+    proof: String,
+) -> reqwest::Response {
+    post_json(
+        http,
+        server,
+        "/pair",
+        &PairEnvelope {
+            message: PairMessage {
+                device_id: device_id.to_string(),
+                name: "M".into(),
+                fingerprint: client_fp.to_string(),
+                proof,
+            },
+            session: Some(session),
+            port: None,
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_cannot_be_confirmed_under_another_certificate() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    let m = Node::start("m").await;
+    let code = a.lan.begin_pairing().unwrap().code;
+    let b_fp = b.lan.fingerprint().to_string();
+    // B begins honestly with the right code...
+    let (run, msg_b) = Spake2::start(Role::Bob, &b_fp, a.lan.fingerprint(), &code).unwrap();
+    let b_http = raw_client(&b.identity().await);
+    let resp = post_json(
+        &b_http,
+        &a,
+        "/pair/begin",
+        &PairBeginRequest {
+            msg: pairing::hex_lower(&msg_b),
+        },
+    )
+    .await;
+    let begun: PairBeginAnswer = resp.json().await.unwrap();
+    let key = run
+        .finish(&pairing::decode_hex(&begun.msg).unwrap())
+        .unwrap();
+    let proof = pairing::proof(&key[..], &b_fp, a.lan.fingerprint());
+    // ...M replays the confirmation over its own TLS (its own fingerprint, as
+    // A checks): the session is not M's.
+    let m_http = raw_client(&m.identity().await);
+    let resp = confirm_as(
+        &m_http,
+        &a,
+        begun.session.clone(),
+        m.lan.device_id(),
+        m.lan.fingerprint(),
+        proof.clone(),
+    )
+    .await;
+    assert_eq!(resp.status(), 409);
+    assert!(a.peer_ids().await.is_empty());
+    // B's own confirmation still works.
+    let resp = confirm_as(&b_http, &a, begun.session, b.lan.device_id(), &b_fp, proof).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(a.peer_ids().await, vec![b.lan.device_id().to_string()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_that_does_not_know_the_code_completes_neither_side() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    let m = Node::start("m").await;
+    let (b_fp, m_fp) = (
+        b.lan.fingerprint().to_string(),
+        m.lan.fingerprint().to_string(),
+    );
+    let code = a.lan.begin_pairing().unwrap().code;
+
+    // M sits between B and A. B sees M's certificate where A's should be and
+    // runs SPAKE2 with the right code; M relays B's message to A unchanged.
+    let (b_run, msg_b) = Spake2::start(Role::Bob, &b_fp, &m_fp, &code).unwrap();
+    let http = raw_client(&m.identity().await);
+    let resp = post_json(
+        &http,
+        &a,
+        "/pair/begin",
+        &PairBeginRequest {
+            msg: pairing::hex_lower(&msg_b),
+        },
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let begun: PairBeginAnswer = resp.json().await.unwrap();
+    let msg_a = pairing::decode_hex(&begun.msg).unwrap();
+    let key_b = b_run.finish(&msg_a).unwrap();
+    // M forwards B's confirmation (it has nothing better): A refuses it.
+    let resp = post_json(
+        &http,
+        &a,
+        "/pair",
+        &PairEnvelope {
+            message: PairMessage {
+                device_id: b.lan.device_id().to_string(),
+                name: "B".into(),
+                fingerprint: m_fp.clone(),
+                proof: pairing::proof(&key_b[..], &b_fp, &m_fp),
+            },
+            session: Some(begun.session),
+            port: None,
+        },
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+    assert!(a.peer_ids().await.is_empty());
+
+    // Without the code, M can only guess one and run SPAKE2 with it on both
+    // sides. Its guess is the code its own server shows.
+    let guess = m.lan.begin_pairing().unwrap().code;
+    assert_ne!(guess, code);
+    // Towards A: a correct run with the guess, a correct proof for it; refused.
+    let (run, msg) = Spake2::start(Role::Bob, &m_fp, a.lan.fingerprint(), &guess).unwrap();
+    let resp = post_json(
+        &http,
+        &a,
+        "/pair/begin",
+        &PairBeginRequest {
+            msg: pairing::hex_lower(&msg),
+        },
+    )
+    .await;
+    let begun: PairBeginAnswer = resp.json().await.unwrap();
+    let key = run
+        .finish(&pairing::decode_hex(&begun.msg).unwrap())
+        .unwrap();
+    let resp = confirm_as(
+        &http,
+        &a,
+        begun.session,
+        m.lan.device_id(),
+        &m_fp,
+        pairing::proof(&key[..], &m_fp, a.lan.fingerprint()),
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+    assert!(a.peer_ids().await.is_empty());
+    // Towards B (who typed A's code at M's address): M answers with the
+    // guess; B's proof fails at M, so M never sends its own.
+    let err = b
+        .lan
+        .pair_with(None, Some(&m.addr()), &code)
+        .await
+        .unwrap_err();
+    assert!(format!("{err}").contains("wrong code"), "{err}");
+    assert!(b.peer_ids().await.is_empty());
+    assert!(m.peer_ids().await.is_empty());
+
+    // The relay cost A two attempts; the real B still pairs.
+    b.lan.pair_with(None, Some(&a.addr()), &code).await.unwrap();
+    assert_eq!(b.peer_ids().await, vec![a.lan.device_id().to_string()]);
+    assert_eq!(a.peer_ids().await, vec![b.lan.device_id().to_string()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_old_client_gets_426_with_a_readable_error() {
+    let a = Node::start("a").await;
+    let old = Node::start("old").await;
+    let code = a.lan.begin_pairing().unwrap().code;
+    let old_fp = old.lan.fingerprint().to_string();
+    // The v1 body: HMAC of the code, no session.
+    let body = serde_json::json!({
+        "deviceId": old.lan.device_id(),
+        "name": "Old Mac",
+        "fingerprint": old_fp,
+        "proof": "00",
+        "port": 1,
+    });
+    let resp = post_json(&raw_client(&old.identity().await), &a, "/pair", &body).await;
+    assert_eq!(resp.status(), 426);
+    let answer: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        answer["error"].as_str().unwrap().contains("update MySpace"),
+        "{answer}"
+    );
+    assert!(a.peer_ids().await.is_empty());
+    // It cost no attempt: the code still works.
+    let b = Node::start("b").await;
+    b.lan.pair_with(None, Some(&a.addr()), &code).await.unwrap();
+}
+
+/// A server that answers `GET /pair` the way MySpace before pairing v2 did,
+/// then closes.
+async fn old_pairing_server(identity: &TransportIdentity) -> SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls::server_config(identity).unwrap()));
+    let body = serde_json::json!({
+        "deviceId": identity.device_id,
+        "name": "Old Mac",
+        "protocol": 1,
+        "fingerprint": identity.fingerprint,
+    })
+    .to_string();
+    tokio::spawn(async move {
+        while let Ok((tcp, _)) = listener.accept().await {
+            let Ok(mut tls) = acceptor.accept(tcp).await else {
+                continue;
+            };
+            let mut buf = vec![0u8; 16 * 1024];
+            let mut read = 0;
+            while !buf[..read].windows(4).any(|w| w == b"\r\n\r\n") {
+                match tls.read(&mut buf[read..]).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => read += n,
+                }
+            }
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            let answer = if request.starts_with("GET /pair ") {
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            } else {
+                "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    .to_string()
+            };
+            let _ = tls.write_all(answer.as_bytes()).await;
+            let _ = tls.shutdown().await;
+        }
+    });
+    addr
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_client_refuses_a_server_without_pairing_two() {
+    let b = Node::start("b").await;
+    let old = Node::start("old").await;
+    let addr = old_pairing_server(&old.identity().await).await;
+    let err = b
+        .lan
+        .pair_with(None, Some(&addr.to_string()), "12345678")
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err}").contains("update MySpace on the other device"),
+        "{err}"
+    );
+    assert!(b.peer_ids().await.is_empty());
 }
 
 /// Needs multicast on the host (not available in every CI container): run

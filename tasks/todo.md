@@ -675,10 +675,13 @@ P2 / platform:
       within ~1 s, image/file card blobs arrive, unplug Wi-Fi on one → error
       shown, reconnect → catches up, rename a device → the other shows the new
       name after the next contact.
-- [ ] Pairing is not resistant to an active man-in-the-middle during the
+- [x] Pairing is not resistant to an active man-in-the-middle during the
       pairing minute (the 6-digit code can be brute-forced offline from the
       HMAC proof). Replace the HMAC exchange with a PAKE (SPAKE2 / CPace) before
       the relay, or show a short fingerprint on both screens to compare.
+      Done 2026-10-29: SPAKE2 (aws-lc-sys) bound to both fingerprints,
+      8-digit codes, pairing protocol 2 with no fallback, old clients get 426
+      (ADR-0011 amendment 2026-10-29).
 - [ ] Private key is stored in the workspace database (`local_meta`), hence
       in backups. Consider the OS keychain / DPAPI.
 - [x] Blobs are streamed from disk in 64 KiB chunks with an exact
