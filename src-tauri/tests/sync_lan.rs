@@ -457,11 +457,11 @@ async fn insert_raw_asset(node: &Node, file_path: &str, bytes: &[u8]) -> String 
     sha
 }
 
-/// Asset rows named like the temp files of earlier builds are ordinary
-/// assets: a transfer neither loops on them nor writes into their files
-/// (a published backup may hard-link them).
+/// Ряды ассетов с именами временных файлов прежних сборок (и любыми не
+/// `<id>.<ext>`) пир не принимает: передача их не качает по кругу и не
+/// пишет в одноимённые файлы (их может держать жёсткой ссылкой бэкап).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn asset_names_that_look_like_temp_files_are_ordinary_assets() {
+async fn asset_rows_not_named_after_their_id_are_refused() {
     let a = Node::start("a").await;
     let b = Node::start("b").await;
     pair(&a, &b).await;
@@ -469,11 +469,11 @@ async fn asset_names_that_look_like_temp_files_are_ordinary_assets() {
     let looped = b"named like a download temp file".to_vec();
     let looped_name = format!("sync-{}.part", asset_service::sha256_hex(&looped));
     insert_raw_asset(&a, &looped_name, &looped).await;
-    let kept = b"a file a snapshot links".to_vec();
-    insert_raw_asset(&a, "pic.png.sync-part", &kept).await;
-    insert_raw_asset(&a, "pic.png", b"the picture").await;
+    insert_raw_asset(&a, "pic.png.sync-part", b"forged bytes").await;
+    let (_, file, sha) = populate(&a).await;
 
     // B already holds `pic.png.sync-part`, hard-linked by a backup.
+    let kept = b"a file a snapshot links".to_vec();
     let b_assets = b.ws.paths().assets_dir();
     std::fs::create_dir_all(&b_assets).unwrap();
     std::fs::write(b_assets.join("pic.png.sync-part"), &kept).unwrap();
@@ -482,17 +482,27 @@ async fn asset_names_that_look_like_temp_files_are_ordinary_assets() {
 
     let report = b.lan.sync_now().await;
     assert!(report.errors.is_empty(), "{report:?}");
-    assert_eq!(report.blobs_fetched, 2, "{report:?}");
-    assert_eq!(std::fs::read(b_assets.join(&looped_name)).unwrap(), looped);
-    assert_eq!(
-        std::fs::read(b_assets.join("pic.png")).unwrap(),
-        b"the picture"
-    );
+    assert_eq!(report.blobs_fetched, 1, "{report:?}");
+    let blob = std::fs::read(b_assets.join(&file)).unwrap();
+    assert_eq!(asset_service::sha256_hex(&blob), sha);
+    assert!(!b_assets.join(&looped_name).exists());
     assert_eq!(
         std::fs::read(b_assets.join("pic.png.sync-part")).unwrap(),
         kept
     );
     assert_eq!(std::fs::read(&link).unwrap(), kept, "the linked file");
+    let refused: i64 =
+        b.ws.read(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM assets WHERE file_path IN ('pic.png.sync-part')
+                    OR file_path LIKE 'sync-%'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(refused, 0);
 
     // Nothing is missing any more: no download repeats.
     let report = b.lan.sync_now().await;
@@ -531,6 +541,35 @@ async fn stale_transfer_files_are_cleaned_up() {
     let blob = std::fs::read(b.ws.paths().assets_dir().join(&file)).unwrap();
     assert_eq!(asset_service::sha256_hex(&blob), sha);
     assert!(!temp.exists());
+}
+
+/// Остаток, который очистка не может удалить (здесь каталог под именем
+/// временного файла), не блокирует загрузку: у каждой передачи свежее имя.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unremovable_leftover_never_blocks_a_transfer() {
+    let a = Node::start("a").await;
+    let b = Node::start("b").await;
+    pair(&a, &b).await;
+    let (_, file, sha) = populate(&a).await;
+
+    let temp =
+        b.ws.paths()
+            .assets_dir()
+            .join(myspace_lib::sync::lan::SYNC_TEMP_DIR);
+    std::fs::create_dir_all(temp.join(format!("blob-{sha}"))).unwrap();
+    std::fs::create_dir_all(temp.join(format!("file-{file}"))).unwrap();
+
+    let report = b.lan.sync_now().await;
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert_eq!(report.blobs_fetched, 1);
+    let blob = std::fs::read(b.ws.paths().assets_dir().join(&file)).unwrap();
+    assert_eq!(asset_service::sha256_hex(&blob), sha);
+    let left: Vec<_> = std::fs::read_dir(&temp)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -895,7 +895,7 @@ impl LanSync {
             if !server::is_sha256(&sha) {
                 continue;
             }
-            let temp = temp_dir.join(format!("blob-{sha}"));
+            let temp = temp_dir.join(fresh_temp_name("blob", &sha));
             match client.fetch_blob(&sha, &temp).await {
                 Ok(true) => {}
                 Ok(false) => continue,
@@ -976,7 +976,9 @@ fn place_blob(
         if dest.is_file() {
             continue;
         }
-        let staging = assets_dir.join(SYNC_TEMP_DIR).join(format!("file-{name}"));
+        let staging = assets_dir
+            .join(SYNC_TEMP_DIR)
+            .join(fresh_temp_name("file", name));
         let copied = std::fs::File::open(temp).and_then(|mut input| {
             let mut output = std::fs::OpenOptions::new()
                 .write(true)
@@ -985,12 +987,17 @@ fn place_blob(
             std::io::copy(&mut input, &mut output)?;
             output.sync_all()
         });
-        if let Err(e) = copied.and_then(|()| std::fs::rename(&staging, &dest)) {
-            let _ = std::fs::remove_file(&staging);
-            return Err(err(e));
-        }
+        let placed = copied.and_then(|()| std::fs::rename(&staging, &dest));
+        let _ = std::fs::remove_file(&staging);
+        placed.map_err(err)?;
     }
     Ok(())
+}
+
+/// Имя временного файла, которого не было ни у одной прежней передачи:
+/// остаток, не удалённый очисткой, не роняет `create_new` для того же блоба.
+fn fresh_temp_name(prefix: &str, name: &str) -> String {
+    format!("{prefix}-{name}-{}", uuid::Uuid::now_v7().simple())
 }
 
 /// What syncing with one peer did.

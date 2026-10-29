@@ -62,6 +62,7 @@ use super::{
     board_from_wire, board_to_wire, journal, ApplyReport, ChangeRow, ENTITY_ASSET, ENTITY_BOARD,
     ENTITY_CARD, ENTITY_CONNECTOR, ENTITY_QUICK_BOARD, OP_CONFLICT_COPY, ROOT_BOARD_ALIAS,
 };
+use crate::domain::asset_service;
 use crate::domain::card_kind::{handler, registry, CardKind};
 use crate::domain::errors::WorkspaceError;
 use crate::domain::plain_text::{document_to_plain_text, plain_text_to_document};
@@ -431,15 +432,25 @@ fn restore_missing_assets(conn: &Connection, state: &Value) -> Result<(), Worksp
         if present {
             continue;
         }
-        let payload: Option<String> = conn
-            .query_row(
+        // Новейший ряд может быть отклонённой подделкой (в `changes` он всё
+        // равно лежит): берём новейший из тех, что прошли бы проверку имени.
+        let payloads: Vec<String> = conn
+            .prepare_cached(
                 "SELECT payload_json FROM changes WHERE entity_kind = 'asset' AND entity_id = ?1
-                 ORDER BY hlc DESC LIMIT 1",
-                [&id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(env) = payload.and_then(|p| Envelope::decode(&p).ok()) {
+                 ORDER BY hlc DESC",
+            )?
+            .query_map([&id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        let valid = payloads
+            .iter()
+            .filter_map(|p| Envelope::decode(p).ok())
+            .find(|env| {
+                env.state
+                    .get("file_path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| asset_service::is_canonical_asset_file(&id, path))
+            });
+        if let Some(env) = valid {
             image::upsert_asset(conn, &id, &env.state)?;
             set_clocks(conn, ENTITY_ASSET, &id, &env, &[REG_BODY])?;
         }

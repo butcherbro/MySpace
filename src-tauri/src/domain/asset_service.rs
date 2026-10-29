@@ -22,10 +22,45 @@ use super::super::db;
 /// Validates that `id` is a well-formed UUID so it can never be used to build a
 /// path that escapes the asset directory (path boundary). Frontend generates
 /// UUIDv7, but this backstops any malformed input from the IPC boundary.
+/// Принимается только каноническая форма (строчные буквы, с дефисами): иную
+/// пир отверг бы (см. [`is_canonical_asset_file`]).
 fn validate_uuid(id: &str) -> Result<(), WorkspaceError> {
-    uuid::Uuid::parse_str(id)
-        .map(|_| ())
-        .map_err(|_| WorkspaceError::ConstraintViolation(format!("invalid asset id: {id}")))
+    if is_canonical_uuid(id) {
+        Ok(())
+    } else {
+        Err(WorkspaceError::ConstraintViolation(format!(
+            "invalid asset id: {id}"
+        )))
+    }
+}
+
+fn is_canonical_uuid(id: &str) -> bool {
+    uuid::Uuid::parse_str(id).is_ok_and(|u| u.hyphenated().to_string() == id)
+}
+
+/// Предел длины хранимого имени в байтах: временное имя передачи
+/// (`file-<имя>-<uuid>`) добавляет 38 байт, и с запасом остаётся ниже 255.
+pub const MAX_ASSET_FILE_PATH: usize = 160;
+
+/// Истина, когда `file_path` — это `<id>.<хвост>`: канонический UUID самого
+/// ассета, точка и непустой хвост по правилам `is_safe_asset_name`, без точки
+/// в конце, не длиннее [`MAX_ASSET_FILE_PATH`]. Все локальные записи хранят
+/// такой вид (у карточек-файлов 0.3.0 хвост — расширение источника, например
+/// `tar-gz` или `пдф`), реплей иного не принимает.
+///
+/// Файловые системы macOS и Windows не различают регистр, а Windows ещё и
+/// отбрасывает точку в конце имени: сравнение строк путей не ловит такой
+/// псевдоним чужого файла. Имя, начинающееся со своего id в нижнем регистре
+/// и точки, не может совпасть с именем другого ассета ни на одной ФС.
+pub fn is_canonical_asset_file(id: &str, file_path: &str) -> bool {
+    is_canonical_uuid(id)
+        && file_path.len() <= MAX_ASSET_FILE_PATH
+        && !file_path.ends_with('.')
+        && crate::is_safe_asset_name(file_path)
+        && file_path
+            .strip_prefix(id)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .is_some_and(|rest| !rest.is_empty())
 }
 
 /// Copies the source file into `asset_dir/<id>.<ext>`, records metadata in the
@@ -498,10 +533,14 @@ pub fn stage_file_card_asset(
     mime_type: &str,
     source_path: &str,
 ) -> Result<StagedAsset, WorkspaceError> {
+    // Расширение источника в нижнем ASCII-регистре, как в 0.3.0; если с ним
+    // имя не прошло бы проверку пира (слишком длинное, недопустимые знаки),
+    // файл хранится как `.bin`.
     let extension = Path::new(file_name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
+        .filter(|e| is_canonical_asset_file(id, &format!("{id}.{e}")))
         .unwrap_or_else(|| "bin".to_string());
     stage_copy(
         asset_dir,

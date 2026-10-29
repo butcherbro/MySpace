@@ -556,3 +556,40 @@ fn hash_existing_assets_backfills_null_rows_through_the_writer() {
     drop(ws);
     fs::remove_dir_all(&dir).ok();
 }
+
+/// Локальные записи хранят только имя, которое примет пир: иначе он отверг
+/// бы ряд ассета, и карточка с ним не доехала бы. Расширение источника
+/// остаётся, как в 0.3.0, если с ним имя проходит проверку.
+#[test]
+fn staged_names_are_canonical() {
+    let dir = std::env::temp_dir().join(format!("myspace-canon-{}", uuid::Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source");
+    fs::write(&source, b"bytes").unwrap();
+    let source = source.to_str().unwrap();
+    let assets = dir.join("assets");
+
+    for (name, ext) in [
+        ("REPORT.PDF", "pdf"),
+        ("a.tar-gz", "tar-gz"),
+        ("a.ПДФ", "ПДФ"),
+        (&format!("a.{}", "x".repeat(130)), "bin"),
+        ("a.p g", "bin"),
+        ("noext", "bin"),
+    ] {
+        let id = uuid::Uuid::now_v7().to_string();
+        let staged =
+            asset_service::stage_file_card_asset(&assets, &id, name, "text/plain", source).unwrap();
+        assert_eq!(staged.asset.file_path, format!("{id}.{ext}"), "{name}");
+        assert!(asset_service::is_canonical_asset_file(
+            &id,
+            &staged.asset.file_path
+        ));
+    }
+
+    let upper = uuid::Uuid::now_v7().to_string().to_uppercase();
+    assert!(
+        asset_service::stage_image_asset(&assets, &upper, "a.png", "image/png", source).is_err()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
