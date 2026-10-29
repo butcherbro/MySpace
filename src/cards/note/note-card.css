@@ -5,7 +5,7 @@
   border-radius: var(--radius-note);
   box-shadow: var(--shadow-paper);
   padding: 12px 14px;
-  color: var(--ink);
+  color: var(--text-note-color);
   font-family: var(--font-text);
   font-size: var(--text-note-size);
   line-height: var(--text-note-leading);

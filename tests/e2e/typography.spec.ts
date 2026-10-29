@@ -15,7 +15,7 @@ test("the UI and note text render in the bundled Inter Variable", async ({ page 
   const probe = await page.evaluate(async () => {
     await document.fonts.ready;
     // Subsets load lazily per unicode-range; the board has no Cyrillic yet.
-    await document.fonts.load('15px "Inter Variable"', "Заметка");
+    await document.fonts.load('13px "Inter Variable"', "Заметка");
     const staticRoot = document.querySelector('[data-static-document]') as HTMLElement;
     const text = getComputedStyle(staticRoot);
     return {
@@ -25,8 +25,8 @@ test("the UI and note text render in the bundled Inter Variable", async ({ page 
       noteLineHeight: text.lineHeight,
       features: text.fontFeatureSettings,
       // Latin and Cyrillic subsets are separate woff2 files; both must load.
-      latin: document.fonts.check('15px "Inter Variable"', "Note"),
-      cyrillic: document.fonts.check('15px "Inter Variable"', "Заметка"),
+      latin: document.fonts.check('13px "Inter Variable"', "Note"),
+      cyrillic: document.fonts.check('13px "Inter Variable"', "Заметка"),
       // check() is also true when no face covers the text at all, so prove
       // the latin and cyrillic faces really loaded.
       loadedFaces: [...document.fonts].filter(
@@ -37,8 +37,8 @@ test("the UI and note text render in the bundled Inter Variable", async ({ page 
 
   expect(probe.body).toMatch(/^"?Inter Variable"?,/);
   expect(probe.note).toMatch(/^"?Inter Variable"?,/);
-  expect(probe.noteSize).toBe("15px");
-  expect(parseFloat(probe.noteLineHeight)).toBeCloseTo(15 * 1.55, 1);
+  expect(probe.noteSize).toBe("13px");
+  expect(parseFloat(probe.noteLineHeight)).toBeCloseTo(13 * 1.6, 1);
   expect(probe.features).toContain('"cv11"');
   expect(probe.latin).toBe(true);
   expect(probe.cyrillic).toBe(true);

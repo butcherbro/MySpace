@@ -56,10 +56,10 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   font-family: var(--font-text);
-  font-size: 15px;
-  font-weight: 500;
+  font-size: var(--text-link-title-size);
+  font-weight: var(--text-link-title-weight);
   line-height: 1.28;
-  color: var(--link);
+  color: var(--text-link-title-color);
   text-decoration: none;
   font-feature-settings: var(--font-text-features);
   letter-spacing: var(--text-note-tracking);
@@ -89,8 +89,8 @@
 
 .link-card__description-display {
   font-family: var(--font-text);
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: var(--text-link-desc-size);
+  line-height: var(--text-link-desc-leading);
   color: var(--ink-secondary);
 }
 

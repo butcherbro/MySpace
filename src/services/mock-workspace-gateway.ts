@@ -72,6 +72,7 @@ import type {
   SyncState,
 } from "./workspace-gateway";
 import { denseBoardSnapshot } from "../test/dense-board-fixture";
+import { typographyBoardSnapshot } from "../test/typography-fixture";
 import { documentToPlainText, plainTextToDocument } from "../editor/document-codec";
 import { fileNameFromPath } from "./platform-path";
 import { NOTE_COLOR_OPTIONS } from "../cards/note/note-color";
@@ -394,6 +395,12 @@ export class MockWorkspaceGateway implements WorkspaceGateway {
     ) {
       const snap = denseBoardSnapshot();
       // Keep the mock's in-memory cards in sync so readCard/update/trash work.
+      this.snapshot.cards = structuredClone(snap.cards);
+      return Promise.resolve(snap);
+    }
+    // Test-only typography fixture: realistic notes and link cards for comparing type variants.
+    if (boardId === "home" && fixtureParam() === "typography") {
+      const snap = typographyBoardSnapshot();
       this.snapshot.cards = structuredClone(snap.cards);
       return Promise.resolve(snap);
     }

@@ -84,12 +84,19 @@
      alternates. Applied to written content. */
   --font-text-features: "cv11", "ss01", "calt";
 
-  /* Type scale. UI chrome stays compact; note text is larger and airier. */
+  /* Type scale. UI chrome stays compact; note text is airier (compact scale chosen 2026-10-29, close to Milanote). */
   --text-ui-size: 13px;
   --text-ui-leading: 1.4;
-  --text-note-size: 15px;
-  --text-note-leading: 1.55;
-  --text-note-tracking: -0.005em;
+  --text-note-size: 13px;
+  --text-note-leading: 1.6;
+  --text-note-tracking: 0;
+  --text-note-color: color-mix(in srgb, var(--ink) 80%, var(--paper));
+  --text-note-paragraph-gap: 0.5em;
+  --text-link-title-size: 13.5px;
+  --text-link-title-weight: 600;
+  --text-link-title-color: color-mix(in srgb, var(--link) 85%, var(--ink));
+  --text-link-desc-size: 12.5px;
+  --text-link-desc-leading: 1.55;
 
   --radius-note: 5px;
   --radius-image: 4px;

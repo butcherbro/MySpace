@@ -22,9 +22,9 @@ describe("bundled typography", () => {
     expect(fontImport).toBeLessThan(mainSource.indexOf('import "./styles/tokens.css"'));
   });
 
-  it("uses the 15px / 1.55 note scale", () => {
-    expect(declaration(tokens, "--text-note-size")).toBe("15px");
-    expect(declaration(tokens, "--text-note-leading")).toBe("1.55");
+  it("uses the 13px / 1.6 note scale", () => {
+    expect(declaration(tokens, "--text-note-size")).toBe("13px");
+    expect(declaration(tokens, "--text-note-leading")).toBe("1.6");
   });
 
   it("forces grayscale antialiasing only on macOS", () => {
