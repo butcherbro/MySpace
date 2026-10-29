@@ -480,7 +480,9 @@ P2 / platform:
 
 ### Deferred dependency majors (2026-10-01)
 
-- [ ] TypeScript 5.8 → 7: Dependabot #10 closed (`ignore this major version`).
+- [x] TypeScript 5.8 → 6.0.3 (Dependabot #29): landed 2026-10-29 after #42 typed the
+      `fillRandom` buffer as `Uint8Array<ArrayBuffer>` (TS 6 rejected `ArrayBufferLike`).
+- [ ] TypeScript 6 → 7: Dependabot #10 closed (`ignore this major version`).
       `npm ci` fails with ERESOLVE: @typescript-eslint/eslint-plugin 8.71 does not
       accept typescript@7 as a peer. Needs a coordinated bump of typescript-eslint
       (and whatever else breaks), then typecheck/lint on TS 7's native compiler.
@@ -491,7 +493,8 @@ P2 / platform:
       that was just proven working on v0.2.4. Do it as its own change before the next
       release, reading the v1 migration notes; verify with a full release run.
 - [ ] dtolnay/rust-toolchain 1.98 → 1.120 (Dependabot #5 closed, `ignore this minor
-      version`): the install step itself failed in CI. The toolchain is pinned to match
+      version`; #26 for 1.119.0 closed 2026-10-29 for the same reason — rustup reports
+      the version as nonexistent): the install step itself failed in CI. The toolchain is pinned to match
       local rustc 1.98.0; bump deliberately, together with rust-version and local toolchain.
 
 Известные флейки e2e (не регрессия, воспроизводится на `f819aee`):
