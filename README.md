@@ -160,8 +160,8 @@ keyed by the resulting shared key (5 attempts per code, then it is void).
 Someone else on the same Wi-Fi can see that MySpace runs here (device name, id
 and fingerprint are advertised by mDNS) and can try to pair while a code is
 shown (5 guesses out of 10^8); they cannot read or change the workspace
-without being paired. When both devices run a build with this pairing (after
-0.3.0), an attacker who intercepts traffic during pairing learns nothing that
+without being paired. When both devices run a build with this pairing (0.3.1
+or later), an attacker who intercepts traffic during pairing learns nothing that
 lets them test codes offline: each guess is an online attempt and uses up one
 of the 5. Mixed versions are not meant to pair: an older build cannot accept
 the 8-digit code as displayed or pasted (its input keeps 7 characters, and
