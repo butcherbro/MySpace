@@ -65,7 +65,7 @@ hmac = "0.13"
 # Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND
 # (Apache-2.0 OR ISC OR MIT-0). Already in the tree as the aws-lc-rs backend;
 # pinned exactly so no second copy builds: bump it together with aws-lc-rs.
-aws-lc-sys = { version = "=0.45.0", default-features = false }
+aws-lc-sys = { version = "=0.47.0", default-features = false }
 # Wipes the pairing key and code from memory (Apache-2.0 OR MIT); already in
 # the tree through aws-lc-rs.
 zeroize = "1.8"
